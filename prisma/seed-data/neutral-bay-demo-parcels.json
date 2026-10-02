@@ -1,0 +1,464 @@
+{
+  "note": "Real NSW cadastral and planning data snapshot (NSW Spatial Services; NSW Planning Portal).",
+  "retrievedAt": "2026-10-02T00:03:37.340Z",
+  "parcels": [
+    {
+      "externalParcelId": "nsw-cadid:102160773",
+      "source": "LIVE_NSW",
+      "lot": "1",
+      "section": null,
+      "dp": "DP21192",
+      "lotIdString": "1//DP21192",
+      "address": "66 Undercliff Street, Neutral Bay",
+      "suburb": "Neutral Bay",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2180986,
+              -33.836144
+            ],
+            [
+              151.2177097,
+              -33.8361544
+            ],
+            [
+              151.2177057,
+              -33.8362801
+            ],
+            [
+              151.2181407,
+              -33.8363308
+            ],
+            [
+              151.2180986,
+              -33.836144
+            ]
+          ]
+        ]
+      },
+      "centroid": [
+        151.21791367499998,
+        -33.836227324999996
+      ],
+      "areaSqm": 657,
+      "isStrata": false,
+      "retrievedAt": "2026-10-02T00:03:36.562Z",
+      "planning": {
+        "zone": "R3",
+        "zoneName": "Medium Density Residential",
+        "fsr": null,
+        "heightM": 8.5,
+        "minLotSizeSqm": 230,
+        "heritage": "None mapped",
+        "planningInstrument": "North Sydney Local Environmental Plan 2013",
+        "lga": "NORTH SYDNEY",
+        "sources": {
+          "zone": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Land Zoning",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "fsr": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Floor Space Ratio",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heightM": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Height of Buildings",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "minLotSizeSqm": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Lot Size",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heritage": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Heritage",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          }
+        }
+      },
+      "planningStatus": "ok"
+    },
+    {
+      "externalParcelId": "nsw-cadid:102160772",
+      "source": "LIVE_NSW",
+      "lot": "2",
+      "section": null,
+      "dp": "DP21192",
+      "lotIdString": "2//DP21192",
+      "address": "64 Undercliff Street, Neutral Bay",
+      "suburb": "Neutral Bay",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2181407,
+              -33.8363308
+            ],
+            [
+              151.2177057,
+              -33.8362801
+            ],
+            [
+              151.2176925,
+              -33.8363615
+            ],
+            [
+              151.2179863,
+              -33.836395
+            ],
+            [
+              151.21816,
+              -33.8364161
+            ],
+            [
+              151.2181407,
+              -33.8363308
+            ]
+          ]
+        ]
+      },
+      "centroid": [
+        151.21793703999998,
+        -33.8363567
+      ],
+      "areaSqm": 383,
+      "isStrata": false,
+      "retrievedAt": "2026-10-02T00:03:36.562Z",
+      "planning": {
+        "zone": "R3",
+        "zoneName": "Medium Density Residential",
+        "fsr": null,
+        "heightM": 8.5,
+        "minLotSizeSqm": 230,
+        "heritage": "None mapped",
+        "planningInstrument": "North Sydney Local Environmental Plan 2013",
+        "lga": "NORTH SYDNEY",
+        "sources": {
+          "zone": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Land Zoning",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "fsr": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Floor Space Ratio",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heightM": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Height of Buildings",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "minLotSizeSqm": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Lot Size",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heritage": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Heritage",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          }
+        }
+      },
+      "planningStatus": "ok"
+    },
+    {
+      "externalParcelId": "nsw-cadid:102160753",
+      "source": "LIVE_NSW",
+      "lot": "3",
+      "section": null,
+      "dp": "DP21192",
+      "lotIdString": "3//DP21192",
+      "address": "62 Undercliff Street, Neutral Bay",
+      "suburb": "Neutral Bay",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.21816,
+              -33.8364161
+            ],
+            [
+              151.2179863,
+              -33.836395
+            ],
+            [
+              151.2176925,
+              -33.8363615
+            ],
+            [
+              151.2176502,
+              -33.8363565
+            ],
+            [
+              151.2176969,
+              -33.8364458
+            ],
+            [
+              151.2178027,
+              -33.8364576
+            ],
+            [
+              151.21797,
+              -33.8364762
+            ],
+            [
+              151.2181794,
+              -33.8365019
+            ],
+            [
+              151.21816,
+              -33.8364161
+            ]
+          ]
+        ]
+      },
+      "centroid": [
+        151.21789225,
+        -33.836426325000005
+      ],
+      "areaSqm": 417,
+      "isStrata": false,
+      "retrievedAt": "2026-10-02T00:03:36.562Z",
+      "planning": {
+        "zone": "R3",
+        "zoneName": "Medium Density Residential",
+        "fsr": null,
+        "heightM": 8.5,
+        "minLotSizeSqm": 230,
+        "heritage": "None mapped",
+        "planningInstrument": "North Sydney Local Environmental Plan 2013",
+        "lga": "NORTH SYDNEY",
+        "sources": {
+          "zone": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Land Zoning",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "fsr": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Floor Space Ratio",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heightM": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Height of Buildings",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "minLotSizeSqm": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Lot Size",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heritage": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Heritage",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          }
+        }
+      },
+      "planningStatus": "ok"
+    },
+    {
+      "externalParcelId": "nsw-cadid:102160754",
+      "source": "LIVE_NSW",
+      "lot": "4",
+      "section": null,
+      "dp": "DP21192",
+      "lotIdString": "4//DP21192",
+      "address": "60 Undercliff Street, Neutral Bay",
+      "suburb": "Neutral Bay",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2181794,
+              -33.8365019
+            ],
+            [
+              151.21797,
+              -33.8364762
+            ],
+            [
+              151.2178027,
+              -33.8364576
+            ],
+            [
+              151.2177997,
+              -33.8365085
+            ],
+            [
+              151.2177973,
+              -33.8365529
+            ],
+            [
+              151.2177965,
+              -33.8365637
+            ],
+            [
+              151.2178214,
+              -33.8365652
+            ],
+            [
+              151.2181989,
+              -33.8365883
+            ],
+            [
+              151.2181794,
+              -33.8365019
+            ]
+          ]
+        ]
+      },
+      "centroid": [
+        151.2179207375,
+        -33.8365267875
+      ],
+      "areaSqm": 390,
+      "isStrata": false,
+      "retrievedAt": "2026-10-02T00:03:36.562Z",
+      "planning": {
+        "zone": "R3",
+        "zoneName": "Medium Density Residential",
+        "fsr": null,
+        "heightM": 8.5,
+        "minLotSizeSqm": 230,
+        "heritage": "None mapped",
+        "planningInstrument": "North Sydney Local Environmental Plan 2013",
+        "lga": "NORTH SYDNEY",
+        "sources": {
+          "zone": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Land Zoning",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "fsr": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Floor Space Ratio",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heightM": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Height of Buildings",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "minLotSizeSqm": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Lot Size",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heritage": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Heritage",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          }
+        }
+      },
+      "planningStatus": "ok"
+    },
+    {
+      "externalParcelId": "nsw-cadid:102160619",
+      "source": "LIVE_NSW",
+      "lot": "1",
+      "section": null,
+      "dp": "DP78216",
+      "lotIdString": "1//DP78216",
+      "address": "81 Ben Boyd Road, Neutral Bay",
+      "suburb": "Neutral Bay",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2177097,
+              -33.8361544
+            ],
+            [
+              151.2177098,
+              -33.8361516
+            ],
+            [
+              151.217656,
+              -33.8361531
+            ],
+            [
+              151.2176312,
+              -33.8361538
+            ],
+            [
+              151.217201,
+              -33.8361611
+            ],
+            [
+              151.2172359,
+              -33.8362256
+            ],
+            [
+              151.2177057,
+              -33.8362801
+            ],
+            [
+              151.2177097,
+              -33.8361544
+            ]
+          ]
+        ]
+      },
+      "centroid": [
+        151.2175499,
+        -33.83618281428571
+      ],
+      "areaSqm": 479,
+      "isStrata": false,
+      "retrievedAt": "2026-10-02T00:03:36.562Z",
+      "planning": {
+        "zone": "R3",
+        "zoneName": "Medium Density Residential",
+        "fsr": null,
+        "heightM": 8.5,
+        "minLotSizeSqm": 230,
+        "heritage": "None mapped",
+        "planningInstrument": "North Sydney Local Environmental Plan 2013",
+        "lga": "NORTH SYDNEY",
+        "sources": {
+          "zone": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Land Zoning",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "fsr": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Floor Space Ratio",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heightM": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Height of Buildings",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "minLotSizeSqm": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Lot Size",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          },
+          "heritage": {
+            "kind": "OFFICIAL",
+            "source": "NSW Planning Portal — EPI Primary Planning Layers — Heritage",
+            "retrievedAt": "2026-10-02T00:03:37.339Z"
+          }
+        }
+      },
+      "planningStatus": "ok"
+    }
+  ]
+}

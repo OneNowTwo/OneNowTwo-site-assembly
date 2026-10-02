@@ -1,0 +1,102 @@
+import type { Polygon, MultiPolygon } from "geojson";
+import type { Assumptions, OpportunityInputs } from "@/lib/analysis/assumptions";
+import type { OpportunityLot } from "@/lib/analysis/opportunity";
+import type { AcquisitionStageValue, OpportunityStatusValue } from "@/lib/constants";
+import type { DataOrigin, FieldSource } from "@/lib/types";
+
+export interface OwnerDTO {
+  name: string | null;
+  ownerType: string | null;
+  phone: string | null;
+  email: string | null;
+  mailingAddress: string | null;
+  notes: string | null;
+}
+
+export interface ActivityDTO {
+  id: string;
+  type: string;
+  note: string | null;
+  activityDate: string;
+  nextAction: string | null;
+  nextActionDate: string | null;
+  stageFrom: AcquisitionStageValue | null;
+  stageTo: AcquisitionStageValue | null;
+}
+
+export interface LotDTO {
+  id: string;
+  parcelId: string;
+  externalParcelId: string;
+  source: DataOrigin;
+  lot: string | null;
+  section: string | null;
+  dp: string | null;
+  address: string | null;
+  label: string;
+  suburb: string | null;
+  geometry: Polygon | MultiPolygon;
+  centroid: [number, number];
+  areaSqm: number;
+  isStrata: boolean;
+  zone: string | null;
+  zoneName: string | null;
+  fsr: number | null;
+  heightM: number | null;
+  minLotSizeSqm: number | null;
+  heritage: string | null;
+  planningInstrument: string | null;
+  lga: string | null;
+  planningCheckedAt: string | null;
+  planningSnapshotSource: DataOrigin | null;
+  planningSources: Partial<Record<string, FieldSource>>;
+  included: boolean;
+  marketValue: number | null;
+  landValuePerSqm: number | null;
+  comparableValue: number | null;
+  maxAllocationOverride: number | null;
+  openingOfferOverride: number | null;
+  acquisitionStage: AcquisitionStageValue;
+  lastContactAt: string | null;
+  nextAction: string | null;
+  nextActionDate: string | null;
+  approachNotes: string | null;
+  owner: OwnerDTO | null;
+  activities: ActivityDTO[];
+}
+
+export interface OpportunityDTO {
+  id: string;
+  name: string;
+  status: OpportunityStatusValue;
+  suburb: string | null;
+  lga: string | null;
+  demoFinancialData: boolean;
+  notes: string | null;
+  inputs: OpportunityInputs;
+  createdAt: string;
+  updatedAt: string;
+  globalAssumptions: Assumptions;
+  lots: LotDTO[];
+}
+
+export function dtoToLots(dto: OpportunityDTO): OpportunityLot[] {
+  return dto.lots.map((l) => ({
+    id: l.id,
+    label: l.label,
+    areaSqm: l.areaSqm,
+    zone: l.zone,
+    zoneName: l.zoneName,
+    fsr: l.fsr,
+    heightM: l.heightM,
+    minLotSizeSqm: l.minLotSizeSqm,
+    heritage: l.heritage,
+    isStrata: l.isStrata,
+    planningKnown: l.planningCheckedAt != null,
+    marketValue: l.marketValue ?? (l.landValuePerSqm ? l.landValuePerSqm * l.areaSqm : null),
+    geometry: l.geometry,
+    included: l.included,
+    maxAllocationOverride: l.maxAllocationOverride,
+    openingOfferOverride: l.openingOfferOverride,
+  }));
+}

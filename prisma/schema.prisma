@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OpportunityStatus {
+  WATCHING
+  ANALYSING
+  FEASIBLE
+  ACQUIRING
+  CONTROLLED
+  REJECTED
+  HOLD
+}
+
+enum AcquisitionStage {
+  NOT_RESEARCHED
+  OWNER_IDENTIFIED
+  READY_TO_APPROACH
+  LETTER_SENT
+  DOOR_KNOCKED
+  CONTACT_MADE
+  INTERESTED
+  PRICE_DISCUSSED
+  OFFER_PREPARED
+  OFFER_MADE
+  NEGOTIATING
+  OPTION_CONTRACT
+  CONTROLLED
+  DECLINED
+  HOLD
+}
+
+/// LIVE_NSW: retrieved from NSW services; CACHED_NSW: real NSW data served from a stored snapshot; MANUAL: user-entered.
+enum DataSource {
+  LIVE_NSW
+  CACHED_NSW
+  MANUAL
+}
+
+enum ScenarioType {
+  BASE
+  UPSIDE
+  DOWNSIDE
+}
+
+model User {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  name          String?
+  createdAt     DateTime      @default(now())
+  lastLoginAt   DateTime?
+  opportunities Opportunity[]
+}
+
+model Opportunity {
+  id                String              @id @default(cuid())
+  name              String
+  status            OpportunityStatus   @default(ANALYSING)
+  suburb            String?
+  lga               String?
+  /// True when market values / owner details are fictional demo figures (shown as DEMO FINANCIAL DATA).
+  demoFinancialData Boolean             @default(false)
+  notes             String?
+  /// Per-opportunity overrides of GlobalAssumptions, yield and feasibility inputs (JSON, validated with Zod).
+  inputs            Json                @default("{}")
+  // Cached summary of the latest BASE calculation, used for list views and sorting.
+  score             Int?
+  scoreFactors      Json?
+  totalSiteArea     Float?
+  grv               Float?
+  maxLandBudget     Float?
+  residualLandValue Float?
+  profit            Float?
+  marginOnCost      Float?
+  combinedMarketValue Float?
+  createdById       String?
+  createdBy         User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  parcels           OpportunityParcel[]
+  scenarios         FeasibilityScenario[]
+
+  @@index([status])
+  @@index([updatedAt])
+}
+
+model Parcel {
+  id                 String              @id @default(cuid())
+  /// Stable external id, e.g. "nsw-cadid:100104808".
+  externalParcelId   String              @unique
+  source             DataSource          @default(LIVE_NSW)
+  lot                String?
+  section            String?
+  dp                 String?
+  lotIdString        String?
+  address            String?
+  suburb             String?
+  /// GeoJSON Polygon or MultiPolygon (WGS84).
+  geometry           Json
+  centroidLat        Float
+  centroidLng        Float
+  areaSqm            Float
+  zone               String?
+  zoneName           String?
+  fsr                Float?
+  heightM            Float?
+  minLotSizeSqm      Float?
+  heritage           String?
+  planningInstrument String?
+  lga                String?
+  isStrata           Boolean             @default(false)
+  planningCheckedAt  DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  opportunities      OpportunityParcel[]
+  snapshots          PlanningSnapshot[]
+}
+
+model OpportunityParcel {
+  id                    String                @id @default(cuid())
+  opportunityId         String
+  opportunity           Opportunity           @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  parcelId              String
+  parcel                Parcel                @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  sortOrder             Int                   @default(0)
+  /// When false the lot is excluded from the assembly ("what if we can't get it").
+  included              Boolean               @default(true)
+  marketValue           Float?
+  landValuePerSqm       Float?
+  comparableValue       Float?
+  maxAllocationOverride Float?
+  openingOfferOverride  Float?
+  // Computed snapshot of the latest calculation (refreshed on every save).
+  maximumOffer          Float?
+  openingOffer          Float?
+  ownerPremium          Float?
+  critical              Boolean?
+  acquisitionStage      AcquisitionStage      @default(NOT_RESEARCHED)
+  lastContactAt         DateTime?
+  nextAction            String?
+  nextActionDate        DateTime?
+  approachNotes         String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  owner                 OwnerContact?
+  activities            AcquisitionActivity[]
+
+  @@unique([opportunityId, parcelId])
+  @@index([acquisitionStage])
+}
+
+model OwnerContact {
+  id                  String            @id @default(cuid())
+  opportunityParcelId String            @unique
+  opportunityParcel   OpportunityParcel @relation(fields: [opportunityParcelId], references: [id], onDelete: Cascade)
+  name                String?
+  ownerType           String?
+  phone               String?
+  email               String?
+  mailingAddress      String?
+  notes               String?
+  updatedAt           DateTime          @updatedAt
+}
+
+model AcquisitionActivity {
+  id                  String            @id @default(cuid())
+  opportunityParcelId String
+  opportunityParcel   OpportunityParcel @relation(fields: [opportunityParcelId], references: [id], onDelete: Cascade)
+  type                String
+  note                String?
+  activityDate        DateTime          @default(now())
+  nextAction          String?
+  nextActionDate      DateTime?
+  stageFrom           AcquisitionStage?
+  stageTo             AcquisitionStage?
+  createdAt           DateTime          @default(now())
+
+  @@index([opportunityParcelId, activityDate])
+}
+
+model FeasibilityScenario {
+  id            String       @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity  @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  name          String
+  scenarioType  ScenarioType
+  /// Scenario adjustments relative to the base inputs.
+  assumptions   Json
+  /// Last calculated results for this scenario.
+  results       Json?
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([opportunityId, scenarioType])
+}
+
+model GlobalAssumptions {
+  id        String   @id @default("global")
+  values    Json
+  updatedAt DateTime @updatedAt
+}
+
+model PlanningSnapshot {
+  id          String     @id @default(cuid())
+  parcelId    String
+  parcel      Parcel     @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  source      DataSource
+  /// Full planning lookup result including per-field source and retrieval time.
+  data        Json
+  retrievedAt DateTime   @default(now())
+
+  @@index([parcelId, retrievedAt])
+}
