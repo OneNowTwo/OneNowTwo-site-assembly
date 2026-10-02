@@ -16,10 +16,13 @@ const dateStr = z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4
 const patchSchema = z.object({
   included: z.boolean().optional(),
   marketValue: money.optional(),
+  marketValueSource: z.enum(["USER_ESTIMATE", "COMPARABLE_DERIVED", "LIVE_PROVIDER", "SYSTEM_ESTIMATE", "DEMO"]).nullable().optional(),
+  marketValueConfidence: str(80).optional(),
   landValuePerSqm: money.optional(),
   comparableValue: money.optional(),
   maxAllocationOverride: money.optional(),
   openingOfferOverride: money.optional(),
+  strategicWeight: z.number().min(0).max(20).nullable().optional(),
   acquisitionStage: z.enum(ACQUISITION_STAGES).optional(),
   lastContactAt: dateStr.optional(),
   nextAction: str(300).optional(),

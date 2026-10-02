@@ -2,7 +2,7 @@
 
 Finds ordinary adjoining residential lots in NSW that could be assembled into a development site, then works backwards from the development economics to what a developer can pay each owner — and tracks every property through an acquisition pipeline.
 
-**FIND → ASSEMBLE → PLAN → YIELD → FEASIBILITY → RESIDUAL LAND VALUE → ACQUISITION BUDGET → OWNER STRATEGY → OFFER / APPROACH → PIPELINE**
+**FIND → ASSEMBLE → COMPARE HEADROOM → EXISTING VALUE → EXIT COMPS / UNIT MIX → GRV → COSTS → MAX PAYABLE TO OWNERS → ACQUISITION HEADROOM → OWNER OFFERS → PIPELINE**
 
 Internal MVP for Sydney metropolitan residential. It assists the developer; it never contacts owners or makes offers.
 
@@ -11,8 +11,8 @@ Internal MVP for Sydney metropolitan residential. It assists the developer; it n
 | Screen | What you get |
 | --- | --- |
 | **Map** | OpenStreetMap base, real NSW cadastral lots (zoom ≥ 17), zone-coloured fills, optional NSW LEP zoning WMS layer, address/suburb search. Click a lot for Lot/DP, area, zoning, FSR, height, minimum lot size, heritage, instrument — each with source and checked date. **Add to assembly** (or shift-click) and **Find assemblies**. |
-| **Find assemblies** | Builds an adjacency graph of neighbouring lots and ranks connected 2–6 lot combinations by a transparent 0–100 opportunity score with the reasons (`+ 2,326 sqm combined site`, `− FSR estimated …`). **Analyse** saves it as an opportunity. |
-| **Opportunity** | Tabs: Overview (why assembly creates value, score breakdown, include/exclude lots), Planning (per-lot controls, Official / User assumption / System estimate tags, re-check or manual entry), Yield, Feasibility (residual land value, max acquisition budget, cost table, "how this was calculated", price tests, base/upside/downside scenarios), Acquisition (offer allocation, owner premium, critical-lot analysis, approach sequence, owner details, approach brief, letter template, activity log). |
+| **Find assemblies / comparison** | Ranks connected combinations by acquisition headroom and score. Comparison table: lots, existing value, GRV, max payable, headroom, headroom %, score — so the largest assembly is not always best. |
+| **Opportunity** | Tabs: Overview (Max Payable / Acquisition Headroom summary), Planning, Yield (theoretical vs achievable GFA + unit mix builder), Feasibility (acquisition economics + residual), Comparables (acquisition vs exit comps — manual V1), Acquisition (opening/max offers, negotiation headroom, weighted allocation, critical + marginal lot analysis). |
 | **Opportunities** | All saved assemblies with score, GRV, max land budget, profit, acquisition progress, status; sort and filter. |
 | **Acquisitions** | Board (drag between 15 stages) and list of every property across opportunities, with next actions. |
 | **Assumptions** | Global defaults (margins, efficiency, costs, opening offer %, min viable site, max assembly size). Each opportunity can override any of them. |

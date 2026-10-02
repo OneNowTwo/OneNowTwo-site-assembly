@@ -1,7 +1,7 @@
 /**
  * Seeds global assumptions and the "Neutral Bay Assembly Demo" opportunity.
  * Parcels are real NSW cadastral lots: fetched live when the services respond, otherwise loaded from the
- * committed snapshot of the same live data. Only dollar values and owner details are fictional.
+ * committed snapshot of the same live data. Only dollar values, comps, unit mix and owner details are fictional.
  *
  *   npm run db:seed            # idempotent — skips the demo if it already exists
  *   npm run db:seed -- --reset # deletes and recreates the demo opportunity
@@ -12,10 +12,19 @@ import path from "node:path";
 import pointOnFeature from "@turf/point-on-feature";
 import { prisma } from "@/lib/db";
 import { DEFAULT_ASSUMPTIONS } from "@/lib/analysis/assumptions";
-import { DEMO_BBOX, DEMO_INPUTS, DEMO_LOTS, DEMO_NOTES, DEMO_OPPORTUNITY_NAME } from "@/lib/demo";
+import {
+  DEMO_ACQUISITION_COMPS,
+  DEMO_BBOX,
+  DEMO_EXIT_COMPS,
+  DEMO_INPUTS,
+  DEMO_LOTS,
+  DEMO_NOTES,
+  DEMO_OPPORTUNITY_NAME,
+  DEMO_UNIT_MIX,
+} from "@/lib/demo";
 import { nswCadastreProvider } from "@/lib/data-sources/nsw-cadastre";
 import { nswPlanningProvider } from "@/lib/data-sources/nsw-planning";
-import { createOpportunity, recomputeOpportunity } from "@/lib/opportunity-service";
+import { createOpportunity, recomputeOpportunity, syncUnitTypes } from "@/lib/opportunity-service";
 import type { ParcelData } from "@/lib/types";
 
 async function demoParcels(): Promise<{ parcels: ParcelData[]; origin: string }> {
@@ -44,7 +53,7 @@ async function demoParcels(): Promise<{ parcels: ParcelData[]; origin: string }>
 
 async function main() {
   const reset = process.argv.includes("--reset");
-  await prisma.globalAssumptions.upsert({ where: { id: "global" }, create: { id: "global", values: DEFAULT_ASSUMPTIONS }, update: {} });
+  await prisma.globalAssumptions.upsert({ where: { id: "global" }, create: { id: "global", values: DEFAULT_ASSUMPTIONS }, update: { values: DEFAULT_ASSUMPTIONS } });
 
   const existing = await prisma.opportunity.findFirst({ where: { name: DEMO_OPPORTUNITY_NAME, demoFinancialData: true } });
   if (existing && !reset) {
@@ -65,6 +74,8 @@ async function main() {
       where: { id: op.id },
       data: {
         marketValue: d.marketValue,
+        marketValueSource: "DEMO",
+        marketValueConfidence: "Demo fictional estimate",
         acquisitionStage: d.stage,
         approachNotes: d.approachNotes || null,
         lastContactAt: contacted ? new Date(now - 6 * 864e5) : null,
@@ -84,13 +95,62 @@ async function main() {
       });
     }
   }
+
+  await syncUnitTypes(opp.id, DEMO_UNIT_MIX);
+
+  for (const c of DEMO_ACQUISITION_COMPS) {
+    await prisma.comparableSale.create({
+      data: {
+        opportunityId: opp.id,
+        type: "ACQUISITION",
+        address: c.address,
+        salePrice: c.salePrice,
+        saleDate: new Date(c.saleDate),
+        bedrooms: c.bedrooms,
+        bathrooms: c.bathrooms,
+        parking: c.parking,
+        landArea: c.landArea,
+        propertyType: c.propertyType,
+        distanceM: c.distanceM,
+        source: "DEMO",
+        included: true,
+        notes: c.notes,
+        dataDate: new Date(c.saleDate),
+      },
+    });
+  }
+  for (const c of DEMO_EXIT_COMPS) {
+    await prisma.comparableSale.create({
+      data: {
+        opportunityId: opp.id,
+        type: "EXIT",
+        address: c.address,
+        salePrice: c.salePrice,
+        saleDate: new Date(c.saleDate),
+        bedrooms: c.bedrooms,
+        bathrooms: c.bathrooms,
+        parking: c.parking,
+        saleableArea: c.saleableArea,
+        pricePerSqm: c.salePrice / c.saleableArea,
+        unitType: c.unitType,
+        newBuildStatus: c.newBuildStatus,
+        source: "DEMO",
+        included: true,
+        notes: c.notes,
+        dataDate: new Date(c.saleDate),
+      },
+    });
+  }
+
   await prisma.opportunity.update({ where: { id: opp.id }, data: { status: "ACQUIRING" } });
   const analysis = await recomputeOpportunity(opp.id);
   const f = analysis!.base.feasibility;
   console.log(`Seeded "${DEMO_OPPORTUNITY_NAME}" (${opp.id}) from ${origin}`);
   console.log(
-    `  site ${Math.round(analysis!.site.siteAreaSqm)} sqm · GFA ${Math.round(analysis!.base.yield.gfa)} · ${analysis!.base.yield.dwellings} dwellings · GRV $${(f.grv / 1e6).toFixed(1)}m · ` +
-      `max land budget $${(f.maxAcquisitionBudget / 1e6).toFixed(2)}m vs combined MV $${(analysis!.combinedMarketValue / 1e6).toFixed(2)}m`,
+    `  site ${Math.round(analysis!.site.siteAreaSqm)} sqm · achievable GFA ${Math.round(analysis!.base.yield.achievableGfa)} · ${analysis!.base.yield.dwellings} dwellings · GRV $${(f.grv / 1e6).toFixed(1)}m`,
+  );
+  console.log(
+    `  existing $${(analysis!.combinedExistingValue / 1e6).toFixed(2)}m → max payable $${(analysis!.maxPayableToOwners / 1e6).toFixed(2)}m → headroom $${(analysis!.acquisitionHeadroom / 1e6).toFixed(2)}m (${Math.round((analysis!.acquisitionHeadroomPercent ?? 0) * 100)}%)`,
   );
 }
 

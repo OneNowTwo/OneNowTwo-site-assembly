@@ -7,7 +7,23 @@ import type { Assumptions, OpportunityInputs } from "@/lib/analysis/assumptions"
 import type { OpportunityStatusValue } from "@/lib/constants";
 
 export type LotPatch = Partial<
-  Pick<LotDTO, "included" | "marketValue" | "landValuePerSqm" | "comparableValue" | "maxAllocationOverride" | "openingOfferOverride" | "acquisitionStage" | "nextAction" | "nextActionDate" | "lastContactAt" | "approachNotes">
+  Pick<
+    LotDTO,
+    | "included"
+    | "marketValue"
+    | "marketValueSource"
+    | "marketValueConfidence"
+    | "landValuePerSqm"
+    | "comparableValue"
+    | "maxAllocationOverride"
+    | "openingOfferOverride"
+    | "strategicWeight"
+    | "acquisitionStage"
+    | "nextAction"
+    | "nextActionDate"
+    | "lastContactAt"
+    | "approachNotes"
+  >
 > & {
   owner?: Partial<OwnerDTO>;
   planning?: Partial<Pick<LotDTO, "zone" | "zoneName" | "fsr" | "heightM" | "minLotSizeSqm" | "heritage">>;
@@ -25,6 +41,8 @@ export interface OpportunityCtx {
   updateOpportunity: (patch: { name?: string; status?: OpportunityStatusValue; notes?: string | null }) => Promise<void>;
   addActivity: (lotId: string, body: { type: string; note?: string; nextAction?: string | null; nextActionDate?: string | null; activityDate?: string }) => Promise<void>;
   refreshPlanning: () => Promise<{ ok: boolean; message?: string }>;
+  refresh: () => Promise<void>;
+  setDto: React.Dispatch<React.SetStateAction<OpportunityDTO | null>>;
 }
 
 export const Ctx = createContext<OpportunityCtx | null>(null);

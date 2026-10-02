@@ -24,6 +24,45 @@ export interface ActivityDTO {
   stageTo: AcquisitionStageValue | null;
 }
 
+export interface ComparableSaleDTO {
+  id: string;
+  type: "ACQUISITION" | "EXIT";
+  parcelId: string | null;
+  address: string;
+  salePrice: number;
+  saleDate: string | null;
+  propertyType: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  parking: number | null;
+  landArea: number | null;
+  internalArea: number | null;
+  externalArea: number | null;
+  saleableArea: number | null;
+  pricePerSqm: number | null;
+  newBuildStatus: string | null;
+  unitType: string | null;
+  source: string;
+  sourceReference: string | null;
+  included: boolean;
+  notes: string | null;
+  distanceM: number | null;
+  dataDate: string | null;
+}
+
+export interface UnitTypeDTO {
+  id: string;
+  name: string;
+  sortOrder: number;
+  count: number;
+  avgInternalArea: number;
+  avgExternalArea: number;
+  avgSaleableArea: number;
+  salePricePerUnit: number;
+  pricePerSqm: number | null;
+  revenue: number | null;
+}
+
 export interface LotDTO {
   id: string;
   parcelId: string;
@@ -52,10 +91,17 @@ export interface LotDTO {
   planningSources: Partial<Record<string, FieldSource>>;
   included: boolean;
   marketValue: number | null;
+  marketValueSource: "USER_ESTIMATE" | "COMPARABLE_DERIVED" | "LIVE_PROVIDER" | "SYSTEM_ESTIMATE" | "DEMO" | null;
+  marketValueConfidence: string | null;
   landValuePerSqm: number | null;
   comparableValue: number | null;
   maxAllocationOverride: number | null;
   openingOfferOverride: number | null;
+  strategicWeight: number | null;
+  negotiationHeadroom: number | null;
+  ownerPremiumAmount: number | null;
+  ownerPremiumPercent: number | null;
+  criticalityScore: number | null;
   acquisitionStage: AcquisitionStageValue;
   lastContactAt: string | null;
   nextAction: string | null;
@@ -77,6 +123,17 @@ export interface OpportunityDTO {
   createdAt: string;
   updatedAt: string;
   globalAssumptions: Assumptions;
+  acquisitionHeadroom: number | null;
+  acquisitionHeadroomPercent: number | null;
+  assemblyUplift: number | null;
+  theoreticalGfa: number | null;
+  achievableGfa: number | null;
+  saleableArea: number | null;
+  unitCount: number | null;
+  totalNonLandCost: number | null;
+  targetMoc: number | null;
+  comparableSales: ComparableSaleDTO[];
+  unitTypes: UnitTypeDTO[];
   lots: LotDTO[];
 }
 
@@ -98,5 +155,6 @@ export function dtoToLots(dto: OpportunityDTO): OpportunityLot[] {
     included: l.included,
     maxAllocationOverride: l.maxAllocationOverride,
     openingOfferOverride: l.openingOfferOverride,
+    strategicWeight: l.strategicWeight,
   }));
 }

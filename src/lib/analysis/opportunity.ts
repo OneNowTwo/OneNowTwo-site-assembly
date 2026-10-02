@@ -1,18 +1,22 @@
 import type { Polygon, MultiPolygon } from "geojson";
 import type { Assumptions, OpportunityInputs, ScenarioAdjustment } from "./assumptions";
+import { defaultUnitMix } from "./assumptions";
 import { computeYield, type YieldResult } from "./yield";
-import { computeFeasibility, testPurchasePrice, type FeasibilityResult, type PriceTest } from "./feasibility";
+import { acquisitionHeadroom, computeFeasibility, testPurchasePrice, type FeasibilityResult, type PriceTest } from "./feasibility";
 import { computeAssemblyMetrics, effectiveFsr, scoreAssembly, type AnalysisLot, type AssemblyMetrics, type OpportunityScore } from "./assembly";
 import { allocateOffers, type AllocationResult } from "./allocation";
 import { analyseCriticalLots, type CriticalLotResult, type Economics } from "./critical";
+import { analyseMarginalLots, type MarginalLotResult, type MarginalLotEconomics } from "./marginal";
 import { buildAcquisitionSequence, type StrategyStep } from "./strategy";
 import { buildAdjacency, type Adjacency } from "./geometry";
+import { autoGenerateUnitMix, computeUnitMix, type UnitMixRow } from "./unit-mix";
 
 export interface OpportunityLot extends AnalysisLot {
   geometry: Polygon | MultiPolygon;
   included: boolean;
   maxAllocationOverride: number | null;
   openingOfferOverride: number | null;
+  strategicWeight?: number | null;
 }
 
 export type ScenarioKey = "BASE" | "UPSIDE" | "DOWNSIDE";
@@ -24,6 +28,10 @@ export interface ScenarioResult {
   fsr: number;
   yield: YieldResult;
   feasibility: FeasibilityResult;
+  combinedExistingValue: number;
+  maxPayableToOwners: number;
+  acquisitionHeadroom: number;
+  acquisitionHeadroomPercent: number | null;
 }
 
 export interface SiteBasis {
@@ -44,12 +52,19 @@ export interface OpportunityAnalysis {
   scenarios: Record<ScenarioKey, ScenarioResult>;
   base: ScenarioResult;
   combinedMarketValue: number;
+  combinedExistingValue: number;
   marketValueComplete: boolean;
-  /** Maximum acquisition budget less combined market value — the value created by assembling. */
+  maxPayableToOwners: number;
+  acquisitionHeadroom: number;
+  acquisitionHeadroomPercent: number | null;
+  /** Alias of acquisition headroom. */
   assemblyPremium: number;
+  assemblyUplift: number;
+  unitMix: UnitMixRow[];
   priceTests: { atMarketValue: PriceTest; atOpeningOffers: PriceTest; atMaximum: PriceTest };
   allocation: AllocationResult;
   critical: CriticalLotResult[];
+  marginal: MarginalLotResult[];
   strategy: StrategyStep[];
 }
 
@@ -80,9 +95,36 @@ function siteBasis(lots: OpportunityLot[], a: Assumptions, inputs: OpportunityIn
   };
 }
 
-function runScenario(key: ScenarioKey, site: SiteBasis, lotCount: number, a: Assumptions, adj: ScenarioAdjustment): ScenarioResult {
+function resolveUnitMix(inputs: OpportunityInputs, saleableArea: number, priceScale = 1): UnitMixRow[] {
+  const raw = inputs.unitMix?.length ? inputs.unitMix : autoGenerateUnitMix(saleableArea, defaultUnitMix(), inputs.mixShares);
+  return raw.map((r) => ({ ...r, salePricePerUnit: r.salePricePerUnit * priceScale }));
+}
+
+function runScenario(
+  key: ScenarioKey,
+  site: SiteBasis,
+  lotCount: number,
+  combinedExistingValue: number,
+  a: Assumptions,
+  adj: ScenarioAdjustment,
+  inputs: OpportunityInputs,
+): ScenarioResult {
   const sa = applyScenario(a, adj);
   const fsr = site.fsr * (1 + adj.fsrPct);
+  const yProbe = computeYield({
+    siteAreaSqm: site.siteAreaSqm,
+    fsr,
+    efficiency: sa.efficiency,
+    siteCoverage: sa.siteCoverage,
+    floorToFloorM: sa.floorToFloorM,
+    avgDwellingSizeSqm: sa.avgDwellingSizeSqm,
+    carSpacesPerDwelling: sa.carSpacesPerDwelling,
+    heightLimitM: site.heightLimitM,
+    planningAdjustment: sa.planningAdjustment,
+    achievableGfaOverride: inputs.achievableGfaOverride,
+  });
+  const unitMix = resolveUnitMix(inputs, yProbe.saleableArea, 1 + adj.salePricePct);
+  const mixTotals = computeUnitMix(unitMix);
   const y = computeYield({
     siteAreaSqm: site.siteAreaSqm,
     fsr,
@@ -92,37 +134,64 @@ function runScenario(key: ScenarioKey, site: SiteBasis, lotCount: number, a: Ass
     avgDwellingSizeSqm: sa.avgDwellingSizeSqm,
     carSpacesPerDwelling: sa.carSpacesPerDwelling,
     heightLimitM: site.heightLimitM,
+    planningAdjustment: sa.planningAdjustment,
+    achievableGfaOverride: inputs.achievableGfaOverride,
+    unitCountOverride: sa.revenueMode === "UNIT_MIX" && mixTotals.totalUnits > 0 ? mixTotals.totalUnits : null,
+    saleableAreaOverride: sa.revenueMode === "UNIT_MIX" && mixTotals.totalSaleableArea > 0 ? mixTotals.totalSaleableArea : null,
   });
-  const f = computeFeasibility({ gfa: y.gfa, saleableArea: y.saleableArea, dwellings: y.dwellings, lotCount, a: sa });
-  return { key, adjustment: adj, assumptions: sa, fsr, yield: y, feasibility: f };
+  const f = computeFeasibility({
+    gfa: y.achievableGfa,
+    saleableArea: y.saleableArea,
+    dwellings: y.dwellings,
+    lotCount,
+    unitMix: sa.revenueMode === "UNIT_MIX" ? unitMix : undefined,
+    a: sa,
+  });
+  const existing = combinedExistingValue * (1 + (adj.existingValuePct ?? 0));
+  const head = acquisitionHeadroom(f.maxAcquisitionBudget, existing);
+  return {
+    key,
+    adjustment: adj,
+    assumptions: sa,
+    fsr,
+    yield: y,
+    feasibility: f,
+    combinedExistingValue: existing,
+    maxPayableToOwners: f.maxPayableToOwners,
+    acquisitionHeadroom: head.acquisitionHeadroom,
+    acquisitionHeadroomPercent: head.acquisitionHeadroomPercent,
+  };
 }
 
 /** Full opportunity analysis — pure, shared by API (persisted summary) and UI (live recalculation). */
 export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, inputs: OpportunityInputs, adjacency?: Adjacency): OpportunityAnalysis {
   const lots = allLots.filter((l) => l.included);
   const adj = adjacency ?? buildAdjacency(allLots.map((l) => ({ id: l.id, geometry: l.geometry })));
-  const metrics = computeAssemblyMetrics(lots, a, adj);
-  const score = scoreAssembly(metrics, a);
   const site = siteBasis(lots, a, inputs);
+  const combinedMarketValue = lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
+  const marketValueComplete = lots.every((l) => (l.marketValue ?? 0) > 0);
+  const metricsProbe = computeAssemblyMetrics(lots, a, adj);
+  const unitMix = resolveUnitMix(inputs, metricsProbe.saleableArea);
+  const metrics = computeAssemblyMetrics(lots, a, adj, a.revenueMode === "UNIT_MIX" ? unitMix : undefined);
+
   const scenarios = {
-    BASE: runScenario("BASE", site, lots.length, a, inputs.scenarios.BASE),
-    UPSIDE: runScenario("UPSIDE", site, lots.length, a, inputs.scenarios.UPSIDE),
-    DOWNSIDE: runScenario("DOWNSIDE", site, lots.length, a, inputs.scenarios.DOWNSIDE),
+    BASE: runScenario("BASE", site, lots.length, combinedMarketValue || metrics.combinedValue, a, inputs.scenarios.BASE, inputs),
+    UPSIDE: runScenario("UPSIDE", site, lots.length, combinedMarketValue || metrics.combinedValue, a, inputs.scenarios.UPSIDE, inputs),
+    DOWNSIDE: runScenario("DOWNSIDE", site, lots.length, combinedMarketValue || metrics.combinedValue, a, inputs.scenarios.DOWNSIDE, inputs),
   };
   const base = scenarios.BASE;
   const budget = Math.max(0, base.feasibility.maxAcquisitionBudget);
+  const existingValue = marketValueComplete ? combinedMarketValue : metrics.combinedValue;
+  const head = acquisitionHeadroom(budget, existingValue);
 
-  const allocation = allocateOffers(
+  // Critical first (for allocation weights), then allocate, then marginal.
+  const baseEcon: Economics = {
+    areaSqm: site.siteAreaSqm,
+    gfa: base.yield.achievableGfa,
     budget,
-    lots.map((l) => ({ id: l.id, marketValue: l.marketValue ?? null, areaSqm: l.areaSqm, maxOverride: l.maxAllocationOverride, openingOverride: l.openingOfferOverride })),
-    a.openingOfferPct,
-    a.existingValuePerSqm,
-  );
-  const combinedMarketValue = lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
-  const marketValueComplete = lots.every((l) => (l.marketValue ?? 0) > 0);
-
-  // Without-lot economics: subtract the lot's own area and its share of GFA under the site basis.
-  const baseEcon: Economics = { areaSqm: site.siteAreaSqm, gfa: base.yield.gfa, budget };
+    grv: base.feasibility.grv,
+    headroom: head.acquisitionHeadroom,
+  };
   const parcelArea = lots.reduce((s, l) => s + l.areaSqm, 0) || 1;
   const economicsFor = (ids: string[]): Economics => {
     const subset = lots.filter((l) => ids.includes(l.id));
@@ -131,8 +200,15 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
       ...siteBasis(subset, a, { ...inputs, siteAreaOverride: null, fsrOverride: inputs.fsrOverride, heightOverrideM: inputs.heightOverrideM }),
       siteAreaSqm: (site.siteAreaSqm * subArea) / parcelArea,
     };
-    const r = runScenario("BASE", scaledSite, subset.length, a, inputs.scenarios.BASE);
-    return { areaSqm: scaledSite.siteAreaSqm, gfa: r.yield.gfa, budget: r.feasibility.maxAcquisitionBudget };
+    const subMv = subset.reduce((s, l) => s + (l.marketValue ?? 0), 0);
+    const r = runScenario("BASE", scaledSite, subset.length, subMv || metrics.combinedValue * (subArea / parcelArea), a, inputs.scenarios.BASE, inputs);
+    return {
+      areaSqm: scaledSite.siteAreaSqm,
+      gfa: r.yield.achievableGfa,
+      budget: r.feasibility.maxAcquisitionBudget,
+      grv: r.feasibility.grv,
+      headroom: r.acquisitionHeadroom,
+    };
   };
   const critical = analyseCriticalLots(
     lots.map((l) => ({ id: l.id, areaSqm: l.areaSqm, marketValue: l.marketValue ?? null })),
@@ -141,6 +217,73 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     economicsFor,
     { minViableSiteAreaSqm: a.minViableSiteAreaSqm },
   );
+  const critById = new Map(critical.map((c) => [c.id, c]));
+
+  const allocation = allocateOffers(
+    budget,
+    lots.map((l) => {
+      const c = critById.get(l.id);
+      return {
+        id: l.id,
+        marketValue: l.marketValue ?? null,
+        areaSqm: l.areaSqm,
+        maxOverride: l.maxAllocationOverride,
+        openingOverride: l.openingOfferOverride,
+        criticalityScore: c ? (c.status === "CRITICAL" ? 1 : 0.2) + (c.connector ? 0.3 : 0) : 0,
+        connectivityScore: c?.degree ?? 0,
+        strategicWeight: l.strategicWeight ?? null,
+      };
+    }),
+    a.openingOfferPct,
+    a.existingValuePerSqm,
+    { marketValueWeight: a.marketValueWeight, criticalityWeight: a.criticalityWeight, connectivityWeight: a.connectivityWeight },
+  );
+
+  const baseMarginal: MarginalLotEconomics = {
+    areaSqm: site.siteAreaSqm,
+    theoreticalGfa: base.yield.theoreticalGfa,
+    achievableGfa: base.yield.achievableGfa,
+    grv: base.feasibility.grv,
+    maxPayable: budget,
+    combinedExistingValue: existingValue,
+    acquisitionHeadroom: head.acquisitionHeadroom,
+  };
+  const marginal = analyseMarginalLots(
+    lots.map((l) => ({ id: l.id, marketValue: l.marketValue ?? null, label: l.label })),
+    baseMarginal,
+    (id) => {
+      const e = economicsFor(lots.filter((l) => l.id !== id).map((l) => l.id));
+      return {
+        areaSqm: e.areaSqm,
+        theoreticalGfa: e.gfa / (a.planningAdjustment || 1),
+        achievableGfa: e.gfa,
+        grv: e.grv ?? 0,
+        maxPayable: e.budget,
+        combinedExistingValue: existingValue - (lots.find((l) => l.id === id)?.marketValue ?? 0),
+        acquisitionHeadroom: e.headroom ?? 0,
+      };
+    },
+    { improvesConnectivity: (id) => critById.get(id)?.connector === true || (critById.get(id)?.degree ?? 0) >= 2 },
+  );
+
+  metrics.criticalLotCount = critical.filter((c) => c.status === "CRITICAL").length;
+  // Refresh headroom fields on metrics from base analysis
+  metrics.acquisitionHeadroom = head.acquisitionHeadroom;
+  metrics.acquisitionHeadroomPercent = head.acquisitionHeadroomPercent;
+  metrics.assemblyUplift = head.assemblyUplift;
+  metrics.maxPayableToOwners = budget;
+  metrics.indicativeBudget = budget;
+  metrics.grv = base.feasibility.grv;
+  metrics.profit = base.feasibility.profit;
+  metrics.marginOnCost = base.feasibility.marginOnCost;
+  metrics.theoreticalGfa = base.yield.theoreticalGfa;
+  metrics.achievableGfa = base.yield.achievableGfa;
+  metrics.saleableArea = base.yield.saleableArea;
+  metrics.dwellings = base.yield.dwellings;
+  metrics.combinedValue = existingValue;
+  metrics.upliftRatio = existingValue > 0 ? budget / existingValue : 0;
+
+  const score = scoreAssembly(metrics, a);
   const allocById = new Map(allocation.lots.map((l) => [l.id, l]));
   const strategy = buildAcquisitionSequence(
     lots.map((l) => ({ id: l.id, label: l.label, areaSqm: l.areaSqm, maximumPremium: allocById.get(l.id)?.maximumPremium ?? null })),
@@ -156,15 +299,22 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     scenarios,
     base,
     combinedMarketValue,
+    combinedExistingValue: existingValue,
     marketValueComplete,
-    assemblyPremium: budget - (marketValueComplete ? combinedMarketValue : metrics.combinedValue),
+    maxPayableToOwners: budget,
+    acquisitionHeadroom: head.acquisitionHeadroom,
+    acquisitionHeadroomPercent: head.acquisitionHeadroomPercent,
+    assemblyPremium: head.acquisitionHeadroom,
+    assemblyUplift: head.assemblyUplift,
+    unitMix,
     priceTests: {
-      atMarketValue: testPurchasePrice(base.feasibility, combinedMarketValue),
+      atMarketValue: testPurchasePrice(base.feasibility, existingValue),
       atOpeningOffers: testPurchasePrice(base.feasibility, allocation.totalOpening),
       atMaximum: testPurchasePrice(base.feasibility, allocation.totalMaximum),
     },
     allocation,
     critical,
+    marginal,
     strategy,
   };
 }

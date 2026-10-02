@@ -15,9 +15,10 @@ import { OverviewTab } from "./overview-tab";
 import { PlanningTab } from "./planning-tab";
 import { YieldTab } from "./yield-tab";
 import { FeasibilityTab } from "./feasibility-tab";
+import { MarketTab } from "./market-tab";
 import { AcquisitionTab } from "./acquisition-tab";
 
-const TABS = ["overview", "planning", "yield", "feasibility", "acquisition"] as const;
+const TABS = ["overview", "planning", "yield", "feasibility", "market", "acquisition"] as const;
 type Tab = (typeof TABS)[number];
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -142,6 +143,10 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
               setSaving(false);
             }
           },
+          refresh: async () => {
+            setDto(await api<OpportunityDTO>(`/api/opportunities/${id}`));
+          },
+          setDto,
         }
       : null;
 
@@ -198,17 +203,23 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                 {error && <Badge tone="bad">{error}</Badge>}
               </div>
             </div>
-            <div className="flex shrink-0 items-end gap-7 pb-1">
+            <div className="flex shrink-0 items-end gap-6 pb-1">
               <div className="text-right">
                 <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Score</div>
                 <div className="mt-1">
                   <ScoreBadge score={analysis.score.score} />
                 </div>
               </div>
+              <HeaderStat label="Existing value" value={money(analysis.combinedExistingValue, { compact: true })} />
+              <HeaderStat label="Max payable to owners" value={money(analysis.maxPayableToOwners, { compact: true })} tone={analysis.maxPayableToOwners > 0 ? "brand" : "bad"} large />
+              <HeaderStat
+                label="Acquisition headroom"
+                value={money(analysis.acquisitionHeadroom, { compact: true })}
+                tone={analysis.acquisitionHeadroom > 0 ? "good" : "bad"}
+                sub={pct(analysis.acquisitionHeadroomPercent, 0, true)}
+                large
+              />
               <HeaderStat label="GRV" value={money(f.grv, { compact: true })} />
-              <HeaderStat label="Max land budget" value={money(f.maxAcquisitionBudget, { compact: true })} tone={f.maxAcquisitionBudget > 0 ? "brand" : "bad"} />
-              <HeaderStat label="Profit" value={money(f.profit, { compact: true })} />
-              <HeaderStat label={f.steps[7].label} value={pct(f.steps[7].value)} />
             </div>
           </div>
           <nav className="mt-3 flex gap-1">
@@ -218,7 +229,7 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                 onClick={() => setTab(t)}
                 className={cx("border-b-2 px-3 pb-2 pt-1 text-[11.5px] font-semibold uppercase tracking-[0.1em]", tab === t ? "border-brand text-brand" : "border-transparent text-muted hover:text-ink")}
               >
-                {t}
+                {t === "market" ? "comparables" : t}
               </button>
             ))}
           </nav>
@@ -228,6 +239,7 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
           {tab === "planning" && <PlanningTab />}
           {tab === "yield" && <YieldTab />}
           {tab === "feasibility" && <FeasibilityTab />}
+          {tab === "market" && <MarketTab />}
           {tab === "acquisition" && <AcquisitionTab />}
           {tab !== "planning" && <p className="mt-6 text-[11px] text-muted">{DISCLAIMER}</p>}
         </div>
@@ -236,11 +248,12 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
   );
 }
 
-function HeaderStat({ label, value, tone }: { label: string; value: string; tone?: "brand" | "bad" }) {
+function HeaderStat({ label, value, tone, sub, large }: { label: string; value: string; tone?: "brand" | "bad" | "good"; sub?: string; large?: boolean }) {
   return (
     <div className="text-right">
       <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">{label}</div>
-      <div className={cx("num text-[22px] font-semibold leading-tight", tone === "brand" && "text-brand", tone === "bad" && "text-bad")}>{value}</div>
+      <div className={cx("num font-semibold leading-tight", large ? "text-[26px]" : "text-[20px]", tone === "brand" && "text-brand", tone === "bad" && "text-bad", tone === "good" && "text-good")}>{value}</div>
+      {sub && <div className="text-[11px] text-muted">{sub}</div>}
     </div>
   );
 }

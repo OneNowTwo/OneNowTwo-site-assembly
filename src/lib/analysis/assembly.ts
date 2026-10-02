@@ -1,6 +1,7 @@
 import type { Assumptions } from "./assumptions";
+import type { UnitMixRow } from "./unit-mix";
 import { computeYield } from "./yield";
-import { computeFeasibility } from "./feasibility";
+import { acquisitionHeadroom, computeFeasibility } from "./feasibility";
 import { type Adjacency, isConnected } from "./geometry";
 
 export interface AnalysisLot {
@@ -35,7 +36,10 @@ export function isHeritageItem(h: string | null): boolean {
  * apartment-capable zones get a SYSTEM ESTIMATE of storeys under the height control × site coverage;
  * other zones get the fallback assumption.
  */
-export function effectiveFsr(l: Pick<AnalysisLot, "fsr" | "heightM" | "zone">, a: Pick<Assumptions, "fallbackFsr" | "floorToFloorM" | "siteCoverage">): { fsr: number; basis: "OFFICIAL" | "HEIGHT_ESTIMATE" | "FALLBACK" } {
+export function effectiveFsr(
+  l: Pick<AnalysisLot, "fsr" | "heightM" | "zone">,
+  a: Pick<Assumptions, "fallbackFsr" | "floorToFloorM" | "siteCoverage">,
+): { fsr: number; basis: "OFFICIAL" | "HEIGHT_ESTIMATE" | "FALLBACK" } {
   if (l.fsr != null) return { fsr: l.fsr, basis: "OFFICIAL" };
   if (l.heightM != null && l.zone && APARTMENT_ZONES.test(l.zone)) {
     const storeys = Math.max(1, Math.floor(l.heightM / a.floorToFloorM));
@@ -64,23 +68,35 @@ export interface AssemblyMetrics {
   heritageItems: number;
   strataLots: number;
   minLotSizeIssues: string[];
+  theoreticalGfa: number;
+  achievableGfa: number;
+  saleableArea: number;
   gfa: number;
   dwellings: number;
+  grv: number;
   owners: number;
   combinedValue: number;
   combinedValueEstimated: boolean;
+  /** Maximum payable to owners. */
   indicativeBudget: number;
+  maxPayableToOwners: number;
+  acquisitionHeadroom: number;
+  acquisitionHeadroomPercent: number | null;
+  assemblyUplift: number;
+  profit: number;
+  marginOnCost: number;
   upliftRatio: number;
   planningUnknownLots: number;
   connected: boolean;
+  criticalLotCount: number;
 }
 
-export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?: Adjacency): AssemblyMetrics {
+export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?: Adjacency, unitMix?: UnitMixRow[]): AssemblyMetrics {
   const totalAreaSqm = lots.reduce((s, l) => s + l.areaSqm, 0);
   const zones = [...new Set(lots.map((l) => l.zone ?? "Unknown"))];
   const fsrEstimated = lots.some((l) => l.fsr == null);
-  const gfa = lots.reduce((s, l) => s + l.areaSqm * effectiveFsr(l, a).fsr, 0);
-  const weightedFsr = totalAreaSqm > 0 ? gfa / totalAreaSqm : 0;
+  const theoreticalFromLots = lots.reduce((s, l) => s + l.areaSqm * effectiveFsr(l, a).fsr, 0);
+  const weightedFsr = totalAreaSqm > 0 ? theoreticalFromLots / totalAreaSqm : 0;
   const heights = lots.map((l) => l.heightM).filter((h): h is number => h != null);
   const minLotSizes = lots.map((l) => l.minLotSizeSqm).filter((m): m is number => m != null);
   const minLotSizeIssues: string[] = [];
@@ -97,8 +113,17 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
     avgDwellingSizeSqm: a.avgDwellingSizeSqm,
     carSpacesPerDwelling: a.carSpacesPerDwelling,
     heightLimitM: heights.length ? Math.min(...heights) : null,
+    planningAdjustment: a.planningAdjustment,
   });
-  const f = computeFeasibility({ gfa: y.gfa, saleableArea: y.saleableArea, dwellings: y.dwellings, lotCount: lots.length, a });
+  const f = computeFeasibility({
+    gfa: y.achievableGfa,
+    saleableArea: y.saleableArea,
+    dwellings: y.dwellings,
+    lotCount: lots.length,
+    unitMix,
+    a,
+  });
+  const headroom = acquisitionHeadroom(f.maxAcquisitionBudget, combinedValue);
   return {
     lotIds: lots.map((l) => l.id),
     lotCount: lots.length,
@@ -113,19 +138,41 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
     heritageItems: lots.filter((l) => isHeritageItem(l.heritage)).length,
     strataLots: lots.filter((l) => l.isStrata).length,
     minLotSizeIssues,
-    gfa: y.gfa,
+    theoreticalGfa: y.theoreticalGfa,
+    achievableGfa: y.achievableGfa,
+    saleableArea: y.saleableArea,
+    gfa: y.achievableGfa,
     dwellings: y.dwellings,
+    grv: f.grv,
     owners: lots.length,
     combinedValue,
     combinedValueEstimated: valueEstimated,
     indicativeBudget: f.maxAcquisitionBudget,
+    maxPayableToOwners: f.maxAcquisitionBudget,
+    acquisitionHeadroom: headroom.acquisitionHeadroom,
+    acquisitionHeadroomPercent: headroom.acquisitionHeadroomPercent,
+    assemblyUplift: headroom.assemblyUplift,
+    profit: f.profit,
+    marginOnCost: f.marginOnCost,
     upliftRatio: combinedValue > 0 ? f.maxAcquisitionBudget / combinedValue : 0,
     planningUnknownLots: lots.filter((l) => !l.planningKnown).length,
     connected: adj ? isConnected(lots.map((l) => l.id), adj) : true,
+    criticalLotCount: 0,
   };
 }
 
-export const SCORE_WEIGHTS = { siteSize: 0.25, planningCapacity: 0.25, simplicity: 0.15, uplift: 0.25, constraints: 0.1 } as const;
+/**
+ * Scoring heavily rewards acquisition headroom and assembly uplift (brief §19).
+ * Weights are transparent and not hard-coded forever — exposed as SCORE_WEIGHTS.
+ */
+export const SCORE_WEIGHTS = {
+  acquisitionHeadroom: 0.3,
+  developmentUplift: 0.2,
+  planningCapacity: 0.15,
+  simplicity: 0.15,
+  geometry: 0.1,
+  planningRisk: 0.1,
+} as const;
 
 export interface ScoreFactor {
   sign: "+" | "-";
@@ -135,6 +182,7 @@ export interface OpportunityScore {
   score: number;
   components: Record<keyof typeof SCORE_WEIGHTS, number>;
   factors: ScoreFactor[];
+  weights: typeof SCORE_WEIGHTS;
 }
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
@@ -146,13 +194,28 @@ const count = (n: number, noun: string) => `${words[n] ?? n} ${noun}${n === 1 ? 
 export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunityScore {
   const factors: ScoreFactor[] = [];
 
-  const siteSize = clamp01((m.totalAreaSqm - 600) / (3000 - 600)) * 100;
-  if (m.totalAreaSqm >= a.minViableSiteAreaSqm) factors.push({ sign: "+", text: `${sqm(m.totalAreaSqm)} combined site` });
-  else factors.push({ sign: "-", text: `${sqm(m.totalAreaSqm)} is below the ${sqm(a.minViableSiteAreaSqm)} minimum viable site` });
+  // Acquisition headroom $ — primary ranking signal
+  const headroomScore = clamp01(m.acquisitionHeadroom / 8_000_000) * 70 + clamp01((m.acquisitionHeadroomPercent ?? 0) / 1.5) * 30;
+  if (m.acquisitionHeadroom >= 1_000_000) {
+    factors.push({
+      sign: "+",
+      text: `acquisition headroom $${(m.acquisitionHeadroom / 1e6).toFixed(1)}m (${m.acquisitionHeadroomPercent != null ? `${Math.round(m.acquisitionHeadroomPercent * 100)}%` : "—"} over existing value)`,
+    });
+  } else {
+    factors.push({ sign: "-", text: `acquisition headroom only $${(m.acquisitionHeadroom / 1e6).toFixed(2)}m — limited room to overpay` });
+  }
+
+  const developmentUplift = clamp01((m.upliftRatio - 0.9) / (1.8 - 0.9)) * 100;
+  if (m.upliftRatio >= 1.15)
+    factors.push({
+      sign: "+",
+      text: `max payable ${m.upliftRatio.toFixed(1)}× existing property value${m.combinedValueEstimated ? " (estimated)" : ""}`,
+    });
+  else factors.push({ sign: "-", text: `max payable only ${m.upliftRatio.toFixed(2)}× existing value — little assembly uplift` });
 
   const planningCapacity = clamp01(m.weightedFsr / 2) * 80 + clamp01((m.heightMinM ?? 0) / 24) * 20;
   const fsrText = `FSR ${m.weightedFsr.toFixed(2)}:1${m.fsrEstimated ? " (estimated — no FSR mapped)" : ""}`;
-  if (m.weightedFsr >= 1.2) factors.push({ sign: "+", text: `${fsrText} — ${Math.round(m.gfa).toLocaleString("en-AU")} sqm GFA` });
+  if (m.weightedFsr >= 1.2) factors.push({ sign: "+", text: `${fsrText} — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA` });
   else factors.push({ sign: "-", text: `${fsrText} limits apartment yield` });
   if (m.heightMinM != null && m.heightMinM >= 15) factors.push({ sign: "+", text: `${m.heightMinM} m height control` });
 
@@ -160,52 +223,57 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunitySc
   simplicity = Math.max(0, Math.min(100, simplicity));
   if (m.lotCount <= 3) factors.push({ sign: "+", text: `only ${count(m.lotCount, "owner")} to negotiate` });
   else if (m.lotCount >= 5) factors.push({ sign: "-", text: `${count(m.lotCount, "owner")} to negotiate` });
-  if (m.strataLots) factors.push({ sign: "-", text: `${count(m.strataLots, "strata scheme")} (collective sale required)` });
-  if (m.strataLots) simplicity = Math.max(0, simplicity - 20 * m.strataLots);
+  if (m.strataLots) {
+    factors.push({ sign: "-", text: `${count(m.strataLots, "strata scheme")} (collective sale required)` });
+    simplicity = Math.max(0, simplicity - 20 * m.strataLots);
+  }
+  if (m.totalAreaSqm >= a.minViableSiteAreaSqm) factors.push({ sign: "+", text: `${sqm(m.totalAreaSqm)} combined site` });
+  else factors.push({ sign: "-", text: `${sqm(m.totalAreaSqm)} is below the ${sqm(a.minViableSiteAreaSqm)} minimum viable site` });
 
-  const uplift = clamp01((m.upliftRatio - 0.9) / (1.8 - 0.9)) * 100;
-  if (m.upliftRatio >= 1.15)
-    factors.push({ sign: "+", text: `indicative land budget ${m.upliftRatio.toFixed(1)}× existing value${m.combinedValueEstimated ? " (estimated)" : ""}` });
-  else factors.push({ sign: "-", text: `indicative land budget only ${m.upliftRatio.toFixed(2)}× existing value — little assembly premium` });
+  let geometry = m.connected ? 85 : 20;
+  if (!m.connected) factors.push({ sign: "-", text: "lots are not contiguous" });
+  else factors.push({ sign: "+", text: "contiguous assembled site" });
+  geometry = clamp01(geometry / 100) * 100;
 
-  let constraints = 100;
+  let planningRisk = 100;
   if (m.heritageItems) {
-    constraints -= 50 * m.heritageItems;
+    planningRisk -= 50 * m.heritageItems;
     factors.push({ sign: "-", text: `${count(m.heritageItems, "heritage item")}` });
   }
   const conservation = m.heritageLots - m.heritageItems;
   if (conservation) {
-    constraints -= 25 * conservation;
+    planningRisk -= 25 * conservation;
     factors.push({ sign: "-", text: `${count(conservation, "lot")} in a heritage conservation area` });
   }
   const lowDensity = m.zones.filter((z) => z !== "Unknown" && !APARTMENT_ZONES.test(z));
   if (lowDensity.length) {
-    constraints -= 30;
+    planningRisk -= 30;
     factors.push({ sign: "-", text: `${lowDensity.join(", ")} zoning generally does not permit apartments` });
   }
   if (!m.zoneCompatible) {
-    constraints -= 25;
+    planningRisk -= 25;
     factors.push({ sign: "-", text: `mixed or unknown zoning (${m.zones.join(", ")})` });
   } else factors.push({ sign: "+", text: `consistent ${m.zones[0]} zoning` });
   if (m.planningUnknownLots) {
-    constraints -= 20;
+    planningRisk -= 20;
     factors.push({ sign: "-", text: `planning data unavailable for ${count(m.planningUnknownLots, "lot")}` });
   }
   for (const issue of m.minLotSizeIssues) {
-    constraints -= 20;
+    planningRisk -= 20;
     factors.push({ sign: "-", text: issue });
   }
-  if (!m.connected) {
-    constraints -= 40;
-    factors.push({ sign: "-", text: "lots are not contiguous" });
-  }
-  constraints = Math.max(0, constraints);
+  planningRisk = Math.max(0, planningRisk);
 
-  const components = { siteSize, planningCapacity, simplicity, uplift, constraints };
-  const score = Math.round(
-    (Object.keys(SCORE_WEIGHTS) as (keyof typeof SCORE_WEIGHTS)[]).reduce((s, k) => s + components[k] * SCORE_WEIGHTS[k], 0),
-  );
-  return { score, components, factors };
+  const components = {
+    acquisitionHeadroom: headroomScore,
+    developmentUplift,
+    planningCapacity,
+    simplicity,
+    geometry,
+    planningRisk,
+  };
+  const score = Math.round((Object.keys(SCORE_WEIGHTS) as (keyof typeof SCORE_WEIGHTS)[]).reduce((s, k) => s + components[k] * SCORE_WEIGHTS[k], 0));
+  return { score, components, factors, weights: SCORE_WEIGHTS };
 }
 
 export interface AssemblyCandidate {
@@ -221,6 +289,28 @@ export interface GenerateOptions {
   /** Subsets kept per size level — bounds the search to O(maxSize × beam × degree). */
   beamWidth?: number;
   maxResults?: number;
+  /** Sort key for ranking candidates (default score). */
+  sortBy?: "score" | "headroom" | "profit" | "owners" | "area" | "moc";
+}
+
+function sortCandidates(list: AssemblyCandidate[], sortBy: GenerateOptions["sortBy"] = "score"): AssemblyCandidate[] {
+  const cmp = (x: AssemblyCandidate, y: AssemblyCandidate) => {
+    switch (sortBy) {
+      case "headroom":
+        return y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+      case "profit":
+        return y.metrics.profit - x.metrics.profit;
+      case "owners":
+        return x.metrics.owners - y.metrics.owners || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+      case "area":
+        return y.metrics.totalAreaSqm - x.metrics.totalAreaSqm;
+      case "moc":
+        return y.metrics.marginOnCost - x.metrics.marginOnCost;
+      default:
+        return y.score.score - x.score.score || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+    }
+  };
+  return [...list].sort(cmp);
 }
 
 /**
@@ -259,18 +349,18 @@ export function generateAssemblies(
           const key = ids.join("|");
           if (next.has(key) || all.has(key)) continue;
           const group = ids.map((i) => byId.get(i)!);
-          const metrics = computeAssemblyMetrics(group, a);
+          const metrics = computeAssemblyMetrics(group, a, adj);
           next.set(key, { key, lotIds: ids, metrics, score: scoreAssembly(metrics, a) });
         }
       }
     }
     if (!next.size) break;
-    const ranked = [...next.values()].sort((x, y) => y.score.score - x.score.score || y.metrics.totalAreaSqm - x.metrics.totalAreaSqm);
+    const ranked = sortCandidates([...next.values()], "score");
     for (const c of ranked) if (size >= minSize) all.set(c.key, c);
     frontier = ranked.slice(0, beamWidth).map((c) => c.lotIds);
   }
 
-  const sorted = [...all.values()].sort((x, y) => y.score.score - x.score.score || y.metrics.totalAreaSqm - x.metrics.totalAreaSqm);
+  const sorted = sortCandidates([...all.values()], opts.sortBy ?? "score");
   // Guarantee the best option of each size is offered before filling with near-duplicates.
   const picked = new Map<string, AssemblyCandidate>();
   const sizes = new Set<number>();
@@ -284,7 +374,10 @@ export function generateAssemblies(
     if (picked.size >= maxResults) break;
     picked.set(c.key, c);
   }
-  return [...picked.values()]
-    .sort((x, y) => y.score.score - x.score.score || y.metrics.totalAreaSqm - x.metrics.totalAreaSqm)
-    .slice(0, maxResults);
+  return sortCandidates([...picked.values()], opts.sortBy ?? "score").slice(0, maxResults);
+}
+
+/** Compare candidates for the Assembly Comparison screen. */
+export function compareAssemblies(candidates: AssemblyCandidate[], sortBy: GenerateOptions["sortBy"] = "headroom"): AssemblyCandidate[] {
+  return sortCandidates(candidates, sortBy);
 }

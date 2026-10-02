@@ -23,42 +23,67 @@ export function FeasibilityTab() {
     </Field>
   );
   const tests = analysis.priceTests;
+  const openingBudget = analysis.allocation.totalOpening;
 
   return (
     <div className="space-y-4">
+      <div className="grid grid-cols-4 gap-4 rounded-[3px] border-2 border-brand/30 bg-white p-4">
+        <Stat label="Maximum payable to owners" value={money(f.maxPayableToOwners, { compact: true })} tone={f.viable ? "brand" : "bad"} sub="Primary acquisition metric (P)" />
+        <Stat label="Combined existing property value" value={money(analysis.combinedExistingValue, { compact: true })} sub={dto.demoFinancialData ? <DemoFinancialBadge /> : "Acquisition-side"} />
+        <Stat label="Acquisition headroom" value={money(analysis.acquisitionHeadroom, { compact: true })} tone={analysis.acquisitionHeadroom > 0 ? "good" : "bad"} sub={pct(analysis.acquisitionHeadroomPercent, 0, true)} />
+        <Stat label="Acquisition headroom %" value={pct(analysis.acquisitionHeadroomPercent, 0)} sub="Headroom ÷ existing value" />
+      </div>
       <div className="grid grid-cols-6 gap-4 rounded-[3px] border border-line bg-white p-4">
-        <Stat label="GRV" value={money(f.grv, { compact: true })} />
-        <Stat label="Non-land costs" value={money(f.nonLandCosts, { compact: true })} />
-        <Stat label="Residual land value" value={money(f.residualLandValue, { compact: true })} sub="Incl. duty, legal & land holding" />
-        <Stat label="Max acquisition budget" value={money(f.maxAcquisitionBudget, { compact: true })} tone={f.viable ? "brand" : "bad"} sub="Payable to owners" />
-        <Stat label="Profit" value={money(f.profit, { compact: true })} />
-        <Stat label="Margin on cost" value={pct(f.marginOnCost)} sub={`${pct(f.marginOnRevenue)} on revenue`} />
+        <Stat label="GRV" value={money(f.grv, { compact: true })} sub={f.blendedPricePerSqm != null ? `Blended ${money(f.blendedPricePerSqm)}/sqm` : undefined} />
+        <Stat label="Costs before land" value={money(f.nonLandCosts, { compact: true })} />
+        <Stat label="Residual land capacity" value={money(f.residualLandValue, { compact: true })} sub="Incl. duty, legal & land holding" />
+        <Stat label="Opening acquisition budget" value={money(openingBudget, { compact: true })} sub="Sum of opening offers" />
+        <Stat label="Avg premium to market" value={pct(analysis.allocation.averagePremiumToMarket, 0, true)} />
+        <Stat label="Negotiation headroom" value={money(analysis.allocation.totalNegotiationHeadroom, { compact: true })} sub="Max − opening (total)" />
+      </div>
+      <div className="grid grid-cols-4 gap-4 rounded-[3px] border border-line bg-white p-4">
+        <Stat label="Profit at max land price" value={money(f.profit, { compact: true })} />
+        <Stat label="Margin on cost (MOC)" value={pct(f.marginOnCost)} sub="Profit ÷ total development cost" />
+        <Stat label="Margin on revenue" value={pct(f.marginOnRevenue)} />
+        <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Same as acquisition headroom" />
       </div>
       {!f.viable && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[12.5px] text-bad">At these assumptions the project cannot support any land cost at the target margin.</div>}
 
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-4 space-y-4">
-          <Panel title="Revenue">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Revenue basis" tag={tag("revenueMode")}>
+          <Panel title="Revenue method">
+            <div className="grid grid-cols-1 gap-3">
+              <Field label="Revenue method" tag={tag("revenueMode")} hint="Unit mix recommended for residential">
                 <Select
                   value={a.revenueMode}
                   onChange={(v) => updateOverrides({ revenueMode: v })}
                   options={[
-                    { value: "PER_SQM", label: "$/sqm saleable" },
+                    { value: "UNIT_MIX", label: "Unit mix (recommended)" },
+                    { value: "PER_SQM", label: "Saleable area × $/sqm" },
                     { value: "PER_DWELLING", label: "$ per dwelling" },
                   ]}
                   className="w-full"
                 />
               </Field>
-              {a.revenueMode === "PER_SQM" ? moneyField("salePricePerSqm", "Sale price ($/sqm)") : moneyField("avgDwellingPrice", "Avg dwelling price")}
-              {moneyField("otherRevenue", "Other revenue")}
+              {a.revenueMode === "PER_SQM" && moneyField("salePricePerSqm", "Sale price ($/sqm)")}
+              {a.revenueMode === "PER_DWELLING" && moneyField("avgDwellingPrice", "Avg dwelling price")}
+              {a.revenueMode === "UNIT_MIX" && (
+                <p className="text-[12px] text-muted">
+                  GRV from Yield tab unit mix: {money(f.grv, { compact: true })}. Blended {f.blendedPricePerSqm != null ? `${money(f.blendedPricePerSqm)}/sqm` : "—"}. Cross-check: {f.crossCheckLabel} = {money(f.crossCheckGrv, { compact: true })}.
+                </p>
+              )}
+              {moneyField("otherRevenue", "Other project revenue")}
+              {a.revenueMode !== "PER_SQM" && moneyField("salePricePerSqm", "$/sqm cross-check rate")}
             </div>
           </Panel>
-          <Panel title="Costs">
+          <Panel title="Construction & costs" actions={<Badge tone="assumption">User assumptions</Badge>}>
             <div className="grid grid-cols-2 gap-3">
-              {moneyField("constructionCostPerSqm", "Construction ($/sqm GFA)")}
+              {moneyField("constructionCostPerSqm", "Base build ($/sqm GFA)")}
+              {moneyField("basementParkingCost", "Basement parking")}
               {moneyField("demolitionPerLot", "Demolition (per lot)")}
+              {moneyField("siteWorksCost", "Site works")}
+              {moneyField("remediationCost", "Remediation")}
+              {moneyField("liftsCost", "Lifts")}
               {pctField("consultantsPct", "Consultants (% constr.)")}
               {moneyField("statutoryFeesPerDwelling", "Statutory fees / dwelling")}
               {pctField("marketingPct", "Marketing (% GRV)")}
@@ -69,6 +94,7 @@ export function FeasibilityTab() {
               {pctField("landFinancePct", "Land holding (% price)")}
               {moneyField("otherCosts", "Other costs")}
             </div>
+            <p className="mt-2 text-[11px] text-muted">Development finance is separate from land holding / acquisition finance.</p>
           </Panel>
           <Panel title="Profit target">
             <div className="grid grid-cols-2 gap-3">
@@ -77,14 +103,15 @@ export function FeasibilityTab() {
                   value={a.targetBasis}
                   onChange={(v) => updateOverrides({ targetBasis: v })}
                   options={[
-                    { value: "COST", label: "Margin on cost" },
+                    { value: "COST", label: "Margin on cost (MOC)" },
                     { value: "REVENUE", label: "Margin on revenue" },
                   ]}
                   className="w-full"
                 />
               </Field>
-              {a.targetBasis === "COST" ? pctField("targetMarginOnCost", "Target margin on cost") : pctField("targetMarginOnRevenue", "Target margin on revenue")}
+              {a.targetBasis === "COST" ? pctField("targetMarginOnCost", "Target MOC") : pctField("targetMarginOnRevenue", "Target margin on revenue")}
             </div>
+            <p className="mt-2 text-[11px] text-muted">20% MOC means the developer earns $0.20 profit for every $1.00 of total development cost.</p>
           </Panel>
         </div>
 
@@ -101,9 +128,13 @@ export function FeasibilityTab() {
               </thead>
               <tbody>
                 <tr className="border-t border-line">
-                  <td className="px-3 py-1.5 font-semibold">Gross realisation value</td>
+                  <td className="px-3 py-1.5 font-semibold">Gross realisation value (GRV)</td>
                   <td className="px-3 py-1.5 text-muted">
-                    {a.revenueMode === "PER_SQM" ? `${sqm(base.yield.saleableArea)} × ${money(a.salePricePerSqm)}/sqm` : `${base.yield.dwellings} × ${money(a.avgDwellingPrice)}`}
+                    {a.revenueMode === "UNIT_MIX"
+                      ? `Unit mix · ${base.yield.dwellings} dwellings`
+                      : a.revenueMode === "PER_SQM"
+                        ? `${sqm(f.display.saleableArea)} × ${money(f.display.salePricePerSqm)}/sqm`
+                        : `${base.yield.dwellings} × ${money(a.avgDwellingPrice)}`}
                   </td>
                   <td className="px-3 py-1.5 text-right font-semibold">{money(f.grv)}</td>
                   <td className="px-3 py-1.5 text-right">100%</td>
@@ -123,10 +154,22 @@ export function FeasibilityTab() {
                   <td className="px-3 py-1.5 text-right">{pct(f.grv ? f.nonLandCosts / f.grv : 0)}</td>
                 </tr>
                 <tr className="border-t border-line">
-                  <td className="px-3 py-1.5">Land purchase price (max budget P)</td>
-                  <td className="px-3 py-1.5 text-muted">Solved</td>
-                  <td className="px-3 py-1.5 text-right">{money(f.maxAcquisitionBudget)}</td>
+                  <td className="px-3 py-1.5 font-semibold text-brand">Maximum payable to owners (P)</td>
+                  <td className="px-3 py-1.5 text-muted">L ÷ k</td>
+                  <td className="px-3 py-1.5 text-right font-semibold text-brand">{money(f.maxPayableToOwners)}</td>
                   <td />
+                </tr>
+                <tr className="border-t border-line">
+                  <td className="px-3 py-1.5">Combined existing property value</td>
+                  <td className="px-3 py-1.5 text-muted">Acquisition-side</td>
+                  <td className="px-3 py-1.5 text-right">{money(analysis.combinedExistingValue)}</td>
+                  <td />
+                </tr>
+                <tr className="border-t border-line bg-emerald-50/50">
+                  <td className="px-3 py-1.5 font-semibold text-good">Acquisition headroom</td>
+                  <td className="px-3 py-1.5 text-muted">Max payable − existing value</td>
+                  <td className="px-3 py-1.5 text-right font-semibold text-good">{money(analysis.acquisitionHeadroom)}</td>
+                  <td className="px-3 py-1.5 text-right">{pct(analysis.acquisitionHeadroomPercent, 0)}</td>
                 </tr>
                 <tr className="border-t border-line">
                   <td className="px-3 py-1.5">Acquisition costs (duty, legal)</td>
@@ -135,7 +178,7 @@ export function FeasibilityTab() {
                   <td />
                 </tr>
                 <tr className="border-t border-line">
-                  <td className="px-3 py-1.5">Land holding / finance</td>
+                  <td className="px-3 py-1.5">Land holding / acquisition finance</td>
                   <td className="px-3 py-1.5 text-muted">{pct(a.landFinancePct)} × P</td>
                   <td className="px-3 py-1.5 text-right">{money(f.landHoldingCosts)}</td>
                   <td />
@@ -147,9 +190,9 @@ export function FeasibilityTab() {
                   <td />
                 </tr>
                 <tr className="border-t border-line">
-                  <td className="px-3 py-1.5 font-semibold">Profit</td>
+                  <td className="px-3 py-1.5 font-semibold">Profit at maximum land price</td>
                   <td className="px-3 py-1.5 text-muted">
-                    {pct(f.marginOnCost)} on cost · {pct(f.marginOnRevenue)} on revenue
+                    {pct(f.marginOnCost)} MOC · {pct(f.marginOnRevenue)} on revenue
                   </td>
                   <td className="px-3 py-1.5 text-right font-semibold text-good">{money(f.profit)}</td>
                   <td />
@@ -173,7 +216,7 @@ export function FeasibilityTab() {
                 ))}
               </ol>
               <p className="mt-3 text-[11px] text-muted">
-                Acquisition costs and land holding depend on the purchase price, so the residual is solved in closed form: L = P × k, giving P = L ÷ k. Nothing is counted twice.
+                Acquisition costs and land holding depend on the purchase price, so the residual is solved in closed form: L = P × k, giving P = L ÷ k. Acquisition Headroom = P − combined existing property value.
               </p>
             </Panel>
             <Panel title="Purchase price tests" actions={dto.demoFinancialData ? <DemoFinancialBadge /> : null}>
@@ -188,7 +231,7 @@ export function FeasibilityTab() {
                 </thead>
                 <tbody>
                   {[
-                    ["Combined market value", tests.atMarketValue],
+                    ["Combined existing property value", tests.atMarketValue],
                     ["Opening offers", tests.atOpeningOffers],
                     ["Maximum modelled offers", tests.atMaximum],
                   ].map(([label, t]) => {
@@ -215,11 +258,12 @@ export function FeasibilityTab() {
 }
 
 const ADJ_FIELDS: { key: keyof ScenarioAdjustment; label: string; points?: boolean }[] = [
-  { key: "salePricePct", label: "Sale price" },
-  { key: "buildCostPct", label: "Build cost" },
-  { key: "fsrPct", label: "FSR / yield" },
+  { key: "existingValuePct", label: "Existing property value" },
+  { key: "salePricePct", label: "Exit / apartment sale prices" },
+  { key: "buildCostPct", label: "Construction cost" },
+  { key: "fsrPct", label: "Achievable yield (FSR)" },
   { key: "financePctPoints", label: "Finance (pts)", points: true },
-  { key: "targetMarginPctPoints", label: "Target margin (pts)", points: true },
+  { key: "targetMarginPctPoints", label: "Target MOC (pts)", points: true },
 ];
 
 function ScenarioPanel({ onChange }: { onChange: (key: ScenarioKey, adj: ScenarioAdjustment) => void }) {
@@ -254,18 +298,20 @@ function ScenarioPanel({ onChange }: { onChange: (key: ScenarioKey, adj: Scenari
           ))}
           {[
             ["FSR", (k: ScenarioKey) => fsr(analysis.scenarios[k].fsr)],
-            ["GFA", (k: ScenarioKey) => sqm(analysis.scenarios[k].yield.gfa)],
+            ["Achievable GFA", (k: ScenarioKey) => sqm(analysis.scenarios[k].yield.achievableGfa)],
             ["Dwellings", (k: ScenarioKey) => num(analysis.scenarios[k].yield.dwellings)],
             ["GRV", (k: ScenarioKey) => money(analysis.scenarios[k].feasibility.grv, { compact: true })],
-            ["Max land budget", (k: ScenarioKey) => money(analysis.scenarios[k].feasibility.maxAcquisitionBudget, { compact: true })],
+            ["Existing value", (k: ScenarioKey) => money(analysis.scenarios[k].combinedExistingValue, { compact: true })],
+            ["Max payable to owners", (k: ScenarioKey) => money(analysis.scenarios[k].maxPayableToOwners, { compact: true })],
+            ["Acquisition headroom", (k: ScenarioKey) => money(analysis.scenarios[k].acquisitionHeadroom, { compact: true })],
+            ["Headroom %", (k: ScenarioKey) => pct(analysis.scenarios[k].acquisitionHeadroomPercent, 0)],
             ["Profit at budget", (k: ScenarioKey) => money(analysis.scenarios[k].feasibility.profit, { compact: true })],
-            ["Margin on cost", (k: ScenarioKey) => pct(analysis.scenarios[k].feasibility.marginOnCost)],
-            ["vs combined MV", (k: ScenarioKey) => (analysis.combinedMarketValue ? pct(analysis.scenarios[k].feasibility.maxAcquisitionBudget / analysis.combinedMarketValue - 1, 0, true) : "—")],
+            ["MOC", (k: ScenarioKey) => pct(analysis.scenarios[k].feasibility.marginOnCost)],
           ].map(([label, fn], i) => (
             <tr key={label as string} className={cx("border-t border-line", i === 0 && "border-t-2 border-ink/20")}>
               <td className="px-3 py-1.5 font-medium">{label as string}</td>
               {keys.map((k) => (
-                <td key={k} className={cx("px-3 py-1.5 text-right", label === "Max land budget" && "font-semibold text-brand")}>
+                <td key={k} className={cx("px-3 py-1.5 text-right", (label === "Max payable to owners" || label === "Acquisition headroom") && "font-semibold text-brand")}>
                   {(fn as (k: ScenarioKey) => string)(k)}
                 </td>
               ))}
@@ -273,7 +319,7 @@ function ScenarioPanel({ onChange }: { onChange: (key: ScenarioKey, adj: Scenari
           ))}
         </tbody>
       </table>
-      <p className="px-3 py-2 text-[11px] text-muted">Adjustments are relative to the base inputs. Finance and margin adjustments are in percentage points.</p>
+      <p className="px-3 py-2 text-[11px] text-muted">Adjustments are relative to the base inputs. Existing property value, exit prices, construction, yield, finance and target MOC all flow through to max payable and headroom.</p>
     </Panel>
   );
 }

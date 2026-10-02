@@ -19,13 +19,24 @@ export function AcquisitionTab() {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-6 gap-4 rounded-[3px] border border-line bg-white p-4">
-        <Stat label="Acquisition budget" value={money(al.budget, { compact: true })} tone="brand" sub="Base case maximum" />
-        <Stat label="Combined market value" value={money(al.totalMarketValue, { compact: true })} sub={dto.demoFinancialData ? <DemoFinancialBadge /> : "Developer estimates"} />
+        <Stat label="Max payable to owners" value={money(al.budget, { compact: true })} tone="brand" sub="Base case maximum" />
+        <Stat label="Combined existing property value" value={money(al.totalMarketValue, { compact: true })} sub={dto.demoFinancialData ? <DemoFinancialBadge /> : "Developer estimates"} />
         <Stat label="Total opening offers" value={money(al.totalOpening, { compact: true })} sub={al.totalMarketValue ? `${pct(al.totalOpening / al.totalMarketValue - 1, 0, true)} vs value` : undefined} />
         <Stat label="Total maximum offers" value={money(al.totalMaximum, { compact: true })} sub={al.totalMarketValue ? `${pct(al.totalMaximum / al.totalMarketValue - 1, 0, true)} vs value` : undefined} />
-        <Stat label="Unallocated" value={money(al.unallocated, { compact: true })} tone={al.unallocated < -1 ? "bad" : undefined} />
+        <Stat label="Negotiation headroom" value={money(al.totalNegotiationHeadroom, { compact: true })} sub="Max − opening (total)" />
         <Field label="Opening offer % of maximum">
           <NumberField kind="pct" value={a.openingOfferPct} onCommit={(v) => updateOverrides({ openingOfferPct: v ?? undefined })} />
+        </Field>
+      </div>
+      <div className="grid grid-cols-3 gap-4 rounded-[3px] border border-line bg-white p-3">
+        <Field label="Market value weight">
+          <NumberField value={a.marketValueWeight} onCommit={(v) => updateOverrides({ marketValueWeight: v ?? undefined })} />
+        </Field>
+        <Field label="Criticality weight">
+          <NumberField value={a.criticalityWeight} onCommit={(v) => updateOverrides({ criticalityWeight: v ?? undefined })} />
+        </Field>
+        <Field label="Connectivity weight">
+          <NumberField value={a.connectivityWeight} onCommit={(v) => updateOverrides({ connectivityWeight: v ?? undefined })} />
         </Field>
       </div>
       {al.warnings.map((w) => (
@@ -34,15 +45,16 @@ export function AcquisitionTab() {
         </div>
       ))}
 
-      <Panel title="Offer allocation by lot" actions={<span className="text-[11px] text-muted">Default weight = lot value ÷ combined value. Not a valuation.</span>} bodyClassName="p-0">
+      <Panel title="Offer allocation by lot" actions={<span className="text-[11px] text-muted">Weighted by market value + criticality + connectivity. Not a valuation.</span>} bodyClassName="p-0">
         <table className="num w-full text-[12px]">
           <thead className="bg-canvas text-[10.5px] uppercase tracking-wide text-muted">
             <tr>
               <th className="px-3 py-2 text-left">Property</th>
-              <th className="w-[130px] px-2 py-2 text-right">Est. market value</th>
+              <th className="w-[120px] px-2 py-2 text-right">Existing market value</th>
               <th className="px-2 py-2 text-right">Weight</th>
-              <th className="w-[130px] px-2 py-2 text-right">Max allocation</th>
-              <th className="w-[130px] px-2 py-2 text-right">Opening offer</th>
+              <th className="w-[120px] px-2 py-2 text-right">Max modelled offer</th>
+              <th className="w-[120px] px-2 py-2 text-right">Opening offer</th>
+              <th className="w-[110px] px-2 py-2 text-right">Neg. headroom</th>
               <th className="px-2 py-2 text-right">Owner premium</th>
               <th className="px-2 py-2 text-left">Critical?</th>
               <th className="px-2 py-2 text-left">Owner</th>
@@ -62,7 +74,7 @@ export function AcquisitionTab() {
                     </div>
                   </td>
                   <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                    <NumberField kind="money" value={l.marketValue} onCommit={(v) => updateLot(l.id, { marketValue: v })} placeholder="Enter" ariaLabel={`Market value ${l.label}`} />
+                    <NumberField kind="money" value={l.marketValue} onCommit={(v) => updateLot(l.id, { marketValue: v, marketValueSource: "USER_ESTIMATE" })} placeholder="Enter" ariaLabel={`Market value ${l.label}`} />
                   </td>
                   <td className="px-2 py-1.5 text-right">{x ? pct(x.weight) : "—"}</td>
                   <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
@@ -75,9 +87,12 @@ export function AcquisitionTab() {
                   <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                     {l.included && <NumberField kind="money" value={x?.openingOffer} onCommit={(v) => updateLot(l.id, { openingOfferOverride: v })} className={x?.openingOverridden ? "border-violet-400" : ""} ariaLabel={`Opening offer ${l.label}`} />}
                   </td>
+                  <td className="px-2 py-1.5 text-right font-semibold text-brand">{l.included ? money(x?.negotiationHeadroom, { compact: true }) : "—"}</td>
                   <td className="px-2 py-1.5 text-right">
                     <div className={cx("font-semibold", (x?.openingPremium ?? 0) > 0 ? "text-good" : "")}>{pct(x?.openingPremium, 0, true)}</div>
-                    <div className="text-[10.5px] text-muted">max {pct(x?.maximumPremium, 0, true)}</div>
+                    <div className="text-[10.5px] text-muted">
+                      {money(x?.ownerPremiumAmount, { compact: true })} · max {pct(x?.maximumPremium, 0, true)}
+                    </div>
                   </td>
                   <td className="px-2 py-1.5">{!l.included ? <Badge>Excluded</Badge> : c?.status === "CRITICAL" ? <Badge tone="bad">Yes</Badge> : <Badge tone="good">Optional</Badge>}</td>
                   <td className="px-2 py-1.5 text-[11.5px]">{l.owner?.name ?? <span className="text-muted">Not identified</span>}</td>
@@ -89,7 +104,7 @@ export function AcquisitionTab() {
             })}
           </tbody>
         </table>
-        <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Indicative owner premium = (offer ÷ estimated market value) − 1. Type into Max allocation / Opening offer to override (clear to reset). Purple border = manual override.</p>
+        <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Negotiation headroom = maximum modelled offer − opening offer. Owner premium = (opening ÷ existing market value) − 1. Model outputs only — not legal valuations.</p>
       </Panel>
 
       <div className="grid grid-cols-12 gap-4">
