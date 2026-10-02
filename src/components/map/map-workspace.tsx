@@ -56,6 +56,10 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBBox = useRef<BBox | null>(null);
+  const candidatesRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (find) candidatesRef.current?.scrollIntoView({ block: "start" });
+  }, [find]);
 
   const fetchParcels = useCallback(async (bbox: BBox) => {
     abortRef.current?.abort();
@@ -243,7 +247,7 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
             </button>
           </div>
         )}
-        <div className="absolute bottom-8 right-3 z-[1000] rounded-[3px] bg-white/90 px-2 py-1 text-[10.5px] text-muted shadow-sm">Click a parcel · Shift-click to add to assembly</div>
+        <div className="absolute bottom-8 right-14 z-[1000] rounded-[3px] bg-white/90 px-2 py-1 text-[10.5px] text-muted shadow-sm">Click a parcel · Shift-click to add to assembly</div>
       </div>
 
       <aside className="flex w-[400px] shrink-0 flex-col overflow-y-auto border-l border-line bg-white">
@@ -318,7 +322,7 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
         {findError && <div className="mx-4 mb-3 rounded-[3px] border border-red-200 bg-red-50 p-2 text-[12px] text-bad">{findError}</div>}
 
         {find && find.startId === selectedId && (
-          <div className="border-t border-line p-4">
+          <div className="border-t border-line p-4" ref={candidatesRef}>
             <div className="flex items-baseline justify-between">
               <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Assembly candidates</h3>
               <span className="text-[11px] text-muted">{find.neighbours.length} adjoining lots found</span>

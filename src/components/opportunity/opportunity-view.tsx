@@ -229,7 +229,7 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
           {tab === "yield" && <YieldTab />}
           {tab === "feasibility" && <FeasibilityTab />}
           {tab === "acquisition" && <AcquisitionTab />}
-          <p className="mt-6 text-[11px] text-muted">{DISCLAIMER}</p>
+          {tab !== "planning" && <p className="mt-6 text-[11px] text-muted">{DISCLAIMER}</p>}
         </div>
       </div>
     </Ctx.Provider>

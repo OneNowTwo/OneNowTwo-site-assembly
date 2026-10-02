@@ -1,0 +1,38 @@
+# Render Blueprint — web service + managed PostgreSQL.
+# Deploy: Render Dashboard → New → Blueprint → select this repository.
+# You will be prompted for AUTH_EMAIL and AUTH_PASSWORD_HASH (generate with `npm run auth:hash -- 'password'`).
+
+databases:
+  - name: site-assembly-db
+    databaseName: site_assembly
+    user: site_assembly
+    plan: basic-256mb
+    region: singapore # closest Render region to Sydney
+    postgresMajorVersion: "16"
+    ipAllowList: [] # private network access only
+
+services:
+  - type: web
+    name: site-assembly
+    runtime: node
+    plan: starter
+    region: singapore
+    buildCommand: npm ci && npx prisma generate && npm run build
+    # Applies pending migrations and seeds global assumptions + the demo opportunity (idempotent).
+    preDeployCommand: npx prisma migrate deploy && npm run db:seed
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: site-assembly-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: AUTH_EMAIL
+        sync: false
+      - key: AUTH_PASSWORD_HASH
+        sync: false

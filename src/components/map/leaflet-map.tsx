@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import L from "leaflet";
-import { MapContainer, TileLayer, WMSTileLayer, useMap, useMapEvents, ScaleControl } from "react-leaflet";
+import { MapContainer, TileLayer, WMSTileLayer, useMap, useMapEvents, ScaleControl, ZoomControl } from "react-leaflet";
 import type { Feature, Polygon, MultiPolygon } from "geojson";
 import type { BBox, ParcelData } from "@/lib/types";
 import { zoneColour } from "./zone-colours";
@@ -138,7 +138,8 @@ function ParcelLayer(props: Pick<MapProps, "parcels" | "selectedId" | "assemblyI
 
 export default function LeafletMap(props: MapProps) {
   return (
-    <MapContainer center={[props.initial.lat, props.initial.lng]} zoom={props.initial.zoom} maxZoom={20} className="h-full w-full" zoomControl preferCanvas={false} scrollWheelZoom={props.interactive !== false}>
+    <MapContainer center={[props.initial.lat, props.initial.lng]} zoom={props.initial.zoom} maxZoom={20} className="h-full w-full" zoomControl={false} scrollWheelZoom={props.interactive !== false}>
+      <ZoomControl position="bottomright" />
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         maxNativeZoom={19}

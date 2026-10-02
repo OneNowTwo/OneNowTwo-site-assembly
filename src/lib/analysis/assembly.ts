@@ -161,6 +161,7 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunitySc
   if (m.lotCount <= 3) factors.push({ sign: "+", text: `only ${count(m.lotCount, "owner")} to negotiate` });
   else if (m.lotCount >= 5) factors.push({ sign: "-", text: `${count(m.lotCount, "owner")} to negotiate` });
   if (m.strataLots) factors.push({ sign: "-", text: `${count(m.strataLots, "strata scheme")} (collective sale required)` });
+  if (m.strataLots) simplicity = Math.max(0, simplicity - 20 * m.strataLots);
 
   const uplift = clamp01((m.upliftRatio - 0.9) / (1.8 - 0.9)) * 100;
   if (m.upliftRatio >= 1.15)
@@ -239,9 +240,10 @@ export function generateAssemblies(
   const maxResults = opts.maxResults ?? 8;
   const byId = new Map(lots.map((l) => [l.id, l]));
   if (!byId.has(startId)) return [];
+  // Strata schemes need a collective sale, so automatic expansion only uses ordinary lots.
   const eligible = (id: string) => {
     const l = byId.get(id);
-    return !!l && isDevelopableLot(l);
+    return !!l && isDevelopableLot(l) && !l.isStrata;
   };
 
   const all = new Map<string, AssemblyCandidate>();

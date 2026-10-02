@@ -27,7 +27,9 @@ export function num(n: number | null | undefined, dp = 0): string {
 
 export function fsr(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
-  return `${n.toFixed(n >= 10 ? 1 : 2).replace(/\.?0+$/, "") || "0"}:1`;
+  let s = n.toFixed(n >= 10 ? 1 : 2);
+  if (n < 10 && s.endsWith("0")) s = s.slice(0, -1);
+  return `${s}:1`;
 }
 
 export function date(d: string | Date | null | undefined): string {

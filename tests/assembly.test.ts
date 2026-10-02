@@ -84,11 +84,13 @@ describe("assembly generation", () => {
     const grid = [];
     for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) grid.push({ ...lot(`${i}-${j}`, i * 20), geometry: rect(i * 20, j * 35, 20, 35) });
     grid.find((l) => l.id === "6-5")!.zone = "RE1";
+    grid.find((l) => l.id === "7-6")!.isStrata = true;
     const adj = buildAdjacency(grid);
     const t = Date.now();
     const res = generateAssemblies(grid, adj, "6-6", A, { maxSize: 6 });
     expect(Date.now() - t).toBeLessThan(5000);
     expect(res.length).toBeGreaterThan(0);
     expect(res.every((c) => !c.lotIds.includes("6-5"))).toBe(true);
+    expect(res.every((c) => !c.lotIds.includes("7-6"))).toBe(true);
   });
 });
