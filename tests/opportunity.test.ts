@@ -5,7 +5,7 @@ import { analyseCriticalLots } from "@/lib/analysis/critical";
 import { buildAdjacency } from "@/lib/analysis/geometry";
 import { row } from "./helpers";
 
-const A = { ...DEFAULT_ASSUMPTIONS, minViableSiteAreaSqm: 2000 };
+const A = { ...DEFAULT_ASSUMPTIONS, minViableSiteAreaSqm: 2000, revenueMode: "PER_SQM" as const, planningAdjustment: 1 };
 const inputs = parseOpportunityInputs({});
 
 describe("critical lot analysis", () => {
@@ -46,19 +46,19 @@ describe("removing a property changes the economics", () => {
 describe("scenarios", () => {
   it("applies sale price, build cost, FSR, finance and margin adjustments", () => {
     const s = applyScenario(A, DEFAULT_SCENARIOS.DOWNSIDE);
-    expect(s.salePricePerSqm).toBeCloseTo(A.salePricePerSqm * 0.9);
+    expect(s.salePricePerSqm).toBeCloseTo(A.salePricePerSqm * (1 - 0.075));
     expect(s.constructionCostPerSqm).toBeCloseTo(A.constructionCostPerSqm * 1.08);
     expect(s.financePct).toBeCloseTo(A.financePct + 0.015);
     expect(s.targetMarginOnCost).toBeCloseTo(A.targetMarginOnCost + 0.03);
 
-    const r = analyseOpportunity(row(5), A, inputs);
-    expect(r.scenarios.DOWNSIDE.fsr).toBeCloseTo(r.scenarios.BASE.fsr * 0.9);
+    const r = analyseOpportunity(row(5), { ...A, revenueMode: "PER_SQM" }, inputs);
+    expect(r.scenarios.DOWNSIDE.fsr).toBeCloseTo(r.scenarios.BASE.fsr * 0.95);
     expect(r.scenarios.UPSIDE.feasibility.maxAcquisitionBudget).toBeGreaterThan(r.base.feasibility.maxAcquisitionBudget);
     expect(r.scenarios.DOWNSIDE.feasibility.maxAcquisitionBudget).toBeLessThan(r.base.feasibility.maxAcquisitionBudget);
   });
 
   it("allocates the base budget across lots and builds an acquisition sequence", () => {
-    const r = analyseOpportunity(row(5), A, inputs);
+    const r = analyseOpportunity(row(5), { ...A, revenueMode: "PER_SQM" }, inputs);
     expect(r.allocation.totalMaximum).toBeCloseTo(r.base.feasibility.maxAcquisitionBudget);
     expect(r.strategy[0].role).toBe("Critical connector");
     expect(r.strategy.some((s) => s.kind === "milestone")).toBe(true);

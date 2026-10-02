@@ -21,12 +21,15 @@ interface Row {
   profit: number | null;
   marginOnCost: number | null;
   combinedMarketValue: number | null;
+  acquisitionHeadroom: number | null;
+  acquisitionHeadroomPercent: number | null;
+  unitCount: number | null;
   acquisitionProgress: number;
   controlledCount: number;
   updatedAt: string;
 }
 
-type SortKey = "name" | "suburb" | "lotCount" | "totalSiteArea" | "score" | "grv" | "maxLandBudget" | "profit" | "acquisitionProgress" | "status" | "updatedAt";
+type SortKey = "name" | "suburb" | "lotCount" | "totalSiteArea" | "score" | "grv" | "maxLandBudget" | "acquisitionHeadroom" | "profit" | "acquisitionProgress" | "status" | "updatedAt";
 
 const COLUMNS: { key: SortKey; label: string; right?: boolean }[] = [
   { key: "name", label: "Opportunity" },
@@ -35,7 +38,8 @@ const COLUMNS: { key: SortKey; label: string; right?: boolean }[] = [
   { key: "totalSiteArea", label: "Site area", right: true },
   { key: "score", label: "Score", right: true },
   { key: "grv", label: "GRV", right: true },
-  { key: "maxLandBudget", label: "Max land budget", right: true },
+  { key: "maxLandBudget", label: "Max payable", right: true },
+  { key: "acquisitionHeadroom", label: "Headroom", right: true },
   { key: "profit", label: "Potential profit", right: true },
   { key: "acquisitionProgress", label: "Acquisition progress" },
   { key: "status", label: "Status" },
@@ -138,6 +142,10 @@ export function OpportunitiesTable() {
                 </td>
                 <td className="px-3 py-2 text-right">{money(r.grv, { compact: true })}</td>
                 <td className="px-3 py-2 text-right font-semibold text-brand">{money(r.maxLandBudget, { compact: true })}</td>
+                <td className="px-3 py-2 text-right font-semibold text-good">
+                  {money(r.acquisitionHeadroom, { compact: true })}
+                  <div className="text-[11px] text-muted">{pct(r.acquisitionHeadroomPercent, 0)}</div>
+                </td>
                 <td className="px-3 py-2 text-right">
                   {money(r.profit, { compact: true })}
                   <div className="text-[11px] text-muted">{pct(r.marginOnCost)} MoC</div>

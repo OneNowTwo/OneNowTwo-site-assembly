@@ -5,7 +5,7 @@ import { mergeAssumptions, parseOpportunityInputs, DEFAULT_ASSUMPTIONS, type Ass
 import { analyseOpportunity, type OpportunityLot } from "@/lib/analysis/opportunity";
 import { lotDp } from "@/lib/format";
 import type { Prisma } from "@/generated/prisma/client";
-import type { LotDTO, OpportunityDTO } from "@/lib/opportunity-dto";
+import type { ComparableSaleDTO, LotDTO, OpportunityDTO, UnitTypeDTO } from "@/lib/opportunity-dto";
 
 export const opportunityInclude = {
   parcels: {
@@ -17,6 +17,8 @@ export const opportunityInclude = {
     },
   },
   scenarios: true,
+  comparableSales: { orderBy: { createdAt: "asc" } },
+  unitTypes: { orderBy: { sortOrder: "asc" } },
 } satisfies Prisma.OpportunityInclude;
 
 export type OpportunityWithRelations = Prisma.OpportunityGetPayload<{ include: typeof opportunityInclude }>;
@@ -48,7 +50,51 @@ export function toOpportunityLots(opp: OpportunityWithRelations): OpportunityLot
     included: op.included,
     maxAllocationOverride: op.maxAllocationOverride,
     openingOfferOverride: op.openingOfferOverride,
+    strategicWeight: op.strategicWeight,
   }));
+}
+
+function serializeComp(c: OpportunityWithRelations["comparableSales"][number]): ComparableSaleDTO {
+  return {
+    id: c.id,
+    type: c.type,
+    parcelId: c.parcelId,
+    address: c.address,
+    salePrice: c.salePrice,
+    saleDate: c.saleDate?.toISOString() ?? null,
+    propertyType: c.propertyType,
+    bedrooms: c.bedrooms,
+    bathrooms: c.bathrooms,
+    parking: c.parking,
+    landArea: c.landArea,
+    internalArea: c.internalArea,
+    externalArea: c.externalArea,
+    saleableArea: c.saleableArea,
+    pricePerSqm: c.pricePerSqm,
+    newBuildStatus: c.newBuildStatus,
+    unitType: c.unitType,
+    source: c.source,
+    sourceReference: c.sourceReference,
+    included: c.included,
+    notes: c.notes,
+    distanceM: c.distanceM,
+    dataDate: c.dataDate?.toISOString() ?? null,
+  };
+}
+
+function serializeUnit(u: OpportunityWithRelations["unitTypes"][number]): UnitTypeDTO {
+  return {
+    id: u.id,
+    name: u.name,
+    sortOrder: u.sortOrder,
+    count: u.count,
+    avgInternalArea: u.avgInternalArea,
+    avgExternalArea: u.avgExternalArea,
+    avgSaleableArea: u.avgSaleableArea,
+    salePricePerUnit: u.salePricePerUnit,
+    pricePerSqm: u.pricePerSqm,
+    revenue: u.revenue,
+  };
 }
 
 export function serializeOpportunity(opp: OpportunityWithRelations, globalAssumptions: Assumptions): OpportunityDTO {
@@ -65,6 +111,17 @@ export function serializeOpportunity(opp: OpportunityWithRelations, globalAssump
     createdAt: opp.createdAt.toISOString(),
     updatedAt: opp.updatedAt.toISOString(),
     globalAssumptions,
+    acquisitionHeadroom: opp.acquisitionHeadroom,
+    acquisitionHeadroomPercent: opp.acquisitionHeadroomPercent,
+    assemblyUplift: opp.assemblyUplift,
+    theoreticalGfa: opp.theoreticalGfa,
+    achievableGfa: opp.achievableGfa,
+    saleableArea: opp.saleableArea,
+    unitCount: opp.unitCount,
+    totalNonLandCost: opp.totalNonLandCost,
+    targetMoc: opp.targetMoc,
+    comparableSales: opp.comparableSales.map(serializeComp),
+    unitTypes: opp.unitTypes.map(serializeUnit),
     lots: opp.parcels.map((op) => {
       const p = op.parcel;
       const snap = p.snapshots[0];
@@ -97,10 +154,17 @@ export function serializeOpportunity(opp: OpportunityWithRelations, globalAssump
         planningSources: snapData.sources ?? {},
         included: op.included,
         marketValue: op.marketValue,
+        marketValueSource: op.marketValueSource,
+        marketValueConfidence: op.marketValueConfidence,
         landValuePerSqm: op.landValuePerSqm,
         comparableValue: op.comparableValue,
         maxAllocationOverride: op.maxAllocationOverride,
         openingOfferOverride: op.openingOfferOverride,
+        strategicWeight: op.strategicWeight,
+        negotiationHeadroom: op.negotiationHeadroom,
+        ownerPremiumAmount: op.ownerPremiumAmount,
+        ownerPremiumPercent: op.ownerPremiumPercent,
+        criticalityScore: op.criticalityScore,
         acquisitionStage: op.acquisitionStage,
         lastContactAt: iso(op.lastContactAt),
         nextAction: op.nextAction,
@@ -133,6 +197,18 @@ export async function recomputeOpportunity(id: string) {
   const opp = await loadOpportunity(id);
   if (!opp) return null;
   const inputs = parseOpportunityInputs(opp.inputs);
+  // Prefer persisted unitTypes when inputs.unitMix is empty
+  if (!inputs.unitMix.length && opp.unitTypes.length) {
+    inputs.unitMix = opp.unitTypes.map((u) => ({
+      id: u.id,
+      name: u.name,
+      count: u.count,
+      avgInternalArea: u.avgInternalArea,
+      avgExternalArea: u.avgExternalArea,
+      avgSaleableArea: u.avgSaleableArea,
+      salePricePerUnit: u.salePricePerUnit,
+    }));
+  }
   const a = mergeAssumptions(await getGlobalAssumptions(), inputs.overrides);
   const analysis = analyseOpportunity(toOpportunityLots(opp), a, inputs);
   const f = analysis.base.feasibility;
@@ -151,7 +227,16 @@ export async function recomputeOpportunity(id: string) {
         residualLandValue: f.residualLandValue,
         profit: f.profit,
         marginOnCost: f.marginOnCost,
-        combinedMarketValue: analysis.combinedMarketValue,
+        combinedMarketValue: analysis.combinedExistingValue,
+        acquisitionHeadroom: analysis.acquisitionHeadroom,
+        acquisitionHeadroomPercent: analysis.acquisitionHeadroomPercent,
+        assemblyUplift: analysis.assemblyUplift,
+        theoreticalGfa: analysis.base.yield.theoreticalGfa,
+        achievableGfa: analysis.base.yield.achievableGfa,
+        saleableArea: analysis.base.yield.saleableArea,
+        unitCount: analysis.base.yield.dwellings,
+        totalNonLandCost: f.nonLandCosts,
+        targetMoc: a.targetMarginOnCost,
       },
     }),
     ...opp.parcels.map((op) => {
@@ -162,7 +247,11 @@ export async function recomputeOpportunity(id: string) {
         data: {
           maximumOffer: al?.maximumOffer ?? null,
           openingOffer: al?.openingOffer ?? null,
+          negotiationHeadroom: al?.negotiationHeadroom ?? null,
+          ownerPremiumAmount: al?.ownerPremiumAmount ?? null,
+          ownerPremiumPercent: al?.ownerPremiumPercent ?? null,
           ownerPremium: al?.openingPremium ?? null,
+          criticalityScore: c ? (c.status === "CRITICAL" ? 1 : 0.2) + (c.connector ? 0.3 : 0) : null,
           critical: c ? c.status === "CRITICAL" : null,
         },
       });
@@ -171,11 +260,16 @@ export async function recomputeOpportunity(id: string) {
       const s = analysis.scenarios[k];
       const results = {
         grv: s.feasibility.grv,
-        gfa: s.yield.gfa,
+        gfa: s.yield.achievableGfa,
+        theoreticalGfa: s.yield.theoreticalGfa,
         dwellings: s.yield.dwellings,
         nonLandCosts: s.feasibility.nonLandCosts,
         residualLandValue: s.feasibility.residualLandValue,
         maxAcquisitionBudget: s.feasibility.maxAcquisitionBudget,
+        maxPayableToOwners: s.maxPayableToOwners,
+        combinedExistingValue: s.combinedExistingValue,
+        acquisitionHeadroom: s.acquisitionHeadroom,
+        acquisitionHeadroomPercent: s.acquisitionHeadroomPercent,
         profit: s.feasibility.profit,
         marginOnCost: s.feasibility.marginOnCost,
         marginOnRevenue: s.feasibility.marginOnRevenue,
@@ -188,6 +282,31 @@ export async function recomputeOpportunity(id: string) {
     }),
   ]);
   return analysis;
+}
+
+/** Persist unit mix rows from opportunity inputs into UnitType table. */
+export async function syncUnitTypes(opportunityId: string, rows: { name: string; count: number; avgInternalArea: number; avgExternalArea: number; avgSaleableArea: number; salePricePerUnit: number }[]) {
+  await prisma.$transaction([
+    prisma.unitType.deleteMany({ where: { opportunityId } }),
+    ...rows.map((r, i) => {
+      const saleable = r.avgSaleableArea || r.avgInternalArea + r.avgExternalArea;
+      const revenue = r.count * r.salePricePerUnit;
+      return prisma.unitType.create({
+        data: {
+          opportunityId,
+          name: r.name,
+          sortOrder: i,
+          count: r.count,
+          avgInternalArea: r.avgInternalArea,
+          avgExternalArea: r.avgExternalArea,
+          avgSaleableArea: saleable,
+          salePricePerUnit: r.salePricePerUnit,
+          pricePerSqm: saleable > 0 ? r.salePricePerUnit / saleable : null,
+          revenue,
+        },
+      });
+    }),
+  ]);
 }
 
 /** Store (or refresh) a parcel from NSW data plus a planning snapshot. Returns the Parcel id. */
@@ -237,26 +356,29 @@ export async function upsertParcel(tx: Prisma.TransactionClient, p: ParcelData):
 export async function createOpportunity(input: { name: string; parcels: ParcelData[]; userId?: string | null; demoFinancialData?: boolean; notes?: string; inputs?: unknown }) {
   const suburbs = input.parcels.map((p) => p.suburb).filter(Boolean) as string[];
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
-  const opp = await prisma.$transaction(async (tx) => {
-    const created = await tx.opportunity.create({
-      data: {
-        name: input.name,
-        suburb,
-        lga: input.parcels.find((p) => p.planning?.lga)?.planning?.lga ?? null,
-        status: "ANALYSING",
-        demoFinancialData: input.demoFinancialData ?? false,
-        notes: input.notes,
-        inputs: (input.inputs ?? {}) as Prisma.InputJsonValue,
-        createdById: input.userId ?? null,
-      },
-    });
-    let i = 0;
-    for (const p of input.parcels) {
-      const parcelId = await upsertParcel(tx, p);
-      await tx.opportunityParcel.create({ data: { opportunityId: created.id, parcelId, sortOrder: i++ } });
-    }
-    return created;
-  }, { timeout: 20000 });
+  const opp = await prisma.$transaction(
+    async (tx) => {
+      const created = await tx.opportunity.create({
+        data: {
+          name: input.name,
+          suburb,
+          lga: input.parcels.find((p) => p.planning?.lga)?.planning?.lga ?? null,
+          status: "ANALYSING",
+          demoFinancialData: input.demoFinancialData ?? false,
+          notes: input.notes,
+          inputs: (input.inputs ?? {}) as Prisma.InputJsonValue,
+          createdById: input.userId ?? null,
+        },
+      });
+      let i = 0;
+      for (const p of input.parcels) {
+        const parcelId = await upsertParcel(tx, p);
+        await tx.opportunityParcel.create({ data: { opportunityId: created.id, parcelId, sortOrder: i++ } });
+      }
+      return created;
+    },
+    { timeout: 20000 },
+  );
   await recomputeOpportunity(opp.id);
   return opp;
 }

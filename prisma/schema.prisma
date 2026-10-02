@@ -48,6 +48,20 @@ enum ScenarioType {
   DOWNSIDE
 }
 
+/// Acquisition comps = existing houses being bought; Exit comps = new product sales.
+enum ComparableSaleType {
+  ACQUISITION
+  EXIT
+}
+
+enum MarketValueSource {
+  USER_ESTIMATE
+  COMPARABLE_DERIVED
+  LIVE_PROVIDER
+  SYSTEM_ESTIMATE
+  DEMO
+}
+
 model User {
   id            String        @id @default(cuid())
   email         String        @unique
@@ -73,20 +87,35 @@ model Opportunity {
   scoreFactors      Json?
   totalSiteArea     Float?
   grv               Float?
+  /// Maximum payable to owners (purchase price P) — primary acquisition metric.
   maxLandBudget     Float?
   residualLandValue Float?
   profit            Float?
   marginOnCost      Float?
   combinedMarketValue Float?
+  /// Max payable − combined existing property value.
+  acquisitionHeadroom Float?
+  acquisitionHeadroomPercent Float?
+  /// Same as acquisition headroom — value created by assembling before negotiation.
+  assemblyUplift    Float?
+  theoreticalGfa    Float?
+  achievableGfa     Float?
+  saleableArea      Float?
+  unitCount         Int?
+  totalNonLandCost  Float?
+  targetMoc         Float?
   createdById       String?
   createdBy         User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   parcels           OpportunityParcel[]
   scenarios         FeasibilityScenario[]
+  comparableSales   ComparableSale[]
+  unitTypes         UnitType[]
 
   @@index([status])
   @@index([updatedAt])
+  @@index([acquisitionHeadroom])
 }
 
 model Parcel {
@@ -119,6 +148,7 @@ model Parcel {
   updatedAt          DateTime            @updatedAt
   opportunities      OpportunityParcel[]
   snapshots          PlanningSnapshot[]
+  comparableSales    ComparableSale[]
 }
 
 model OpportunityParcel {
@@ -130,15 +160,24 @@ model OpportunityParcel {
   sortOrder             Int                   @default(0)
   /// When false the lot is excluded from the assembly ("what if we can't get it").
   included              Boolean               @default(true)
+  /// Estimated current market value of the existing property (acquisition-side).
   marketValue           Float?
+  marketValueSource     MarketValueSource?
+  marketValueConfidence String?
   landValuePerSqm       Float?
   comparableValue       Float?
   maxAllocationOverride Float?
   openingOfferOverride  Float?
+  strategicWeight       Float?
   // Computed snapshot of the latest calculation (refreshed on every save).
   maximumOffer          Float?
   openingOffer          Float?
+  negotiationHeadroom   Float?
+  ownerPremiumAmount    Float?
+  ownerPremiumPercent   Float?
+  /// Legacy alias of opening premium ratio (kept for older clients).
   ownerPremium          Float?
+  criticalityScore      Float?
   critical              Boolean?
   acquisitionStage      AcquisitionStage      @default(NOT_RESEARCHED)
   lastContactAt         DateTime?
@@ -214,4 +253,59 @@ model PlanningSnapshot {
   retrievedAt DateTime   @default(now())
 
   @@index([parcelId, retrievedAt])
+}
+
+/// Manual or provider-fed comparable sales. V1 is manual entry only — never scraped.
+model ComparableSale {
+  id              String             @id @default(cuid())
+  opportunityId   String
+  opportunity     Opportunity        @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  parcelId        String?
+  parcel          Parcel?            @relation(fields: [parcelId], references: [id], onDelete: SetNull)
+  type            ComparableSaleType
+  address         String
+  salePrice       Float
+  saleDate        DateTime?
+  propertyType    String?
+  bedrooms        Float?
+  bathrooms       Float?
+  parking         Float?
+  landArea        Float?
+  internalArea    Float?
+  externalArea    Float?
+  saleableArea    Float?
+  pricePerSqm     Float?
+  /// For EXIT comps: NEW / RECENTLY_COMPLETED / ESTABLISHED
+  newBuildStatus  String?
+  unitType        String?
+  source          String             @default("MANUAL")
+  sourceReference String?
+  included        Boolean            @default(true)
+  notes           String?
+  distanceM       Float?
+  dataDate        DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([opportunityId, type])
+}
+
+/// Residential unit mix row for UNIT_MIX revenue mode.
+model UnitType {
+  id               String      @id @default(cuid())
+  opportunityId    String
+  opportunity      Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  name             String
+  sortOrder        Int         @default(0)
+  count            Int         @default(0)
+  avgInternalArea  Float       @default(0)
+  avgExternalArea  Float       @default(0)
+  avgSaleableArea  Float       @default(0)
+  salePricePerUnit Float       @default(0)
+  pricePerSqm      Float?
+  revenue          Float?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([opportunityId])
 }

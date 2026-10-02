@@ -1,10 +1,13 @@
 import type { Assumptions } from "./assumptions";
+import type { UnitMixRow } from "./unit-mix";
+import { computeUnitMix } from "./unit-mix";
 
 export interface FeasibilityInputs {
   gfa: number;
   saleableArea: number;
   dwellings: number;
   lotCount: number;
+  unitMix?: UnitMixRow[];
   a: Pick<
     Assumptions,
     | "targetBasis"
@@ -15,7 +18,16 @@ export interface FeasibilityInputs {
     | "avgDwellingPrice"
     | "otherRevenue"
     | "constructionCostPerSqm"
+    | "basementParkingCost"
     | "demolitionPerLot"
+    | "siteWorksCost"
+    | "remediationCost"
+    | "difficultExcavationCost"
+    | "premiumFacadeCost"
+    | "liftsCost"
+    | "publicDomainWorksCost"
+    | "landscapingCost"
+    | "otherFixedConstructionCost"
     | "consultantsPct"
     | "statutoryFeesPerDwelling"
     | "marketingPct"
@@ -38,6 +50,11 @@ export interface CostLine {
 export interface FeasibilityResult {
   grv: number;
   salesRevenue: number;
+  /** Alternative GRV if the other revenue method were used (cross-check). */
+  crossCheckGrv: number;
+  crossCheckLabel: string;
+  blendedPricePerSqm: number | null;
+  unitMixTotals: ReturnType<typeof computeUnitMix> | null;
   constructionCost: number;
   costLines: CostLine[];
   /** C — all development costs that do not depend on the land price. */
@@ -46,16 +63,24 @@ export interface FeasibilityResult {
   landCostMultiplier: number;
   /** Total cost the target margin allows: GRV ÷ (1 + M) on cost, or GRV × (1 − m) on revenue. */
   allowableTotalCost: number;
-  /** L — residual land value: total land cost the project can carry (price + acquisition costs + land holding). */
+  /** L — residual land capacity: total land cost the project can carry (price + acquisition costs + land holding). */
   residualLandValue: number;
-  /** P — maximum purchase price payable to owners for the whole assembly: L ÷ k. */
+  /** P — Maximum Payable to Owners for the whole assembly: L ÷ k. */
   maxAcquisitionBudget: number;
+  /** Alias used in product copy. */
+  maxPayableToOwners: number;
   acquisitionCosts: number;
   landHoldingCosts: number;
   totalCost: number;
   profit: number;
   marginOnCost: number;
   marginOnRevenue: number;
+  /** Display-consistent figures used by "How this was calculated" (same precision as UI). */
+  display: {
+    saleableArea: number;
+    salePricePerSqm: number;
+    gfa: number;
+  };
   viable: boolean;
   steps: { label: string; formula: string; value: number; kind: "money" | "pct" | "ratio" }[];
 }
@@ -69,11 +94,68 @@ export interface PriceTest {
   marginOnRevenue: number;
 }
 
+/** Round money to the nearest dollar for display reconciliation. */
+export function roundMoney(n: number): number {
+  return Math.round(n);
+}
+
+/** Round area to 1 decimal for display so GRV = area × rate reconciles. */
+export function roundArea(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+function fixedConstruction(a: FeasibilityInputs["a"]): { amount: number; lines: CostLine[] } {
+  const items: CostLine[] = [
+    { key: "basement", label: "Basement parking", amount: a.basementParkingCost, basis: "Fixed — user assumption" },
+    { key: "siteWorks", label: "Site works", amount: a.siteWorksCost, basis: "Fixed — user assumption" },
+    { key: "remediation", label: "Remediation", amount: a.remediationCost, basis: "Fixed — user assumption" },
+    { key: "excavation", label: "Difficult excavation", amount: a.difficultExcavationCost, basis: "Fixed — user assumption" },
+    { key: "facade", label: "Premium façade", amount: a.premiumFacadeCost, basis: "Fixed — user assumption" },
+    { key: "lifts", label: "Lifts", amount: a.liftsCost, basis: "Fixed — user assumption" },
+    { key: "publicDomain", label: "Public domain works", amount: a.publicDomainWorksCost, basis: "Fixed — user assumption" },
+    { key: "landscaping", label: "Landscaping", amount: a.landscapingCost, basis: "Fixed — user assumption" },
+    { key: "otherFixedBuild", label: "Other fixed construction", amount: a.otherFixedConstructionCost, basis: "Fixed — user assumption" },
+  ];
+  const lines = items.filter((x) => x.amount > 0);
+  return { amount: lines.reduce((s, x) => s + x.amount, 0), lines };
+}
+
 function costBreakdown(i: FeasibilityInputs) {
   const a = i.a;
-  const salesRevenue = a.revenueMode === "PER_DWELLING" ? i.dwellings * a.avgDwellingPrice : i.saleableArea * a.salePricePerSqm;
+  const displaySaleable = roundArea(i.saleableArea);
+  const displayGfa = roundArea(i.gfa);
+  const displayRate = roundMoney(a.salePricePerSqm);
+
+  let salesRevenue: number;
+  let unitMixTotals: ReturnType<typeof computeUnitMix> | null = null;
+  let revenueFormula: string;
+  let crossCheckGrv: number;
+  let crossCheckLabel: string;
+
+  if (a.revenueMode === "UNIT_MIX" && i.unitMix && i.unitMix.length) {
+    unitMixTotals = computeUnitMix(i.unitMix);
+    salesRevenue = unitMixTotals.totalRevenue;
+    revenueFormula = `Unit mix (${unitMixTotals.totalUnits} dwellings)`;
+    const perSqm = displaySaleable * displayRate;
+    crossCheckGrv = perSqm + a.otherRevenue;
+    crossCheckLabel = `${displaySaleable.toLocaleString("en-AU")} sqm × $${displayRate.toLocaleString("en-AU")}/sqm + other`;
+  } else if (a.revenueMode === "PER_DWELLING") {
+    salesRevenue = i.dwellings * a.avgDwellingPrice;
+    revenueFormula = `${i.dwellings} dwellings × $${a.avgDwellingPrice.toLocaleString("en-AU")}`;
+    crossCheckGrv = displaySaleable * displayRate + a.otherRevenue;
+    crossCheckLabel = `${displaySaleable.toLocaleString("en-AU")} sqm × $${displayRate.toLocaleString("en-AU")}/sqm + other`;
+  } else {
+    // PER_SQM — use displayed precision so the table reconciles exactly
+    salesRevenue = displaySaleable * displayRate;
+    revenueFormula = `${displaySaleable.toLocaleString("en-AU")} sqm × $${displayRate.toLocaleString("en-AU")}/sqm`;
+    crossCheckGrv = i.dwellings * a.avgDwellingPrice + a.otherRevenue;
+    crossCheckLabel = `${i.dwellings} dwellings × $${a.avgDwellingPrice.toLocaleString("en-AU")} + other`;
+  }
+
   const grv = salesRevenue + a.otherRevenue;
-  const construction = i.gfa * a.constructionCostPerSqm;
+  const coreConstruction = displayGfa * a.constructionCostPerSqm;
+  const fixed = fixedConstruction(a);
+  const construction = coreConstruction + fixed.amount;
   const demolition = i.lotCount * a.demolitionPerLot;
   const consultants = construction * a.consultantsPct;
   const statutory = i.dwellings * a.statutoryFeesPerDwelling;
@@ -83,7 +165,13 @@ function costBreakdown(i: FeasibilityInputs) {
   const preFinance = construction + demolition + consultants + statutory + contingency + marketing + selling + a.otherCosts;
   const finance = preFinance * a.financePct;
   const lines: CostLine[] = [
-    { key: "construction", label: "Construction", amount: construction, basis: `GFA × $${a.constructionCostPerSqm.toLocaleString("en-AU")}/sqm` },
+    {
+      key: "construction",
+      label: "Core construction (GFA × rate)",
+      amount: coreConstruction,
+      basis: `${displayGfa.toLocaleString("en-AU")} sqm × $${a.constructionCostPerSqm.toLocaleString("en-AU")}/sqm — USER ASSUMPTION`,
+    },
+    ...fixed.lines,
     { key: "demolition", label: "Demolition & site preparation", amount: demolition, basis: `${i.lotCount} lots × $${a.demolitionPerLot.toLocaleString("en-AU")}` },
     { key: "consultants", label: "Consultants & design", amount: consultants, basis: `${(a.consultantsPct * 100).toFixed(1)}% of construction` },
     { key: "statutory", label: "Authority & statutory fees", amount: statutory, basis: `${i.dwellings} dwellings × $${a.statutoryFeesPerDwelling.toLocaleString("en-AU")}` },
@@ -91,22 +179,43 @@ function costBreakdown(i: FeasibilityInputs) {
     { key: "marketing", label: "Marketing", amount: marketing, basis: `${(a.marketingPct * 100).toFixed(1)}% of GRV` },
     { key: "selling", label: "Selling costs", amount: selling, basis: `${(a.sellingCostPct * 100).toFixed(1)}% of GRV` },
     { key: "other", label: "Other costs", amount: a.otherCosts, basis: "Fixed allowance" },
-    { key: "finance", label: "Development finance", amount: finance, basis: `${(a.financePct * 100).toFixed(1)}% of the above` },
+    { key: "finance", label: "Development finance", amount: finance, basis: `${(a.financePct * 100).toFixed(1)}% of the above (not land holding)` },
   ];
-  return { salesRevenue, grv, construction, lines, nonLandCosts: preFinance + finance };
+  const blendedPricePerSqm =
+    a.revenueMode === "UNIT_MIX" && unitMixTotals?.blendedPricePerSqm != null
+      ? unitMixTotals.blendedPricePerSqm
+      : displaySaleable > 0
+        ? salesRevenue / displaySaleable
+        : null;
+
+  return {
+    salesRevenue,
+    grv,
+    construction,
+    lines,
+    nonLandCosts: preFinance + finance,
+    unitMixTotals,
+    revenueFormula,
+    crossCheckGrv,
+    crossCheckLabel,
+    blendedPricePerSqm,
+    display: { saleableArea: displaySaleable, salePricePerSqm: displayRate, gfa: displayGfa },
+  };
 }
 
 /**
  * Residual land value, solved in closed form so land-dependent costs are not double counted.
  *
- * Total land cost L = P × k, where P is the purchase price and k = 1 + acquisition cost % + land holding %.
+ * Total land cost L = P × k, where P is the purchase price (Maximum Payable to Owners)
+ * and k = 1 + acquisition cost % + land holding %.
  *  - Margin on cost:    GRV = (C + L)(1 + M)   ⇒  L = GRV ÷ (1 + M) − C
  *  - Margin on revenue: GRV − (C + L) = m·GRV  ⇒  L = GRV(1 − m) − C
- *  - Maximum acquisition budget P = L ÷ k
+ *  - Maximum Payable to Owners P = L ÷ k
  */
 export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
   const a = i.a;
-  const { salesRevenue, grv, construction, lines, nonLandCosts } = costBreakdown(i);
+  const { salesRevenue, grv, construction, lines, nonLandCosts, unitMixTotals, revenueFormula, crossCheckGrv, crossCheckLabel, blendedPricePerSqm, display } =
+    costBreakdown(i);
   const k = 1 + a.acquisitionCostPct + a.landFinancePct;
   const allowableTotalCost = a.targetBasis === "REVENUE" ? grv * (1 - a.targetMarginOnRevenue) : grv / (1 + a.targetMarginOnCost);
   const residualLandValue = allowableTotalCost - nonLandCosts;
@@ -120,24 +229,33 @@ export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
   const target = a.targetBasis === "REVENUE" ? a.targetMarginOnRevenue : a.targetMarginOnCost;
 
   const steps: FeasibilityResult["steps"] = [
-    { label: "Gross realisation value (GRV)", formula: a.revenueMode === "PER_DWELLING" ? "Dwellings × average price + other revenue" : "Saleable area × $/sqm + other revenue", value: grv, kind: "money" },
-    { label: "Non-land development costs (C)", formula: "Sum of construction, fees, contingency, marketing, selling, finance", value: nonLandCosts, kind: "money" },
+    { label: "Gross realisation value (GRV)", formula: revenueFormula + (a.otherRevenue ? " + other revenue" : ""), value: grv, kind: "money" },
+    { label: "Non-land development costs (C)", formula: "Sum of construction, fees, contingency, marketing, selling, development finance", value: nonLandCosts, kind: "money" },
     {
       label: "Allowable total cost",
       formula: a.targetBasis === "REVENUE" ? `GRV × (1 − ${(target * 100).toFixed(1)}%)` : `GRV ÷ (1 + ${(target * 100).toFixed(1)}%)`,
       value: allowableTotalCost,
       kind: "money",
     },
-    { label: "Residual land value (L)", formula: "Allowable total cost − C", value: residualLandValue, kind: "money" },
+    { label: "Residual land capacity (L)", formula: "Allowable total cost − C", value: residualLandValue, kind: "money" },
     { label: "Land cost multiplier (k)", formula: `1 + ${(a.acquisitionCostPct * 100).toFixed(1)}% acquisition + ${(a.landFinancePct * 100).toFixed(1)}% land holding`, value: k, kind: "ratio" },
-    { label: "Maximum acquisition budget (P)", formula: "L ÷ k — total payable to all owners", value: maxAcquisitionBudget, kind: "money" },
-    { label: "Profit at maximum budget", formula: "GRV − C − L", value: profit, kind: "money" },
-    { label: a.targetBasis === "REVENUE" ? "Margin on revenue" : "Margin on cost", formula: a.targetBasis === "REVENUE" ? "Profit ÷ GRV" : "Profit ÷ (C + L)", value: a.targetBasis === "REVENUE" ? marginOnRevenue : marginOnCost, kind: "pct" },
+    { label: "Maximum payable to owners (P)", formula: "L ÷ k — total payable to all owners", value: maxAcquisitionBudget, kind: "money" },
+    { label: "Profit at maximum land price", formula: "GRV − C − L", value: profit, kind: "money" },
+    {
+      label: a.targetBasis === "REVENUE" ? "Margin on revenue" : "Margin on cost (MOC)",
+      formula: a.targetBasis === "REVENUE" ? "Profit ÷ GRV" : "Profit ÷ (C + L)",
+      value: a.targetBasis === "REVENUE" ? marginOnRevenue : marginOnCost,
+      kind: "pct",
+    },
   ];
 
   return {
     grv,
     salesRevenue,
+    crossCheckGrv,
+    crossCheckLabel,
+    blendedPricePerSqm,
+    unitMixTotals,
     constructionCost: construction,
     costLines: lines,
     nonLandCosts,
@@ -145,14 +263,30 @@ export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
     allowableTotalCost,
     residualLandValue,
     maxAcquisitionBudget,
+    maxPayableToOwners: maxAcquisitionBudget,
     acquisitionCosts,
     landHoldingCosts,
     totalCost,
     profit,
     marginOnCost,
     marginOnRevenue,
+    display,
     viable: maxAcquisitionBudget > 0,
     steps,
+  };
+}
+
+/** Acquisition Headroom = Maximum Payable to Owners − Combined Existing Property Value. */
+export function acquisitionHeadroom(maxPayableToOwners: number, combinedExistingValue: number) {
+  const headroom = maxPayableToOwners - combinedExistingValue;
+  const headroomPercent = combinedExistingValue > 0 ? headroom / combinedExistingValue : null;
+  return {
+    maxPayableToOwners,
+    combinedExistingValue,
+    acquisitionHeadroom: headroom,
+    acquisitionHeadroomPercent: headroomPercent,
+    /** Alias — financial value created by assembling before negotiation. */
+    assemblyUplift: headroom,
   };
 }
 

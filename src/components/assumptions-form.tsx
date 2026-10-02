@@ -10,6 +10,7 @@ const ENUM_OPTIONS: Partial<Record<keyof Assumptions, { value: string; label: st
     { value: "REVENUE", label: "Margin on revenue" },
   ],
   revenueMode: [
+    { value: "UNIT_MIX", label: "Unit mix (recommended)" },
     { value: "PER_SQM", label: "$/sqm saleable" },
     { value: "PER_DWELLING", label: "$ per dwelling" },
   ],

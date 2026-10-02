@@ -5,6 +5,8 @@ import { DEFAULT_ASSUMPTIONS, type Assumptions } from "@/lib/analysis/assumption
 
 const zeroCosts: Assumptions = {
   ...DEFAULT_ASSUMPTIONS,
+  revenueMode: "PER_SQM",
+  planningAdjustment: 1,
   demolitionPerLot: 0,
   consultantsPct: 0,
   statutoryFeesPerDwelling: 0,
@@ -15,12 +17,22 @@ const zeroCosts: Assumptions = {
   landFinancePct: 0,
   acquisitionCostPct: 0,
   otherCosts: 0,
+  basementParkingCost: 0,
+  siteWorksCost: 0,
+  remediationCost: 0,
+  difficultExcavationCost: 0,
+  premiumFacadeCost: 0,
+  liftsCost: 0,
+  publicDomainWorksCost: 0,
+  landscapingCost: 0,
+  otherFixedConstructionCost: 0,
 };
 
 describe("yield", () => {
   it("matches the brief example: 3,000 sqm × 2.0, 82%, 92 sqm → ~53 dwellings", () => {
-    const y = computeYield({ siteAreaSqm: 3000, fsr: 2, efficiency: 0.82, siteCoverage: 0.5, floorToFloorM: 3.1, avgDwellingSizeSqm: 92, carSpacesPerDwelling: 1, heightLimitM: 20 });
+    const y = computeYield({ siteAreaSqm: 3000, fsr: 2, efficiency: 0.82, siteCoverage: 0.5, floorToFloorM: 3.1, avgDwellingSizeSqm: 92, carSpacesPerDwelling: 1, heightLimitM: 20, planningAdjustment: 1 });
     expect(y.gfa).toBe(6000);
+    expect(y.theoreticalGfa).toBe(6000);
     expect(y.saleableArea).toBeCloseTo(4920);
     expect(y.dwellings).toBe(53);
     expect(y.storeys).toBe(4);
@@ -72,7 +84,7 @@ describe("residual land value", () => {
   });
 
   it("builds non-land costs from every line item", () => {
-    const a = { ...DEFAULT_ASSUMPTIONS, salePricePerSqm: 15_000, constructionCostPerSqm: 4_500 };
+    const a = { ...DEFAULT_ASSUMPTIONS, revenueMode: "PER_SQM" as const, salePricePerSqm: 15_000, constructionCostPerSqm: 4_500, planningAdjustment: 1 };
     const f = computeFeasibility({ gfa: 4_000, saleableArea: 3_200, dwellings: 37, lotCount: 5, a });
     const construction = 4_000 * 4_500;
     const demolition = 5 * a.demolitionPerLot;
@@ -80,7 +92,7 @@ describe("residual land value", () => {
     const statutory = 37 * a.statutoryFeesPerDwelling;
     const contingency = (construction + demolition + consultants) * a.contingencyPct;
     const grv = 3_200 * 15_000;
-    const pre = construction + demolition + consultants + statutory + contingency + grv * (a.marketingPct + a.sellingCostPct);
+    const pre = construction + demolition + consultants + statutory + contingency + grv * (a.marketingPct + a.sellingCostPct) + a.otherCosts;
     expect(f.grv).toBe(grv);
     expect(f.nonLandCosts).toBeCloseTo(pre * (1 + a.financePct));
   });

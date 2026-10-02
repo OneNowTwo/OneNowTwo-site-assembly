@@ -15,9 +15,19 @@ export function pct(n: number | null | undefined, dp = 1, signed = false): strin
   return signed && n > 0 ? `+${s}` : n < 0 ? s.replace("-", "−") : s;
 }
 
-export function sqm(n: number | null | undefined): string {
+export function sqm(n: number | null | undefined, opts: { dp?: number } = {}): string {
   if (n == null || !Number.isFinite(n)) return "—";
-  return `${Math.round(n).toLocaleString("en-AU")} sqm`;
+  const dp = opts.dp;
+  if (dp != null) {
+    const v = Number(n.toFixed(dp));
+    return `${v.toLocaleString("en-AU", { minimumFractionDigits: dp, maximumFractionDigits: dp })} sqm`;
+  }
+  // Prefer 1 dp when the value is not near an integer, so GRV = area × rate reconciles with the display.
+  const nearest = Math.round(n);
+  if (Math.abs(n - nearest) > 0.05) {
+    return `${(Math.round(n * 10) / 10).toLocaleString("en-AU", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} sqm`;
+  }
+  return `${nearest.toLocaleString("en-AU")} sqm`;
 }
 
 export function num(n: number | null | undefined, dp = 0): string {

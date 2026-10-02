@@ -10,14 +10,16 @@ import { computeAssemblyMetrics, scoreAssembly } from "@/lib/analysis/assembly";
 import { buildAdjacency } from "@/lib/analysis/geometry";
 import type { Assumptions } from "@/lib/analysis/assumptions";
 import { parcelLabel, parcelToAnalysisLot } from "@/lib/parcel-analysis";
-import { fsr, money, num, sqm } from "@/lib/format";
-import { Badge, Button, LiveDataBadge, ScoreBadge, cx } from "@/components/ui";
+import { money, num, pct, sqm } from "@/lib/format";
+import { Badge, Button, LiveDataBadge, ScoreBadge, Select, cx } from "@/components/ui";
 import { ParcelPanel } from "./parcel-panel";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
 const MIN_PARCEL_ZOOM = 17;
 const START = { lat: -33.8362, lng: 151.2176, zoom: 18 };
+
+type CompareSort = "score" | "headroom" | "profit" | "owners" | "area" | "moc";
 
 interface LoadState {
   loading: boolean;
@@ -53,6 +55,7 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
   const [geoMessage, setGeoMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [compareSort, setCompareSort] = useState<CompareSort>("headroom");
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBBox = useRef<BBox | null>(null);
@@ -313,7 +316,7 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
               <h2 className="mb-2 text-[15px] font-semibold text-ink">Development map</h2>
               <p>Search a Sydney suburb or address, then click a residential parcel to see its NSW planning controls.</p>
               <p className="mt-2">
-                <strong className="text-ink">Find assemblies</strong> tests connected combinations of 2–{assumptions.maxAssemblySize} adjoining lots and ranks them by opportunity score. Shift-click lots to build an assembly manually.
+                <strong className="text-ink">Find assemblies</strong> tests connected combinations of 2–{assumptions.maxAssemblySize} adjoining lots and ranks them by acquisition headroom and opportunity score. The largest assembly is not always the best. Shift-click lots to build an assembly manually.
               </p>
             </div>
           )}
@@ -323,12 +326,112 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
 
         {find && find.startId === selectedId && (
           <div className="border-t border-line p-4" ref={candidatesRef}>
-            <div className="flex items-baseline justify-between">
-              <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Assembly candidates</h3>
-              <span className="text-[11px] text-muted">{find.neighbours.length} adjoining lots found</span>
+            <div className="flex items-baseline justify-between gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Assembly comparison</h3>
+              <Select
+                value={compareSort}
+                onChange={(v) => setCompareSort(v as CompareSort)}
+                options={[
+                  { value: "headroom", label: "Sort: Headroom $" },
+                  { value: "score", label: "Sort: Score" },
+                  { value: "profit", label: "Sort: Profit" },
+                  { value: "moc", label: "Sort: MOC" },
+                  { value: "owners", label: "Sort: Fewest owners" },
+                  { value: "area", label: "Sort: Site area" },
+                ]}
+                className="h-7 text-[11px]"
+              />
             </div>
+            <p className="mt-1 text-[11px] text-muted">{find.neighbours.length} adjoining lots · best combo is not always the largest</p>
             {find.candidates.length === 0 && <p className="mt-2 text-[12px] text-muted">No developable adjoining combinations found for this lot.</p>}
-            <div className="mt-2 space-y-2">
+            {!!find.candidates.length && (
+              <div className="mt-2 overflow-x-auto rounded-[3px] border border-line">
+                <table className="num w-full min-w-[640px] text-[11px]">
+                  <thead className="bg-canvas text-[10px] uppercase tracking-wide text-muted">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">Assembly</th>
+                      <th className="px-1 py-1.5 text-right">Lots</th>
+                      <th className="px-1 py-1.5 text-right">Area</th>
+                      <th className="px-1 py-1.5 text-right">Existing</th>
+                      <th className="px-1 py-1.5 text-right">Units</th>
+                      <th className="px-1 py-1.5 text-right">GRV</th>
+                      <th className="px-1 py-1.5 text-right">Max payable</th>
+                      <th className="px-1 py-1.5 text-right">Headroom</th>
+                      <th className="px-1 py-1.5 text-right">Headroom %</th>
+                      <th className="px-1 py-1.5 text-right">Score</th>
+                      <th className="px-1 py-1.5" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...find.candidates]
+                      .sort((x, y) => {
+                        switch (compareSort) {
+                          case "headroom":
+                            return y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+                          case "profit":
+                            return y.metrics.profit - x.metrics.profit;
+                          case "moc":
+                            return y.metrics.marginOnCost - x.metrics.marginOnCost;
+                          case "owners":
+                            return x.metrics.owners - y.metrics.owners || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+                          case "area":
+                            return y.metrics.totalAreaSqm - x.metrics.totalAreaSqm;
+                          default:
+                            return y.score.score - x.score.score || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+                        }
+                      })
+                      .map((c, i, arr) => {
+                        const bestHeadroom = Math.max(...arr.map((x) => x.metrics.acquisitionHeadroom));
+                        const isBest = c.metrics.acquisitionHeadroom === bestHeadroom && bestHeadroom > 0;
+                        const isLargest = c.metrics.lotCount === Math.max(...arr.map((x) => x.metrics.lotCount));
+                        return (
+                          <tr
+                            key={c.key}
+                            onMouseEnter={() => setHoverKey(c.key)}
+                            onMouseLeave={() => setHoverKey(null)}
+                            onClick={() => setActiveKey(c.key)}
+                            className={cx("cursor-pointer border-t border-line", activeKey === c.key && "bg-orange-50/50", isBest && "bg-emerald-50/40")}
+                          >
+                            <td className="px-2 py-1.5">
+                              <div className="font-semibold">
+                                Option {letters[i]}
+                                {isBest && !isLargest && <Badge tone="good">Best headroom</Badge>}
+                                {isLargest && !isBest && <Badge tone="warn">Largest ≠ best</Badge>}
+                              </div>
+                              <div className="max-w-[160px] truncate text-[10px] text-muted">{c.lotIds.map((id) => (parcels.get(id) ? parcelLabel(parcels.get(id)!) : id)).join(" + ")}</div>
+                            </td>
+                            <td className="px-1 py-1.5 text-right">{c.metrics.lotCount}</td>
+                            <td className="px-1 py-1.5 text-right">{num(c.metrics.totalAreaSqm)}</td>
+                            <td className="px-1 py-1.5 text-right">{money(c.metrics.combinedValue, { compact: true })}</td>
+                            <td className="px-1 py-1.5 text-right">{c.metrics.dwellings}</td>
+                            <td className="px-1 py-1.5 text-right">{money(c.metrics.grv, { compact: true })}</td>
+                            <td className="px-1 py-1.5 text-right font-semibold text-brand">{money(c.metrics.maxPayableToOwners, { compact: true })}</td>
+                            <td className="px-1 py-1.5 text-right font-semibold text-good">{money(c.metrics.acquisitionHeadroom, { compact: true })}</td>
+                            <td className="px-1 py-1.5 text-right">{pct(c.metrics.acquisitionHeadroomPercent, 0)}</td>
+                            <td className="px-1 py-1.5 text-right">
+                              <ScoreBadge score={c.score.score} />
+                            </td>
+                            <td className="px-1 py-1.5 text-right">
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                disabled={saving}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  save(c.lotIds);
+                                }}
+                              >
+                                Analyse
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="mt-3 space-y-2">
               {find.candidates.map((c, i) => (
                 <div
                   key={c.key}
@@ -340,7 +443,7 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="text-[12.5px] font-semibold">
-                        Option {letters[i]} · {c.metrics.lotCount} lots
+                        Option {letters[i]} · {c.metrics.lotCount} lots · {c.metrics.owners} owners
                       </div>
                       <div className="mt-0.5 text-[11px] leading-snug text-muted">{c.lotIds.map((id) => (parcels.get(id) ? parcelLabel(parcels.get(id)!) : id)).join(" + ")}</div>
                     </div>
@@ -348,28 +451,24 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
                   </div>
                   <div className="num mt-2 grid grid-cols-4 gap-1 text-[11.5px]">
                     <div>
-                      <div className="text-[10px] uppercase text-muted">Site</div>
-                      {num(c.metrics.totalAreaSqm)} m²
+                      <div className="text-[10px] uppercase text-muted">Max payable</div>
+                      {money(c.metrics.maxPayableToOwners, { compact: true })}
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-muted">Owners</div>
-                      {c.metrics.owners}
+                      <div className="text-[10px] uppercase text-muted">Existing</div>
+                      {money(c.metrics.combinedValue, { compact: true })}
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-muted">FSR</div>
-                      {fsr(c.metrics.weightedFsr)}
-                      {c.metrics.fsrEstimated && "*"}
+                      <div className="text-[10px] uppercase text-muted">Headroom</div>
+                      <span className="font-semibold text-good">{money(c.metrics.acquisitionHeadroom, { compact: true })}</span>
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-muted">GFA</div>
-                      {num(c.metrics.gfa)} m²
+                      <div className="text-[10px] uppercase text-muted">Headroom %</div>
+                      {pct(c.metrics.acquisitionHeadroomPercent, 0)}
                     </div>
-                  </div>
-                  <div className="mt-1 text-[11px] text-muted">
-                    Indicative land budget {money(c.metrics.indicativeBudget, { compact: true })} vs est. value {money(c.metrics.combinedValue, { compact: true })}
                   </div>
                   <ul className="mt-2 space-y-0.5 text-[11.5px]">
-                    {c.score.factors.slice(0, 5).map((f) => (
+                    {c.score.factors.slice(0, 4).map((f) => (
                       <li key={f.text} className={f.sign === "+" ? "text-good" : "text-bad"}>
                         {f.sign === "+" ? "+" : "−"} {f.text}
                       </li>
@@ -400,7 +499,7 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
                 </div>
               ))}
             </div>
-            <p className="mt-2 text-[10.5px] text-muted">* FSR estimated where the LEP maps none. Scores use global assumptions and estimated existing values ($/sqm) until values are entered.</p>
+            <p className="mt-2 text-[10.5px] text-muted">Headroom = max payable − existing property value. Existing values use the fallback $/sqm estimate until entered. Largest assembly is highlighted when it is not the best headroom.</p>
           </div>
         )}
       </aside>

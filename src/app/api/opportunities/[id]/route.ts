@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { getGlobalAssumptions, loadOpportunity, recomputeOpportunity, serializeOpportunity } from "@/lib/opportunity-service";
+import { getGlobalAssumptions, loadOpportunity, recomputeOpportunity, serializeOpportunity, syncUnitTypes } from "@/lib/opportunity-service";
 import { opportunityInputsSchema } from "@/lib/analysis/assumptions";
 import { OPPORTUNITY_STATUSES } from "@/lib/constants";
 import { jsonError } from "@/lib/session";
@@ -32,6 +32,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (!exists) return jsonError("Opportunity not found", 404);
   const { inputs, ...rest } = parsed.data;
   await prisma.opportunity.update({ where: { id }, data: { ...rest, ...(inputs ? { inputs: inputs as Prisma.InputJsonValue } : {}) } });
+  if (inputs?.unitMix) await syncUnitTypes(id, inputs.unitMix);
   await recomputeOpportunity(id);
   const opp = await loadOpportunity(id);
   return NextResponse.json(serializeOpportunity(opp!, await getGlobalAssumptions()));

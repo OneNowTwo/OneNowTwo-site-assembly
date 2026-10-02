@@ -37,9 +37,10 @@ describe("adjacency", () => {
 describe("assembly metrics", () => {
   it("sums combined site area and area-weights FSR", () => {
     const lots = [lot("A", 0, { fsr: 1 }), lot("B", 20, { fsr: 2 }), lot("C", 40, { fsr: null, zone: "R2", heightM: 8.5 })];
-    const m = computeAssemblyMetrics(lots, A);
+    const m = computeAssemblyMetrics(lots, { ...A, planningAdjustment: 1, revenueMode: "PER_SQM" });
     expect(m.totalAreaSqm).toBe(2100);
-    expect(m.gfa).toBeCloseTo(700 * 1 + 700 * 2 + 700 * A.fallbackFsr);
+    expect(m.theoreticalGfa).toBeCloseTo(700 * 1 + 700 * 2 + 700 * A.fallbackFsr);
+    expect(m.gfa).toBeCloseTo(m.theoreticalGfa);
     expect(m.weightedFsr).toBeCloseTo((1 + 2 + A.fallbackFsr) / 3);
     expect(m.fsrEstimated).toBe(true);
     expect(m.combinedValue).toBe(3_900_000);
@@ -54,8 +55,8 @@ describe("assembly metrics", () => {
 
   it("explains the score with positive and negative factors", () => {
     const lots = row(4);
-    lots[1].heritage = "Item - General — House — Local";
-    const s = scoreAssembly(computeAssemblyMetrics(lots, A), A);
+    lots[1]!.heritage = "Item - General — House — Local";
+    const s = scoreAssembly(computeAssemblyMetrics(lots, { ...A, revenueMode: "PER_SQM", planningAdjustment: 1 }), A);
     expect(s.score).toBeGreaterThan(0);
     expect(s.score).toBeLessThanOrEqual(100);
     expect(s.factors.some((f) => f.sign === "+" && f.text.includes("2,800 sqm combined site"))).toBe(true);

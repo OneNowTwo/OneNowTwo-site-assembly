@@ -9,11 +9,12 @@ import { fsr, lotDp, money, num, pct, sqm } from "@/lib/format";
 import { Badge, DemoFinancialBadge, Panel, Stat, TextArea, cx } from "@/components/ui";
 
 const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
-  siteSize: "Site size",
+  acquisitionHeadroom: "Acquisition headroom",
+  developmentUplift: "Development uplift",
   planningCapacity: "Planning capacity",
   simplicity: "Assembly simplicity",
-  uplift: "Development uplift",
-  constraints: "Planning constraints",
+  geometry: "Site geometry / connectivity",
+  planningRisk: "Planning risk",
 };
 
 export function OverviewTab() {
@@ -21,29 +22,83 @@ export function OverviewTab() {
   const [selected, setSelected] = useState<string | null>(null);
   const f = analysis.base.feasibility;
   const y = analysis.base.yield;
-  const mv = analysis.combinedMarketValue;
-  const budget = Math.max(0, f.maxAcquisitionBudget);
-  const maxBar = Math.max(mv, budget, 1);
+  const mv = analysis.combinedExistingValue;
+  const maxPay = analysis.maxPayableToOwners;
+  const headroom = analysis.acquisitionHeadroom;
+  const maxBar = Math.max(mv, maxPay, 1);
   const crit = new Map(analysis.critical.map((c) => [c.id, c]));
   const alloc = new Map(analysis.allocation.lots.map((l) => [l.id, l]));
+  const marginal = new Map(analysis.marginal.map((m) => [m.id, m]));
 
   return (
     <div className="grid grid-cols-12 gap-4">
       <div className="col-span-7 space-y-4">
+        <Panel title="Opportunity summary" actions={dto.demoFinancialData ? <DemoFinancialBadge /> : null}>
+          <div className="grid grid-cols-4 gap-5">
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Site</div>
+              <div className="mt-1 text-[13px] leading-relaxed">
+                <div className="font-semibold">
+                  {analysis.includedIds.length} lots · {sqm(analysis.site.siteAreaSqm)}
+                </div>
+                <div className="text-muted">FSR {fsr(analysis.site.fsr)}</div>
+              </div>
+            </div>
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Acquisition</div>
+              <div className="mt-1 space-y-0.5 text-[13px]">
+                <div>
+                  Existing combined value: <span className="num font-semibold">{money(mv, { compact: true })}</span>
+                </div>
+                <div>
+                  Max payable to owners: <span className="num font-semibold text-brand">{money(maxPay, { compact: true })}</span>
+                </div>
+                <div>
+                  Acquisition headroom: <span className="num font-semibold text-good">{money(headroom, { compact: true })}</span>
+                </div>
+                <div className="text-muted">Indicative owner premium capacity: {pct(analysis.acquisitionHeadroomPercent, 0, true)}</div>
+              </div>
+            </div>
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Development</div>
+              <div className="mt-1 space-y-0.5 text-[13px]">
+                <div className="font-semibold">{num(y.dwellings)} dwellings</div>
+                <div className="text-muted">{sqm(y.saleableArea)} saleable</div>
+                <div>
+                  GRV <span className="num font-semibold">{money(f.grv, { compact: true })}</span>
+                </div>
+              </div>
+            </div>
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Financial</div>
+              <div className="mt-1 space-y-0.5 text-[13px]">
+                <div>
+                  Costs before land: <span className="num font-semibold">{money(f.nonLandCosts, { compact: true })}</span>
+                </div>
+                <div>
+                  Target profit: <span className="num font-semibold">{money(f.profit, { compact: true })}</span>
+                </div>
+                <div className="text-muted">{pct(f.marginOnCost)} MOC</div>
+              </div>
+            </div>
+          </div>
+        </Panel>
+
         <Panel title="Why this assembly creates value" actions={dto.demoFinancialData ? <DemoFinancialBadge /> : null}>
           <div className="grid grid-cols-4 gap-4">
-            <Stat label="Combined market value" value={money(mv, { compact: true })} sub={analysis.marketValueComplete ? `${analysis.includedIds.length} lots, as entered` : "Enter values on Acquisition tab"} />
-            <Stat label="Max acquisition budget" value={money(budget, { compact: true })} tone="brand" sub="What the project can pay owners" />
-            <Stat label="Assembly premium" value={money(analysis.marketValueComplete ? budget - mv : null, { compact: true })} tone={budget - mv > 0 ? "good" : "bad"} sub={mv > 0 ? `${pct(budget / mv - 1, 0, true)} over market value` : "—"} />
-            <Stat label="Profit at target" value={money(f.profit, { compact: true })} sub={`${pct(f.marginOnCost)} on cost`} />
+            <Stat label="Combined existing property value" value={money(mv, { compact: true })} sub={analysis.marketValueComplete ? `${analysis.includedIds.length} lots, as entered` : "Enter values on Acquisition / Comparables"} />
+            <Stat label="Maximum payable to owners" value={money(maxPay, { compact: true })} tone="brand" sub="Development-supported acquisition budget" />
+            <Stat label="Acquisition headroom" value={money(headroom, { compact: true })} tone={headroom > 0 ? "good" : "bad"} sub={mv > 0 ? `${pct(analysis.acquisitionHeadroomPercent, 0, true)} over existing value` : "—"} />
+            <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Value created by assembling (before negotiation)" />
           </div>
           <div className="mt-5 space-y-2">
-            <Bar label="Sum of individual house values" value={mv} max={maxBar} className="bg-stone-400" />
-            <Bar label="Value of the assembled site to a developer (max budget)" value={budget} max={maxBar} className="bg-brand" />
+            <Bar label="Existing homes — combined market value" value={mv} max={maxBar} className="bg-stone-400" />
+            <Bar label="Maximum payable to owners" value={maxPay} max={maxBar} className="bg-brand" />
           </div>
           <p className="mt-4 text-[12px] leading-relaxed text-muted">
-            Individually these are {analysis.includedIds.length} houses worth about {money(mv, { compact: true })}. Combined into a {sqm(analysis.site.siteAreaSqm)} site supporting {num(y.gfa)} sqm GFA (~{y.dwellings} dwellings), the residual land value
-            supports paying up to {money(budget, { compact: true })} while still achieving a {pct(analysis.base.assumptions.targetBasis === "REVENUE" ? analysis.base.assumptions.targetMarginOnRevenue : analysis.base.assumptions.targetMarginOnCost, 0)} margin.
+            Individually these are {analysis.includedIds.length} properties worth about {money(mv, { compact: true })}. Assembled into a {sqm(analysis.site.siteAreaSqm)} site supporting ~
+            {y.dwellings} dwellings ({sqm(y.achievableGfa)} achievable GFA), the residual supports paying up to {money(maxPay, { compact: true })} while still achieving a{" "}
+            {pct(analysis.base.assumptions.targetMarginOnCost, 0)} margin on cost — headroom of {money(headroom, { compact: true })}.
           </p>
         </Panel>
 
@@ -54,9 +109,10 @@ export function OverviewTab() {
                 <th className="px-3 py-2 text-left">Include</th>
                 <th className="px-3 py-2 text-left">Property</th>
                 <th className="px-3 py-2 text-right">Area</th>
-                <th className="px-3 py-2 text-left">Zone</th>
-                <th className="px-3 py-2 text-right">Est. value</th>
+                <th className="px-3 py-2 text-right">Existing value</th>
                 <th className="px-3 py-2 text-right">Max offer</th>
+                <th className="px-3 py-2 text-right">Neg. headroom</th>
+                <th className="px-3 py-2 text-left">Marginal</th>
                 <th className="px-3 py-2 text-left">Role</th>
                 <th className="px-3 py-2 text-left">Stage</th>
               </tr>
@@ -64,6 +120,8 @@ export function OverviewTab() {
             <tbody>
               {dto.lots.map((l) => {
                 const c = crit.get(l.id);
+                const m = marginal.get(l.id);
+                const al = alloc.get(l.id);
                 return (
                   <tr key={l.id} className={cx("border-t border-line", selected === l.id && "bg-brand-soft/50", !l.included && "text-muted")} onClick={() => setSelected(l.id)}>
                     <td className="px-3 py-2">
@@ -74,9 +132,20 @@ export function OverviewTab() {
                       <div className="text-[11px] text-muted">{lotDp(l)}</div>
                     </td>
                     <td className="num px-3 py-2 text-right">{sqm(l.areaSqm)}</td>
-                    <td className="px-3 py-2">{l.zone ?? "—"}</td>
                     <td className="num px-3 py-2 text-right">{money(l.marketValue, { compact: true })}</td>
-                    <td className="num px-3 py-2 text-right">{l.included ? money(alloc.get(l.id)?.maximumOffer, { compact: true }) : "—"}</td>
+                    <td className="num px-3 py-2 text-right">{l.included ? money(al?.maximumOffer, { compact: true }) : "—"}</td>
+                    <td className="num px-3 py-2 text-right">{l.included ? money(al?.negotiationHeadroom, { compact: true }) : "—"}</td>
+                    <td className="px-3 py-2">
+                      {!l.included ? (
+                        <Badge>Excluded</Badge>
+                      ) : m?.verdict === "DESTROYS_VALUE" ? (
+                        <Badge tone="bad">Destroys value</Badge>
+                      ) : m?.verdict === "HIGH_VALUE" ? (
+                        <Badge tone="good">High value</Badge>
+                      ) : (
+                        <Badge>Neutral</Badge>
+                      )}
+                    </td>
                     <td className="px-3 py-2">{!l.included ? <Badge>Excluded</Badge> : c?.status === "CRITICAL" ? <Badge tone="bad">Critical</Badge> : <Badge tone="good">Optional</Badge>}</td>
                     <td className="px-3 py-2 text-[11.5px]">{STAGE_LABELS[l.acquisitionStage]}</td>
                   </tr>
@@ -84,7 +153,7 @@ export function OverviewTab() {
               })}
             </tbody>
           </table>
-          <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Untick a lot to test the project without it — every figure recalculates.</p>
+          <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Untick a lot to test the project without it — every figure recalculates. Marginal verdict compares what the lot adds to max payable vs its existing market value.</p>
         </Panel>
 
         <Panel title="Notes">
@@ -99,7 +168,7 @@ export function OverviewTab() {
         <Panel title={`Opportunity score · ${analysis.score.score}/100`}>
           <div className="space-y-1.5">
             {(Object.keys(SCORE_WEIGHTS) as (keyof typeof SCORE_WEIGHTS)[]).map((k) => (
-              <div key={k} className="grid grid-cols-[150px_1fr_70px] items-center gap-2 text-[11.5px]">
+              <div key={k} className="grid grid-cols-[170px_1fr_70px] items-center gap-2 text-[11.5px]">
                 <span className="text-muted">
                   {COMPONENT_LABELS[k]} <span className="text-[10px]">({SCORE_WEIGHTS[k] * 100}%)</span>
                 </span>
@@ -121,8 +190,8 @@ export function OverviewTab() {
         <Panel title="Development summary (base case)">
           <div className="grid grid-cols-3 gap-4">
             <Stat size="md" label="FSR used" value={fsr(analysis.site.fsr)} sub={analysis.site.fsrSource === "OVERRIDE" ? "User assumption" : analysis.site.fsrSource === "OFFICIAL" ? "Official controls" : "Estimated"} />
-            <Stat size="md" label="GFA" value={sqm(y.gfa)} />
-            <Stat size="md" label="Dwellings" value={num(y.dwellings)} sub="Indicative only" />
+            <Stat size="md" label="Theoretical GFA" value={sqm(y.theoreticalGfa)} sub="Site × FSR" />
+            <Stat size="md" label="Achievable GFA" value={sqm(y.achievableGfa)} sub={y.gfaSource === "OVERRIDE" ? "Manual override" : `${Math.round(y.planningAdjustment * 100)}% planning adj.`} />
           </div>
         </Panel>
       </div>
