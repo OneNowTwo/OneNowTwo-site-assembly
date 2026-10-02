@@ -70,14 +70,35 @@ export async function PATCH(req: Request, { params }: Ctx) {
     }
     if (planning) {
       const updated = await tx.parcel.update({ where: { id: op.parcelId }, data: { ...planning, planningCheckedAt: new Date() } });
-      const field = { kind: "ASSUMPTION", source: "Manual planning input", retrievedAt: new Date().toISOString() };
+      const field = { kind: "ASSUMPTION", source: "Manual planning input — USER ASSUMPTION", retrievedAt: new Date().toISOString() };
+      const fsrControls =
+        planning.fsr != null
+          ? [
+              {
+                fsr: planning.fsr,
+                epiName: updated.planningInstrument,
+                lga: updated.lga,
+                layClass: null,
+                intersectionAreaSqm: updated.areaSqm,
+                intersectionShare: 1,
+              },
+            ]
+          : [];
       await tx.planningSnapshot.create({
         data: {
           parcelId: op.parcelId,
           source: "MANUAL",
           data: {
-            zone: updated.zone, zoneName: updated.zoneName, fsr: updated.fsr, heightM: updated.heightM, minLotSizeSqm: updated.minLotSizeSqm,
-            heritage: updated.heritage, planningInstrument: updated.planningInstrument, lga: updated.lga,
+            zone: updated.zone,
+            zoneName: updated.zoneName,
+            fsr: updated.fsr,
+            fsrStatus: updated.fsr != null ? "MAPPED" : "NO_MAPPED",
+            fsrControls,
+            heightM: updated.heightM,
+            minLotSizeSqm: updated.minLotSizeSqm,
+            heritage: updated.heritage,
+            planningInstrument: updated.planningInstrument,
+            lga: updated.lga,
             sources: Object.fromEntries(Object.keys(planning).map((k) => [k === "zoneName" ? "zone" : k, field])),
           } as Prisma.InputJsonValue,
         },

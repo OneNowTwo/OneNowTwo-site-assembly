@@ -10,10 +10,31 @@ export interface FieldSource {
   retrievedAt: string | null;
 }
 
+/** One official FSR control intersecting a cadastral parcel. */
+export interface FsrControl {
+  fsr: number;
+  epiName: string | null;
+  lga: string | null;
+  layClass: string | null;
+  intersectionAreaSqm: number;
+  /** 0–1 share of the parcel area covered by this control. */
+  intersectionShare: number;
+}
+
+export type FsrMappedStatus = "MAPPED" | "SPLIT" | "NO_MAPPED" | "UNAVAILABLE";
+
 export interface PlanningControls {
   zone: string | null;
   zoneName: string | null;
+  /**
+   * Official mapped FSR when a single control covers the parcel, or the area-weighted
+   * equivalent when split (for GFA maths). Null when no official FSR polygon intersects.
+   */
   fsr: number | null;
+  /** How official FSR was resolved for this parcel — never a silent generic assumption. */
+  fsrStatus: FsrMappedStatus;
+  /** All intersecting official FSR controls (empty when NO_MAPPED / UNAVAILABLE). */
+  fsrControls: FsrControl[];
   heightM: number | null;
   minLotSizeSqm: number | null;
   heritage: string | null;

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useOpportunity } from "./context";
 import type { LotDTO } from "@/lib/opportunity-dto";
-import { effectiveFsr, hasHeritage, APARTMENT_ZONES } from "@/lib/analysis/assembly";
+import { hasHeritage, APARTMENT_ZONES } from "@/lib/analysis/assembly";
 import { DISCLAIMER } from "@/lib/constants";
 import { date, fsr, lotDp, sqm } from "@/lib/format";
 import { Badge, Button, NumberField, Panel, SourceTag, TextInput } from "@/components/ui";
@@ -15,7 +15,7 @@ function sourceKind(l: LotDTO, field: string): "OFFICIAL" | "ASSUMPTION" | "ESTI
 }
 
 export function PlanningTab() {
-  const { dto, analysis, a, refreshPlanning, saving } = useOpportunity();
+  const { dto, analysis, refreshPlanning, saving } = useOpportunity();
   const [status, setStatus] = useState<{ ok: boolean; message?: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const site = analysis.site;
@@ -66,7 +66,6 @@ export function PlanningTab() {
           </thead>
           <tbody>
             {dto.lots.map((l) => {
-              const est = effectiveFsr(l, a);
               return editing === l.id ? (
                 <ManualRow key={l.id} lot={l} onDone={() => setEditing(null)} />
               ) : (
@@ -88,12 +87,21 @@ export function PlanningTab() {
                       <>
                         <div className="font-medium">{fsr(l.fsr)}</div>
                         <SourceTag kind={sourceKind(l, "fsr")} />
+                        {l.fsrStatus === "SPLIT" && l.fsrControls.length > 1 && (
+                          <div className="mt-1 space-y-0.5 text-left text-[10.5px] text-muted">
+                            <div className="font-semibold uppercase tracking-wide">Split controls</div>
+                            {l.fsrControls.map((c, i) => (
+                              <div key={`${c.fsr}-${i}`}>
+                                FSR {fsr(c.fsr)} — {Math.round(c.intersectionShare * 100)}% of parcel
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </>
                     ) : (
                       <>
-                        <div className="text-muted">Not mapped</div>
-                        <div className="text-[11px]">≈ {fsr(est.fsr)}</div>
-                        <SourceTag kind="ESTIMATE" />
+                        <div className="font-medium">NO MAPPED FSR</div>
+                        <div className="text-[10.5px] text-muted">Enter USER ASSUMPTION on Yield</div>
                       </>
                     )}
                   </td>
@@ -125,7 +133,7 @@ export function PlanningTab() {
           <dl className="space-y-1.5 text-[12px]">
             <Line k="Zones" v={zones.join(", ")} />
             <Line k="Combined site area" v={sqm(analysis.metrics.totalAreaSqm)} />
-            <Line k="Area-weighted FSR" v={`${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (incl. estimates)" : ""}`} />
+            <Line k="Equivalent assembly FSR" v={`${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (some lots unmapped)" : ""}`} />
             <Line k="Applicable height (lowest)" v={analysis.metrics.heightMinM != null ? `${analysis.metrics.heightMinM} m` : "—"} />
             <Line k="Heritage-affected lots" v={String(analysis.metrics.heritageLots)} />
             <Line k="Strata lots" v={String(analysis.metrics.strataLots)} />
@@ -134,15 +142,22 @@ export function PlanningTab() {
         <Panel title="Basis used for yield">
           <dl className="space-y-1.5 text-[12px]">
             <Line k="Site area" v={sqm(site.siteAreaSqm)} tag={site.siteAreaSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />
-            <Line k="FSR" v={fsr(site.fsr)} tag={site.fsrSource === "OVERRIDE" ? "ASSUMPTION" : site.fsrSource === "OFFICIAL" ? "OFFICIAL" : "ESTIMATE"} />
+            <Line
+              k="FSR"
+              v={site.fsrSource === "NO_MAPPED" ? "NO MAPPED FSR" : fsr(site.fsr)}
+              tag={site.fsrSource === "OVERRIDE" ? "ASSUMPTION" : site.fsrSource === "OFFICIAL" ? "OFFICIAL" : undefined}
+            />
             <Line k="Height" v={site.heightLimitM != null ? `${site.heightLimitM} m` : "—"} tag={site.heightSource === "OVERRIDE" ? "ASSUMPTION" : site.heightSource === "OFFICIAL" ? "OFFICIAL" : undefined} />
           </dl>
-          <p className="mt-2 text-[11px] text-muted">Override on the Yield tab.</p>
+          <p className="mt-2 text-[11px] text-muted">Override on the Yield tab as a USER ASSUMPTION — never silently mixed with official FSR.</p>
         </Panel>
         <Panel title="Flags">
           <ul className="space-y-1 text-[12px]">
             {zones.some((z) => z !== "Unknown" && !APARTMENT_ZONES.test(z)) && <li className="text-bad">− Zone(s) {zones.filter((z) => !APARTMENT_ZONES.test(z)).join(", ")} generally exclude residential flat buildings</li>}
-            {analysis.metrics.fsrEstimated && <li className="text-amber-800">− No FSR mapped for some lots; FSR estimated from height control or fallback assumption</li>}
+            {analysis.metrics.fsrUnmappedLots > 0 && (
+              <li className="text-amber-800">− No mapped FSR for {analysis.metrics.fsrUnmappedLots} lot(s) — official theoretical GFA excludes those lots until a USER ASSUMPTION is entered</li>
+            )}
+            {analysis.metrics.fsrSplitLots > 0 && <li className="text-amber-800">− {analysis.metrics.fsrSplitLots} lot(s) have split official FSR controls</li>}
             {analysis.metrics.heritageLots > 0 && <li className="text-bad">− {analysis.metrics.heritageLots} heritage-affected lot(s)</li>}
             {analysis.metrics.minLotSizeIssues.map((m) => (
               <li key={m} className="text-bad">

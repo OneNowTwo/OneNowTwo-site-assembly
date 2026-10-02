@@ -3,7 +3,7 @@ import type { Assumptions, OpportunityInputs, ScenarioAdjustment } from "./assum
 import { defaultUnitMix } from "./assumptions";
 import { computeYield, type YieldResult } from "./yield";
 import { acquisitionHeadroom, computeFeasibility, testPurchasePrice, type FeasibilityResult, type PriceTest } from "./feasibility";
-import { computeAssemblyMetrics, effectiveFsr, scoreAssembly, type AnalysisLot, type AssemblyMetrics, type OpportunityScore } from "./assembly";
+import { computeAssemblyMetrics, officialParcelTheoreticalGfa, scoreAssembly, type AnalysisLot, type AssemblyMetrics, type OpportunityScore } from "./assembly";
 import { allocateOffers, type AllocationResult } from "./allocation";
 import { analyseCriticalLots, type CriticalLotResult, type Economics } from "./critical";
 import { analyseMarginalLots, type MarginalLotResult, type MarginalLotEconomics } from "./marginal";
@@ -38,7 +38,8 @@ export interface SiteBasis {
   siteAreaSqm: number;
   siteAreaSource: "PARCELS" | "OVERRIDE";
   fsr: number;
-  fsrSource: "OFFICIAL" | "MIXED_ESTIMATE" | "OVERRIDE";
+  /** OFFICIAL = mapped EPI FSR only; OVERRIDE = USER ASSUMPTION; NO_MAPPED = no official FSR and no override. */
+  fsrSource: "OFFICIAL" | "NO_MAPPED" | "OVERRIDE";
   heightLimitM: number | null;
   heightSource: "OFFICIAL" | "OVERRIDE" | "NONE";
 }
@@ -81,15 +82,28 @@ export function applyScenario(a: Assumptions, adj: ScenarioAdjustment): Assumpti
   };
 }
 
-function siteBasis(lots: OpportunityLot[], a: Assumptions, inputs: OpportunityInputs): SiteBasis {
+function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityInputs): SiteBasis {
   const parcelArea = lots.reduce((s, l) => s + l.areaSqm, 0);
-  const gfaAtControls = lots.reduce((s, l) => s + l.areaSqm * effectiveFsr(l, a).fsr, 0);
+  // Per-parcel official mapped FSR only — no silent height/fallback assumption.
+  const gfaAtControls = lots.reduce((s, l) => s + officialParcelTheoreticalGfa(l), 0);
   const heights = lots.map((l) => l.heightM).filter((h): h is number => h != null);
+  const anyUnmapped = lots.some((l) => l.fsr == null && !(l.fsrControls && l.fsrControls.length));
+  const officialFsr = parcelArea > 0 ? gfaAtControls / parcelArea : 0;
+  if (inputs.fsrOverride != null) {
+    return {
+      siteAreaSqm: inputs.siteAreaOverride ?? parcelArea,
+      siteAreaSource: inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS",
+      fsr: inputs.fsrOverride,
+      fsrSource: "OVERRIDE",
+      heightLimitM: inputs.heightOverrideM ?? (heights.length ? Math.min(...heights) : null),
+      heightSource: inputs.heightOverrideM ? "OVERRIDE" : heights.length ? "OFFICIAL" : "NONE",
+    };
+  }
   return {
     siteAreaSqm: inputs.siteAreaOverride ?? parcelArea,
     siteAreaSource: inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS",
-    fsr: inputs.fsrOverride ?? (parcelArea > 0 ? gfaAtControls / parcelArea : 0),
-    fsrSource: inputs.fsrOverride ? "OVERRIDE" : lots.some((l) => l.fsr == null) ? "MIXED_ESTIMATE" : "OFFICIAL",
+    fsr: officialFsr,
+    fsrSource: anyUnmapped && officialFsr === 0 ? "NO_MAPPED" : "OFFICIAL",
     heightLimitM: inputs.heightOverrideM ?? (heights.length ? Math.min(...heights) : null),
     heightSource: inputs.heightOverrideM ? "OVERRIDE" : heights.length ? "OFFICIAL" : "NONE",
   };

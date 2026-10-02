@@ -2,7 +2,7 @@ import type { Polygon, MultiPolygon } from "geojson";
 import type { Assumptions, OpportunityInputs } from "@/lib/analysis/assumptions";
 import type { OpportunityLot } from "@/lib/analysis/opportunity";
 import type { AcquisitionStageValue, OpportunityStatusValue } from "@/lib/constants";
-import type { DataOrigin, FieldSource } from "@/lib/types";
+import type { DataOrigin, FieldSource, FsrControl, FsrMappedStatus } from "@/lib/types";
 
 export interface OwnerDTO {
   name: string | null;
@@ -81,6 +81,8 @@ export interface LotDTO {
   zone: string | null;
   zoneName: string | null;
   fsr: number | null;
+  fsrStatus: FsrMappedStatus | null;
+  fsrControls: FsrControl[];
   heightM: number | null;
   minLotSizeSqm: number | null;
   heritage: string | null;
@@ -145,6 +147,8 @@ export function dtoToLots(dto: OpportunityDTO): OpportunityLot[] {
     zone: l.zone,
     zoneName: l.zoneName,
     fsr: l.fsr,
+    fsrStatus: l.fsrStatus,
+    fsrControls: l.fsrControls,
     heightM: l.heightM,
     minLotSizeSqm: l.minLotSizeSqm,
     heritage: l.heritage,
