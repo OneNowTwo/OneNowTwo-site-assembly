@@ -9,8 +9,10 @@ import type { AssemblyCandidate } from "@/lib/analysis/assembly";
 import { computeAssemblyMetrics, scoreAssembly } from "@/lib/analysis/assembly";
 import { buildAdjacency } from "@/lib/analysis/geometry";
 import type { Assumptions } from "@/lib/analysis/assumptions";
+import type { ScanCandidate } from "@/lib/analysis/area-scan";
+import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { parcelLabel, parcelToAnalysisLot } from "@/lib/parcel-analysis";
-import { money, num, pct, sqm } from "@/lib/format";
+import { money, num, pct, sqm, fsr } from "@/lib/format";
 import { Badge, Button, LiveDataBadge, ScoreBadge, Select, cx } from "@/components/ui";
 import { ParcelPanel } from "./parcel-panel";
 
@@ -36,7 +38,20 @@ interface FindResult {
   messages: string[];
 }
 
-export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
+interface ScanState {
+  scanning: boolean;
+  stage: string;
+  error: string | null;
+  candidates: ScanCandidate[];
+  families: { familyId: string; best: ScanCandidate; alternatives: ScanCandidate[] }[];
+  messages: string[];
+  progress: string[];
+  parcelsConsidered: number;
+  parcelsEligible: number;
+  assembliesGenerated: number;
+}
+
+export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumptions: Assumptions; initialScanQuery?: string | null }) {
   const router = useRouter();
   const [parcels, setParcels] = useState<Map<string, ParcelData>>(new Map());
   const [load, setLoad] = useState<LoadState>({ loading: false, messages: [], zoom: START.zoom });
@@ -56,13 +71,27 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
   const [saving, setSaving] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [compareSort, setCompareSort] = useState<CompareSort>("headroom");
+  const [centres, setCentres] = useState<NominatedCentre[]>([]);
+  const [scan, setScan] = useState<ScanState>({
+    scanning: false,
+    stage: "",
+    error: null,
+    candidates: [],
+    families: [],
+    messages: [],
+    progress: [],
+    parcelsConsidered: 0,
+    parcelsEligible: 0,
+    assembliesGenerated: 0,
+  });
+  const [scanExpanded, setScanExpanded] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBBox = useRef<BBox | null>(null);
   const candidatesRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (find) candidatesRef.current?.scrollIntoView({ block: "start" });
-  }, [find]);
+    if (find || scan.candidates.length) candidatesRef.current?.scrollIntoView({ block: "start" });
+  }, [find, scan.candidates.length]);
 
   const fetchParcels = useCallback(async (bbox: BBox) => {
     abortRef.current?.abort();
@@ -91,7 +120,16 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
       setLoad((s) => ({ ...s, zoom }));
       if (zoom < MIN_PARCEL_ZOOM) return;
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => fetchParcels(bbox), 350);
+      timerRef.current = setTimeout(() => {
+        fetchParcels(bbox);
+        const pad = 0.02;
+        fetch(`/api/lmr/centres?bbox=${[bbox.west - pad, bbox.south - pad, bbox.east + pad, bbox.north + pad].map((n) => n.toFixed(5)).join(",")}`)
+          .then((r) => r.json())
+          .then((body) => {
+            if (Array.isArray(body.centres)) setCentres(body.centres);
+          })
+          .catch(() => null);
+      }, 350);
     },
     [fetchParcels],
   );
@@ -143,6 +181,55 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
     }
   }
 
+  async function scanThisArea(forceQuery?: string) {
+    const bbox = lastBBox.current;
+    const q = (forceQuery ?? query).trim();
+    setScan((s) => ({ ...s, scanning: true, stage: "Loading parcels…", error: null, candidates: [], families: [] }));
+    setFind(null);
+    setActiveKey(null);
+    try {
+      const bodyPayload: Record<string, unknown> = { maxResults: 12 };
+      if (q.length >= 2) bodyPayload.suburbHint = q;
+      else if (bbox) {
+        bodyPayload.west = bbox.west;
+        bodyPayload.south = bbox.south;
+        bodyPayload.east = bbox.east;
+        bodyPayload.north = bbox.north;
+      } else {
+        throw new Error("Search a suburb or zoom the map before scanning");
+      }
+      setScan((s) => ({ ...s, stage: "Applying planning controls…" }));
+      const res = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Area scan failed");
+      if (body.bbox) {
+        setFlyTo({
+          lat: (body.bbox.south + body.bbox.north) / 2,
+          lng: (body.bbox.west + body.bbox.east) / 2,
+          bbox: body.bbox,
+          zoom: 16,
+          nonce: Date.now(),
+        });
+        fetchParcels(body.bbox);
+      }
+      if (Array.isArray(body.centres)) setCentres(body.centres);
+      setScan({
+        scanning: false,
+        stage: "Done",
+        error: null,
+        candidates: body.candidates ?? [],
+        families: body.families ?? [],
+        messages: body.messages ?? [],
+        progress: body.progress ?? [],
+        parcelsConsidered: body.parcelsConsidered ?? 0,
+        parcelsEligible: body.parcelsEligible ?? 0,
+        assembliesGenerated: body.assembliesGenerated ?? 0,
+      });
+    } catch (err) {
+      setScan((s) => ({ ...s, scanning: false, stage: "", error: (err as Error).message }));
+    }
+  }
+
   const assemblyParcels = assembly.map((id) => parcels.get(id)).filter((p): p is ParcelData => !!p);
   const manualMetrics = useMemo(() => {
     if (assemblyParcels.length < 1) return null;
@@ -154,8 +241,10 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
 
   const highlightIds = useMemo(() => {
     const key = hoverKey ?? activeKey;
-    return find?.candidates.find((c) => c.key === key)?.lotIds ?? [];
-  }, [hoverKey, activeKey, find]);
+    const fromFind = find?.candidates.find((c) => c.key === key)?.lotIds;
+    if (fromFind) return fromFind;
+    return scan.candidates.find((c) => c.key === key)?.lotIds ?? scan.families.find((f) => f.familyId === key)?.best.lotIds ?? [];
+  }, [hoverKey, activeKey, find, scan.candidates, scan.families]);
 
   function defaultName(ids: string[]) {
     const ps = ids.map((id) => parcels.get(id)).filter(Boolean) as ParcelData[];
@@ -179,6 +268,13 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
     setSaveName(assembly.length ? defaultName(assembly) : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assembly.join("|")]);
+
+  useEffect(() => {
+    if (!initialScanQuery || initialScanQuery.length < 2) return;
+    setQuery(initialScanQuery);
+    void scanThisArea(initialScanQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialScanQuery]);
 
   const letters = "ABCDEFGH";
   const showZoomHint = load.zoom < MIN_PARCEL_ZOOM;
@@ -224,7 +320,10 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
             )}
           </form>
           <div className="pointer-events-auto flex items-center gap-1 rounded-[3px] border border-line bg-white p-1 shadow-sm">
-            <label className="flex cursor-pointer items-center gap-1.5 px-2 text-[11.5px]">
+            <Button size="sm" variant="accent" className="h-8" disabled={scan.scanning} onClick={() => scanThisArea()}>
+              {scan.scanning ? scan.stage || "Scanning…" : "Scan this area"}
+            </Button>
+            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
               <input type="checkbox" checked={zoneFill} onChange={(e) => setZoneFill(e.target.checked)} /> Zone fill
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
@@ -310,19 +409,169 @@ export function MapWorkspace({ assumptions }: { assumptions: Assumptions }) {
               onFind={() => findAssemblies(selected)}
               finding={finding}
               onRetry={() => lastBBox.current && fetchParcels(lastBBox.current)}
+              centres={centres}
             />
           ) : (
             <div className="text-[12.5px] leading-relaxed text-muted">
               <h2 className="mb-2 text-[15px] font-semibold text-ink">Development map</h2>
-              <p>Search a Sydney suburb or address, then click a residential parcel to see its NSW planning controls.</p>
+              <p>Three ways to work:</p>
+              <ul className="mt-2 list-disc space-y-1.5 pl-4">
+                <li>
+                  <strong className="text-ink">Search property</strong> — analyse a known site.
+                </li>
+                <li>
+                  <strong className="text-ink">Find assemblies</strong> — start from a selected parcel (2–{assumptions.maxAssemblySize} lots).
+                </li>
+                <li>
+                  <strong className="text-ink">Scan this area</strong> — auto-discover assemblies without picking a start lot.
+                </li>
+              </ul>
               <p className="mt-2">
-                <strong className="text-ink">Find assemblies</strong> tests connected combinations of 2–{assumptions.maxAssemblySize} adjoining lots and ranks them by acquisition headroom and opportunity score. The largest assembly is not always the best. Shift-click lots to build an assembly manually.
+                Use <strong className="text-ink">Radar</strong> in the nav to find promising precincts (e.g. LMR centre catchments), then scan.
               </p>
             </div>
           )}
         </div>
 
         {findError && <div className="mx-4 mb-3 rounded-[3px] border border-red-200 bg-red-50 p-2 text-[12px] text-bad">{findError}</div>}
+        {scan.error && <div className="mx-4 mb-3 rounded-[3px] border border-red-200 bg-red-50 p-2 text-[12px] text-bad">{scan.error}</div>}
+
+        {!!scan.candidates.length && (
+          <div className="border-t border-line p-4" ref={candidatesRef}>
+            <div className="flex items-baseline justify-between gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Top opportunities in scan</h3>
+              <span className="text-[10.5px] text-muted">
+                {scan.parcelsEligible}/{scan.parcelsConsidered} eligible · {scan.assembliesGenerated} combos
+              </span>
+            </div>
+            {scan.messages.map((m) => (
+              <p key={m} className="mt-1 text-[11px] text-amber-900">
+                {m}
+              </p>
+            ))}
+            <div className="mt-3 space-y-2">
+              {scan.families.map((fam) => {
+                const c = fam.best;
+                const open = scanExpanded === fam.familyId;
+                return (
+                  <div
+                    key={fam.familyId}
+                    onMouseEnter={() => setHoverKey(c.key)}
+                    onMouseLeave={() => setHoverKey(null)}
+                    onClick={() => setActiveKey(c.key)}
+                    className={cx("cursor-pointer rounded-[3px] border p-3 transition-colors", activeKey === c.key ? "border-accent bg-orange-50/40" : "border-line hover:border-accent/60")}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-[12.5px] font-semibold">
+                          #{c.rank} · {c.locationLabel}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-muted">
+                          {c.lotCount} lots · {c.owners} owners · {sqm(c.siteAreaSqm)}
+                          {c.lmrCentre ? ` · near ${c.lmrCentre}` : ""}
+                        </div>
+                      </div>
+                      <ScoreBadge score={c.score.score} />
+                    </div>
+                    <div className="num mt-2 grid grid-cols-3 gap-1 text-[11.5px]">
+                      <div>
+                        <div className="text-[10px] uppercase text-muted">LEP FSR</div>
+                        {c.lepFsr != null ? fsr(c.lepFsr) : "—"}
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-muted">Effective FSR</div>
+                        <span className="font-semibold">{c.effectiveFsr != null ? fsr(c.effectiveFsr) : "—"}</span>
+                        {c.effectiveCertainty === "REQUIRES_PLANNING_CONFIRMATION" && <div className="text-[9.5px] font-sans text-amber-800">Confirm</div>}
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-muted">Units (ind.)</div>
+                        {c.indicativeUnits}
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-muted">Existing</div>
+                        {money(c.existingValue, { compact: true })}
+                        {c.existingValueEstimated ? "*" : ""}
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-muted">Max payable</div>
+                        {money(c.maxPayable, { compact: true })}
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-muted">Headroom</div>
+                        <span className="font-semibold text-good">{money(c.headroom, { compact: true })}</span>
+                      </div>
+                    </div>
+                    {!!c.constraints.length && <div className="mt-2 text-[10.5px] text-muted">{c.constraints.join(" · ")}</div>}
+                    <ul className="mt-2 space-y-0.5 text-[11.5px]">
+                      {c.scoreFactors.slice(0, 3).map((f) => (
+                        <li key={f.text} className={f.sign === "+" ? "text-good" : "text-bad"}>
+                          {f.sign === "+" ? "+" : "−"} {f.text}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={saving}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          save(c.lotIds);
+                        }}
+                      >
+                        Analyse
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAssembly(c.lotIds);
+                          setSelectedId(c.lotIds[0] ?? null);
+                        }}
+                      >
+                        View on map
+                      </Button>
+                      {!!fam.alternatives.length && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setScanExpanded(open ? null : fam.familyId);
+                          }}
+                        >
+                          {open ? "Hide" : `${fam.alternatives.length} alternatives`}
+                        </Button>
+                      )}
+                    </div>
+                    {open && (
+                      <div className="mt-2 space-y-1 border-t border-line pt-2">
+                        {fam.alternatives.map((alt) => (
+                          <button
+                            key={alt.key}
+                            type="button"
+                            className="flex w-full items-center justify-between rounded-[2px] px-1 py-1 text-left text-[11px] hover:bg-canvas"
+                            onMouseEnter={() => setHoverKey(alt.key)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveKey(alt.key);
+                              setAssembly(alt.lotIds);
+                            }}
+                          >
+                            <span>
+                              {alt.lotCount} lots · {sqm(alt.siteAreaSqm)} · eff {alt.effectiveFsr != null ? fsr(alt.effectiveFsr) : "—"}
+                            </span>
+                            <span className="num text-good">{money(alt.headroom, { compact: true })}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {find && find.startId === selectedId && (
           <div className="border-t border-line p-4" ref={candidatesRef}>
