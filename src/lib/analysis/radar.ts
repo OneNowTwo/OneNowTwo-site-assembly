@@ -100,40 +100,78 @@ function scorePrecinctFromParcels(centre: NominatedCentre, parcels: { planning: 
 /** Greater Sydney-ish default bbox for radar centre discovery. */
 export const SYDNEY_RADAR_BBOX: BBox = { west: 150.7, south: -34.15, east: 151.35, north: -33.55 };
 
+/** Prefer these labels when present so V1 radar finishes quickly with useful precincts. */
+const PRIORITY_CENTRE_FRAGMENTS = [
+  "Balgowlah Stockland",
+  "Manly Vale",
+  "Dee Why",
+  "Neutral Bay",
+  "Crows Nest",
+  "Chatswood",
+  "Bondi Junction",
+  "Hurstville",
+  "Parramatta",
+  "Bankstown",
+];
+
+function pickCentresForRadar(centres: NominatedCentre[], want: number): NominatedCentre[] {
+  const picked: NominatedCentre[] = [];
+  const used = new Set<string>();
+  for (const frag of PRIORITY_CENTRE_FRAGMENTS) {
+    const hit = centres.find((c) => c.label.toLowerCase().includes(frag.toLowerCase()) && !used.has(c.id));
+    if (hit) {
+      picked.push(hit);
+      used.add(hit.id);
+    }
+    if (picked.length >= want) return picked;
+  }
+  for (const c of [...centres].sort((a, b) => a.label.localeCompare(b.label))) {
+    if (used.has(c.id)) continue;
+    picked.push(c);
+    used.add(c.id);
+    if (picked.length >= want) break;
+  }
+  return picked;
+}
+
+async function sampleCentre(centre: NominatedCentre, sampleRadiusM: number): Promise<PrecinctRadarRow | null> {
+  const sampleBox = bboxAround(centre.lng, centre.lat, sampleRadiusM);
+  const { parcels } = await getParcelsForBBox(sampleBox);
+  // Cap work for starter dynos — scoring only needs a representative sample.
+  const sample = parcels.slice(0, 80);
+  if (sample.length < 8) return null;
+  const base = scorePrecinctFromParcels(centre, sample);
+  const activity = await developmentActivityProvider.getActivityForPrecinct(centre.id);
+  return { ...base, activityStatus: activity.status, activityMessage: activity.message };
+}
+
 export async function buildOpportunityRadar(opts?: { bbox?: BBox; limit?: number; sampleRadiusM?: number }): Promise<{
   precincts: PrecinctRadarRow[];
   weights: typeof RADAR_WEIGHTS;
   messages: string[];
 }> {
   const bbox = opts?.bbox ?? SYDNEY_RADAR_BBOX;
-  const limit = opts?.limit ?? 8;
-  const sampleRadiusM = opts?.sampleRadiusM ?? 550;
+  const limit = opts?.limit ?? 5;
+  const sampleRadiusM = opts?.sampleRadiusM ?? 380;
   const messages: string[] = [
     "Precincts ranked from official SEPP (Housing) 2021 Town Centres Map + live EPI parcel samples.",
     "DEVELOPMENT ACTIVITY DATA NOT CONNECTED — competition/untapped index withheld.",
     "LMR eligibility uses straight-line screen only; walking catchment requires confirmation.",
+    "V1 samples a small set of priority centres for response time — not a full Sydney census.",
   ];
 
   const centres = await fetchNominatedCentres(bbox);
-  // V1: sample a bounded set of centres (performance). Prefer name diversity.
-  const sorted = [...centres].sort((a, b) => a.label.localeCompare(b.label));
-  const step = Math.max(1, Math.floor(sorted.length / Math.min(12, sorted.length || 1)));
-  const picked = sorted.filter((_, i) => i % step === 0).slice(0, 12);
+  const picked = pickCentresForRadar(centres, Math.min(limit, 5));
 
-  const settled = await Promise.allSettled(
-    picked.map(async (centre) => {
-      const sampleBox = bboxAround(centre.lng, centre.lat, sampleRadiusM);
-      const { parcels } = await getParcelsForBBox(sampleBox);
-      if (parcels.length < 8) return null;
-      const base = scorePrecinctFromParcels(centre, parcels);
-      const activity = await developmentActivityProvider.getActivityForPrecinct(centre.id);
-      return { ...base, activityStatus: activity.status, activityMessage: activity.message } satisfies PrecinctRadarRow;
-    }),
-  );
-
+  // Sequential sampling — parallel EPI queries overwhelm Render starter and time out.
   const rows: PrecinctRadarRow[] = [];
-  for (const r of settled) {
-    if (r.status === "fulfilled" && r.value) rows.push(r.value);
+  for (const centre of picked) {
+    try {
+      const row = await sampleCentre(centre, sampleRadiusM);
+      if (row) rows.push(row);
+    } catch {
+      // skip failed precinct sample
+    }
   }
 
   rows.sort((a, b) => b.score - a.score);
