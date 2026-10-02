@@ -6,6 +6,7 @@ import { cx } from "@/components/ui";
 
 const LINKS = [
   { href: "/map", label: "Map" },
+  { href: "/radar", label: "Radar" },
   { href: "/opportunities", label: "Opportunities" },
   { href: "/acquisitions", label: "Acquisitions" },
   { href: "/assumptions", label: "Assumptions" },

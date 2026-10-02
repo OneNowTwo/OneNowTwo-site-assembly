@@ -1,10 +1,13 @@
 "use client";
 
+import { useMemo } from "react";
 import type { ParcelData, FieldSource, FsrControl } from "@/lib/types";
 import { date, fsr, lotDp, sqm } from "@/lib/format";
 import { Badge, Button, LiveDataBadge, SourceTag } from "@/components/ui";
 import { APARTMENT_ZONES } from "@/lib/analysis/assembly";
 import type { Assumptions } from "@/lib/analysis/assumptions";
+import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
+import { resolveEffectiveControls } from "@/lib/analysis/effective-controls";
 
 function Row({ label, value, source, children }: { label: string; value: React.ReactNode; source?: FieldSource; children?: React.ReactNode }) {
   return (
@@ -102,6 +105,7 @@ export function ParcelPanel({
   onFind,
   finding,
   onRetry,
+  centres = [],
 }: {
   parcel: ParcelData;
   /** Kept for call-site compatibility; official FSR no longer uses silent assumptions. */
@@ -112,9 +116,11 @@ export function ParcelPanel({
   onFind: () => void;
   finding: boolean;
   onRetry: () => void;
+  centres?: NominatedCentre[];
 }) {
   void _unusedAssumptions;
   const pl = parcel.planning;
+  const effective = useMemo(() => resolveEffectiveControls(pl, parcel.centroid, centres), [pl, parcel.centroid, centres]);
   return (
     <div>
       <div className="flex items-start justify-between gap-2">
@@ -166,13 +172,53 @@ export function ParcelPanel({
               controls={pl.fsrControls ?? []}
               status={pl.fsrStatus ?? (pl.fsr != null ? "MAPPED" : "NO_MAPPED")}
             />
-            <Row label="Height of buildings" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
+            <div className="my-2 rounded-[3px] border border-line p-3">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Effective development controls</div>
+              <dl className="mt-2 space-y-1.5 text-[11.5px]">
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted">LEP control</dt>
+                  <dd className="num font-semibold">{effective.lep.fsr != null ? fsr(effective.lep.fsr) : "—"}{effective.lep.heightM != null ? ` · ${effective.lep.heightM} m` : ""}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted">State policy control</dt>
+                  <dd className="num text-right font-semibold">
+                    {effective.statePolicy ? (
+                      <>
+                        {effective.statePolicy.fsr != null ? fsr(effective.statePolicy.fsr) : "—"}
+                        {effective.statePolicy.heightM != null ? ` · ${effective.statePolicy.heightM} m` : ""}
+                      </>
+                    ) : (
+                      "Not applicable"
+                    )}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted">Modelled effective</dt>
+                  <dd className="num font-semibold">
+                    {effective.modelled.fsr != null ? fsr(effective.modelled.fsr) : "—"}
+                    {effective.modelled.heightM != null ? ` · ${effective.modelled.heightM} m` : ""}
+                  </dd>
+                </div>
+              </dl>
+              {effective.modelled.certainty === "REQUIRES_PLANNING_CONFIRMATION" && (
+                <div className="mt-2">
+                  <Badge tone="warn">Requires planning confirmation</Badge>
+                  <p className="mt-1 text-[10.5px] text-muted">
+                    {effective.lmr.centreName ?? "Nominated centre"} · ~{effective.lmr.distanceM} m straight-line ({effective.lmr.band.replaceAll("_", " ")}). Housing SEPP LMR uses walking distance — not confirmed here.
+                  </p>
+                </div>
+              )}
+              {effective.fsrUplift > 0 && (
+                <p className="mt-1 text-[10.5px] text-good">Modelled FSR uplift vs LEP: +{effective.fsrUplift.toFixed(2)}</p>
+              )}
+            </div>
+            <Row label="Height of buildings (LEP)" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
             <Row label="Minimum lot size" value={pl.minLotSizeSqm != null ? sqm(pl.minLotSizeSqm) : "Not mapped"} source={pl.sources.minLotSizeSqm} />
             <Row label="Heritage" value={pl.heritage ?? "Unknown"} source={pl.sources.heritage} />
             <Row label="Planning instrument" value={<span className="text-[12px] font-medium">{pl.planningInstrument ?? "—"}</span>} />
             <Row label="Local government area" value={pl.lga ?? "—"} />
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {pl.zone && !APARTMENT_ZONES.test(pl.zone) && <Badge tone="warn">Zone generally excludes apartments</Badge>}
+              {pl.zone && !APARTMENT_ZONES.test(pl.zone) && <Badge tone="warn">Zone generally excludes apartments under LEP alone</Badge>}
               {pl.heritage && pl.heritage !== "None mapped" && <Badge tone="bad">Heritage affected</Badge>}
               {parcel.planningStatus === "partial" && <Badge tone="warn">Some layers unavailable</Badge>}
             </div>

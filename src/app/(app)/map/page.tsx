@@ -4,6 +4,7 @@ import { getGlobalAssumptions } from "@/lib/opportunity-service";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Map — Site Assembly" };
 
-export default async function MapPage() {
-  return <MapWorkspace assumptions={await getGlobalAssumptions()} />;
+export default async function MapPage({ searchParams }: { searchParams: Promise<{ scan?: string }> }) {
+  const sp = await searchParams;
+  return <MapWorkspace assumptions={await getGlobalAssumptions()} initialScanQuery={sp.scan ?? null} />;
 }
