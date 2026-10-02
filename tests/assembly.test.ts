@@ -35,21 +35,23 @@ describe("adjacency", () => {
 });
 
 describe("assembly metrics", () => {
-  it("sums combined site area and area-weights FSR", () => {
+  it("sums combined site area and area-weights official FSR only", () => {
     const lots = [lot("A", 0, { fsr: 1 }), lot("B", 20, { fsr: 2 }), lot("C", 40, { fsr: null, zone: "R2", heightM: 8.5 })];
     const m = computeAssemblyMetrics(lots, { ...A, planningAdjustment: 1, revenueMode: "PER_SQM" });
     expect(m.totalAreaSqm).toBe(2100);
-    expect(m.theoreticalGfa).toBeCloseTo(700 * 1 + 700 * 2 + 700 * A.fallbackFsr);
+    // Lot C has no mapped FSR — contributes 0 (no silent fallback).
+    expect(m.theoreticalGfa).toBeCloseTo(700 * 1 + 700 * 2 + 0);
     expect(m.gfa).toBeCloseTo(m.theoreticalGfa);
-    expect(m.weightedFsr).toBeCloseTo((1 + 2 + A.fallbackFsr) / 3);
+    expect(m.weightedFsr).toBeCloseTo((700 + 1400) / 2100);
     expect(m.fsrEstimated).toBe(true);
+    expect(m.fsrUnmappedLots).toBe(1);
     expect(m.combinedValue).toBe(3_900_000);
   });
 
-  it("estimates FSR from the height control where none is mapped in apartment zones", () => {
-    // 12 m ÷ 3.1 m = 3 storeys × 45% coverage = 1.35:1
-    expect(effectiveFsr({ fsr: null, heightM: 12, zone: "R4" }, A)).toEqual({ fsr: 1.35, basis: "HEIGHT_ESTIMATE" });
-    expect(effectiveFsr({ fsr: null, heightM: 8.5, zone: "R2" }, A)).toEqual({ fsr: A.fallbackFsr, basis: "FALLBACK" });
+  it("does not invent official FSR from height; assumptions require allowAssumption", () => {
+    expect(effectiveFsr({ fsr: null, heightM: 12, zone: "R4" }, A)).toEqual({ fsr: 0, basis: "NO_MAPPED" });
+    expect(effectiveFsr({ fsr: null, heightM: 12, zone: "R4" }, A, { allowAssumption: true })).toEqual({ fsr: 1.35, basis: "HEIGHT_ESTIMATE" });
+    expect(effectiveFsr({ fsr: null, heightM: 8.5, zone: "R2" }, A, { allowAssumption: true })).toEqual({ fsr: A.fallbackFsr, basis: "FALLBACK" });
     expect(effectiveFsr({ fsr: 2, heightM: null, zone: "R2" }, A).basis).toBe("OFFICIAL");
   });
 

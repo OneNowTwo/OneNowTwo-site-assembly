@@ -13,6 +13,8 @@ export function parcelToAnalysisLot(p: ParcelData): AnalysisLot {
     zone: p.planning?.zone ?? null,
     zoneName: p.planning?.zoneName ?? null,
     fsr: p.planning?.fsr ?? null,
+    fsrStatus: p.planning?.fsrStatus ?? null,
+    fsrControls: p.planning?.fsrControls ?? [],
     heightM: p.planning?.heightM ?? null,
     minLotSizeSqm: p.planning?.minLotSizeSqm ?? null,
     heritage: p.planning?.heritage ?? null,

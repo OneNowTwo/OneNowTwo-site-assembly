@@ -3,6 +3,7 @@ import type { UnitMixRow } from "./unit-mix";
 import { computeYield } from "./yield";
 import { acquisitionHeadroom, computeFeasibility } from "./feasibility";
 import { type Adjacency, isConnected } from "./geometry";
+import type { FsrControl, FsrMappedStatus } from "@/lib/types";
 
 export interface AnalysisLot {
   id: string;
@@ -11,6 +12,9 @@ export interface AnalysisLot {
   zone: string | null;
   zoneName: string | null;
   fsr: number | null;
+  /** Official FSR controls from NSW Planning Portal intersection (when known). */
+  fsrStatus?: FsrMappedStatus | null;
+  fsrControls?: FsrControl[] | null;
   heightM: number | null;
   minLotSizeSqm: number | null;
   heritage: string | null;
@@ -32,15 +36,37 @@ export function isHeritageItem(h: string | null): boolean {
 }
 
 /**
- * FSR used for analysis when the LEP maps none (e.g. North Sydney residential zones are height-controlled):
- * apartment-capable zones get a SYSTEM ESTIMATE of storeys under the height control × site coverage;
- * other zones get the fallback assumption.
+ * Official theoretical GFA for one parcel from mapped FSR controls only.
+ * Split parcels: Σ (intersection area × FSR). Unmapped residual contributes 0.
+ * No silent generic fallback.
+ */
+export function officialParcelTheoreticalGfa(l: Pick<AnalysisLot, "areaSqm" | "fsr" | "fsrControls">): number {
+  if (l.fsrControls && l.fsrControls.length > 0) {
+    return l.fsrControls.reduce((s, c) => s + c.intersectionAreaSqm * c.fsr, 0);
+  }
+  if (l.fsr != null) return l.areaSqm * l.fsr;
+  return 0;
+}
+
+/**
+ * FSR used for analysis.
+ * - OFFICIAL: mapped NSW EPI FSR (or weighted equivalent of split controls).
+ * - HEIGHT_ESTIMATE / FALLBACK: only when `allowAssumption` is true (explicit discovery aid / labelled user path).
+ * - NO_MAPPED: no official polygon intersects; fsr is 0 for official GFA maths.
  */
 export function effectiveFsr(
-  l: Pick<AnalysisLot, "fsr" | "heightM" | "zone">,
+  l: Pick<AnalysisLot, "fsr" | "heightM" | "zone" | "fsrControls">,
   a: Pick<Assumptions, "fallbackFsr" | "floorToFloorM" | "siteCoverage">,
-): { fsr: number; basis: "OFFICIAL" | "HEIGHT_ESTIMATE" | "FALLBACK" } {
+  opts?: { allowAssumption?: boolean },
+): { fsr: number; basis: "OFFICIAL" | "HEIGHT_ESTIMATE" | "FALLBACK" | "NO_MAPPED" } {
+  if (l.fsrControls && l.fsrControls.length > 0) {
+    if (l.fsr != null) return { fsr: l.fsr, basis: "OFFICIAL" };
+    const gfa = l.fsrControls.reduce((s, c) => s + c.intersectionAreaSqm * c.fsr, 0);
+    const area = l.fsrControls.reduce((s, c) => s + c.intersectionAreaSqm, 0);
+    if (area > 0) return { fsr: Math.round((gfa / area) * 1000) / 1000, basis: "OFFICIAL" };
+  }
   if (l.fsr != null) return { fsr: l.fsr, basis: "OFFICIAL" };
+  if (!opts?.allowAssumption) return { fsr: 0, basis: "NO_MAPPED" };
   if (l.heightM != null && l.zone && APARTMENT_ZONES.test(l.zone)) {
     const storeys = Math.max(1, Math.floor(l.heightM / a.floorToFloorM));
     return { fsr: Math.round(storeys * a.siteCoverage * 100) / 100, basis: "HEIGHT_ESTIMATE" };
@@ -60,8 +86,14 @@ export interface AssemblyMetrics {
   totalAreaSqm: number;
   zones: string[];
   zoneCompatible: boolean;
+  /** Equivalent assembly FSR = official theoretical GFA ÷ site area (0 when no mapped FSR). */
   weightedFsr: number;
+  /** True when at least one lot has no official mapped FSR. */
   fsrEstimated: boolean;
+  /** Lots with no official mapped FSR control. */
+  fsrUnmappedLots: number;
+  /** Lots with split official FSR controls. */
+  fsrSplitLots: number;
   heightMinM: number | null;
   heightMaxM: number | null;
   heritageLots: number;
@@ -94,8 +126,11 @@ export interface AssemblyMetrics {
 export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?: Adjacency, unitMix?: UnitMixRow[]): AssemblyMetrics {
   const totalAreaSqm = lots.reduce((s, l) => s + l.areaSqm, 0);
   const zones = [...new Set(lots.map((l) => l.zone ?? "Unknown"))];
-  const fsrEstimated = lots.some((l) => l.fsr == null);
-  const theoreticalFromLots = lots.reduce((s, l) => s + l.areaSqm * effectiveFsr(l, a).fsr, 0);
+  const fsrUnmappedLots = lots.filter((l) => l.fsr == null && !(l.fsrControls && l.fsrControls.length)).length;
+  const fsrSplitLots = lots.filter((l) => l.fsrStatus === "SPLIT" || (l.fsrControls != null && l.fsrControls.length > 1)).length;
+  const fsrEstimated = fsrUnmappedLots > 0;
+  // Per-parcel official FSR × area — never a silent generic fallback.
+  const theoreticalFromLots = lots.reduce((s, l) => s + officialParcelTheoreticalGfa(l), 0);
   const weightedFsr = totalAreaSqm > 0 ? theoreticalFromLots / totalAreaSqm : 0;
   const heights = lots.map((l) => l.heightM).filter((h): h is number => h != null);
   const minLotSizes = lots.map((l) => l.minLotSizeSqm).filter((m): m is number => m != null);
@@ -132,6 +167,8 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
     zoneCompatible: zones.length === 1 && zones[0] !== "Unknown",
     weightedFsr,
     fsrEstimated,
+    fsrUnmappedLots,
+    fsrSplitLots,
     heightMinM: heights.length ? Math.min(...heights) : null,
     heightMaxM: heights.length ? Math.max(...heights) : null,
     heritageLots: lots.filter((l) => hasHeritage(l.heritage)).length,
@@ -156,7 +193,10 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
     marginOnCost: f.marginOnCost,
     upliftRatio: combinedValue > 0 ? f.maxAcquisitionBudget / combinedValue : 0,
     planningUnknownLots: lots.filter((l) => !l.planningKnown).length,
-    connected: adj ? isConnected(lots.map((l) => l.id), adj) : true,
+    connected: adj ? isConnected(
+      lots.map((l) => l.id),
+      adj,
+    ) : true,
     criticalLotCount: 0,
   };
 }
@@ -214,9 +254,13 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunitySc
   else factors.push({ sign: "-", text: `max payable only ${m.upliftRatio.toFixed(2)}× existing value — little assembly uplift` });
 
   const planningCapacity = clamp01(m.weightedFsr / 2) * 80 + clamp01((m.heightMinM ?? 0) / 24) * 20;
-  const fsrText = `FSR ${m.weightedFsr.toFixed(2)}:1${m.fsrEstimated ? " (estimated — no FSR mapped)" : ""}`;
+  const fsrText =
+    m.fsrUnmappedLots > 0
+      ? `official FSR ${m.weightedFsr.toFixed(2)}:1 (${m.fsrUnmappedLots} lot${m.fsrUnmappedLots === 1 ? "" : "s"} with no mapped FSR)`
+      : `official FSR ${m.weightedFsr.toFixed(2)}:1`;
   if (m.weightedFsr >= 1.2) factors.push({ sign: "+", text: `${fsrText} — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA` });
   else factors.push({ sign: "-", text: `${fsrText} limits apartment yield` });
+  if (m.fsrSplitLots > 0) factors.push({ sign: "-", text: `${count(m.fsrSplitLots, "lot")} with split mapped FSR controls` });
   if (m.heightMinM != null && m.heightMinM >= 15) factors.push({ sign: "+", text: `${m.heightMinM} m height control` });
 
   let simplicity = 100 - (m.lotCount - 2) * 15 - m.strataLots * 25;
@@ -257,6 +301,10 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunitySc
   if (m.planningUnknownLots) {
     planningRisk -= 20;
     factors.push({ sign: "-", text: `planning data unavailable for ${count(m.planningUnknownLots, "lot")}` });
+  }
+  if (m.fsrUnmappedLots) {
+    planningRisk -= 15;
+    factors.push({ sign: "-", text: `no mapped FSR control for ${count(m.fsrUnmappedLots, "lot")} — enter a USER ASSUMPTION to model yield` });
   }
   for (const issue of m.minLotSizeIssues) {
     planningRisk -= 20;

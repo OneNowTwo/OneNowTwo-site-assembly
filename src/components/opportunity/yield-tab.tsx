@@ -36,9 +36,13 @@ export function YieldTab() {
               <Field
                 label="Theoretical FSR (:1)"
                 tag={<SourceTag kind={site.fsrSource === "OVERRIDE" ? "ASSUMPTION" : site.fsrSource === "OFFICIAL" ? "OFFICIAL" : "ESTIMATE"} />}
-                hint={`Controls: ${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (estimated)" : ""}. Clear to use controls.`}
+                hint={
+                  site.fsrSource === "NO_MAPPED"
+                    ? "NO MAPPED FSR on included lots — enter a USER ASSUMPTION here."
+                    : `Official equivalent: ${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (some lots unmapped)" : ""}. Clear to use official controls.`
+                }
               >
-                <NumberField value={dto.inputs.fsrOverride ?? site.fsr} dp={2} onCommit={(v) => updateInputs({ fsrOverride: v && Math.abs(v - analysis.metrics.weightedFsr) > 0.001 ? v : null })} />
+                <NumberField value={dto.inputs.fsrOverride ?? (site.fsrSource === "NO_MAPPED" ? null : site.fsr)} dp={2} onCommit={(v) => updateInputs({ fsrOverride: v && Math.abs(v - analysis.metrics.weightedFsr) > 0.001 ? v : null })} />
               </Field>
               <Field label="Height limit (m)" tag={<SourceTag kind={site.heightSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />} hint={`Mapped: ${analysis.metrics.heightMinM ?? "—"} m`}>
                 <NumberField value={dto.inputs.heightOverrideM ?? site.heightLimitM} onCommit={(v) => updateInputs({ heightOverrideM: v && v !== analysis.metrics.heightMinM ? v : null })} />

@@ -1,6 +1,6 @@
 import type { Polygon, MultiPolygon } from "geojson";
 import { prisma } from "@/lib/db";
-import type { ParcelData } from "@/lib/types";
+import type { ParcelData, FsrControl, FsrMappedStatus } from "@/lib/types";
 import { mergeAssumptions, parseOpportunityInputs, DEFAULT_ASSUMPTIONS, type Assumptions } from "@/lib/analysis/assumptions";
 import { analyseOpportunity, type OpportunityLot } from "@/lib/analysis/opportunity";
 import { lotDp } from "@/lib/format";
@@ -33,25 +33,31 @@ export function lotLabel(p: { address: string | null; lot: string | null; sectio
 }
 
 export function toOpportunityLots(opp: OpportunityWithRelations): OpportunityLot[] {
-  return opp.parcels.map((op) => ({
-    id: op.id,
-    label: lotLabel(op.parcel),
-    areaSqm: op.parcel.areaSqm,
-    zone: op.parcel.zone,
-    zoneName: op.parcel.zoneName,
-    fsr: op.parcel.fsr,
-    heightM: op.parcel.heightM,
-    minLotSizeSqm: op.parcel.minLotSizeSqm,
-    heritage: op.parcel.heritage,
-    isStrata: op.parcel.isStrata,
-    planningKnown: op.parcel.planningCheckedAt != null,
-    marketValue: op.marketValue ?? (op.landValuePerSqm ? op.landValuePerSqm * op.parcel.areaSqm : null),
-    geometry: op.parcel.geometry as unknown as Polygon | MultiPolygon,
-    included: op.included,
-    maxAllocationOverride: op.maxAllocationOverride,
-    openingOfferOverride: op.openingOfferOverride,
-    strategicWeight: op.strategicWeight,
-  }));
+  return opp.parcels.map((op) => {
+    const snap = op.parcel.snapshots[0];
+    const snapData = (snap?.data ?? {}) as { fsrStatus?: FsrMappedStatus; fsrControls?: FsrControl[] };
+    return {
+      id: op.id,
+      label: lotLabel(op.parcel),
+      areaSqm: op.parcel.areaSqm,
+      zone: op.parcel.zone,
+      zoneName: op.parcel.zoneName,
+      fsr: op.parcel.fsr,
+      fsrStatus: snapData.fsrStatus ?? (op.parcel.fsr != null ? "MAPPED" : op.parcel.planningCheckedAt ? "NO_MAPPED" : null),
+      fsrControls: snapData.fsrControls ?? [],
+      heightM: op.parcel.heightM,
+      minLotSizeSqm: op.parcel.minLotSizeSqm,
+      heritage: op.parcel.heritage,
+      isStrata: op.parcel.isStrata,
+      planningKnown: op.parcel.planningCheckedAt != null,
+      marketValue: op.marketValue ?? (op.landValuePerSqm ? op.landValuePerSqm * op.parcel.areaSqm : null),
+      geometry: op.parcel.geometry as unknown as Polygon | MultiPolygon,
+      included: op.included,
+      maxAllocationOverride: op.maxAllocationOverride,
+      openingOfferOverride: op.openingOfferOverride,
+      strategicWeight: op.strategicWeight,
+    };
+  });
 }
 
 function serializeComp(c: OpportunityWithRelations["comparableSales"][number]): ComparableSaleDTO {
@@ -125,7 +131,11 @@ export function serializeOpportunity(opp: OpportunityWithRelations, globalAssump
     lots: opp.parcels.map((op) => {
       const p = op.parcel;
       const snap = p.snapshots[0];
-      const snapData = (snap?.data ?? {}) as { sources?: LotDTO["planningSources"] };
+      const snapData = (snap?.data ?? {}) as {
+        sources?: LotDTO["planningSources"];
+        fsrStatus?: FsrMappedStatus;
+        fsrControls?: FsrControl[];
+      };
       return {
         id: op.id,
         parcelId: p.id,
@@ -144,6 +154,8 @@ export function serializeOpportunity(opp: OpportunityWithRelations, globalAssump
         zone: p.zone,
         zoneName: p.zoneName,
         fsr: p.fsr,
+        fsrStatus: snapData.fsrStatus ?? (p.fsr != null ? "MAPPED" : p.planningCheckedAt ? "NO_MAPPED" : null),
+        fsrControls: snapData.fsrControls ?? [],
         heightM: p.heightM,
         minLotSizeSqm: p.minLotSizeSqm,
         heritage: p.heritage,

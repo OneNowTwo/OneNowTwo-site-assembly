@@ -189,7 +189,7 @@ export function OverviewTab() {
         </Panel>
         <Panel title="Development summary (base case)">
           <div className="grid grid-cols-3 gap-4">
-            <Stat size="md" label="FSR used" value={fsr(analysis.site.fsr)} sub={analysis.site.fsrSource === "OVERRIDE" ? "User assumption" : analysis.site.fsrSource === "OFFICIAL" ? "Official controls" : "Estimated"} />
+            <Stat size="md" label="FSR used" value={analysis.site.fsrSource === "NO_MAPPED" ? "—" : fsr(analysis.site.fsr)} sub={analysis.site.fsrSource === "OVERRIDE" ? "USER ASSUMPTION" : analysis.site.fsrSource === "OFFICIAL" ? "OFFICIAL MAPPED FSR" : "NO MAPPED FSR"} />
             <Stat size="md" label="Theoretical GFA" value={sqm(y.theoreticalGfa)} sub="Site × FSR" />
             <Stat size="md" label="Achievable GFA" value={sqm(y.achievableGfa)} sub={y.gfaSource === "OVERRIDE" ? "Manual override" : `${Math.round(y.planningAdjustment * 100)}% planning adj.`} />
           </div>

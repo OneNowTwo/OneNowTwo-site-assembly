@@ -1,7 +1,6 @@
-import pointOnFeature from "@turf/point-on-feature";
 import type { Polygon, MultiPolygon } from "geojson";
 import { prisma } from "@/lib/db";
-import type { BBox, ParcelData, PlanningControls } from "@/lib/types";
+import type { BBox, FsrControl, FsrMappedStatus, ParcelData, PlanningControls } from "@/lib/types";
 import { clampBBox, nswCadastreProvider } from "@/lib/data-sources/nsw-cadastre";
 import { nswPlanningProvider } from "@/lib/data-sources/nsw-planning";
 import { UpstreamError } from "@/lib/data-sources/http";
@@ -15,21 +14,25 @@ export interface ParcelQueryResult {
   bbox: BBox;
 }
 
+function planningFromRow(row: Parcel): PlanningControls | null {
+  if (row.planningCheckedAt == null) return null;
+  return {
+    zone: row.zone,
+    zoneName: row.zoneName,
+    fsr: row.fsr,
+    fsrStatus: (row.fsr != null ? "MAPPED" : "NO_MAPPED") as FsrMappedStatus,
+    fsrControls: [] as FsrControl[],
+    heightM: row.heightM,
+    minLotSizeSqm: row.minLotSizeSqm,
+    heritage: row.heritage,
+    planningInstrument: row.planningInstrument,
+    lga: row.lga,
+    sources: {},
+  };
+}
+
 export function parcelFromRow(row: Parcel): ParcelData {
-  const planning: PlanningControls | null =
-    row.planningCheckedAt == null
-      ? null
-      : {
-          zone: row.zone,
-          zoneName: row.zoneName,
-          fsr: row.fsr,
-          heightM: row.heightM,
-          minLotSizeSqm: row.minLotSizeSqm,
-          heritage: row.heritage,
-          planningInstrument: row.planningInstrument,
-          lga: row.lga,
-          sources: {},
-        };
+  const planning = planningFromRow(row);
   return {
     externalParcelId: row.externalParcelId,
     source: row.source === "MANUAL" ? "MANUAL" : "CACHED_NSW",
@@ -82,12 +85,10 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
   let planningStatus: ParcelQueryResult["planningStatus"] = "live";
   let controls = new Map<string, PlanningControls>();
   try {
-    controls = await nswPlanningProvider.getControlsForPoints(
+    // Pass REAL parcel geometries so FSR is intersected against the official EPI layer.
+    controls = await nswPlanningProvider.getControlsForParcels(
       bbox,
-      base.map((p) => ({
-        id: p.externalParcelId,
-        point: pointOnFeature({ type: "Feature", properties: {}, geometry: p.geometry }).geometry,
-      })),
+      base.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
     );
     const sample = controls.values().next().value as PlanningControls | undefined;
     if (sample && Object.keys(sample.sources).length < 5) {
@@ -121,11 +122,11 @@ export async function refreshPlanningForParcels(rows: Parcel[]) {
   const lngs = rows.map((r) => r.centroidLng);
   const lats = rows.map((r) => r.centroidLat);
   const bbox: BBox = { west: Math.min(...lngs), east: Math.max(...lngs), south: Math.min(...lats), north: Math.max(...lats) };
-  return nswPlanningProvider.getControlsForPoints(
+  return nswPlanningProvider.getControlsForParcels(
     bbox,
     rows.map((r) => ({
       id: r.externalParcelId,
-      point: pointOnFeature({ type: "Feature", properties: {}, geometry: r.geometry as unknown as Polygon }).geometry,
+      geometry: r.geometry as unknown as Polygon | MultiPolygon,
     })),
   );
 }

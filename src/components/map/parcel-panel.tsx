@@ -1,9 +1,9 @@
 "use client";
 
-import type { ParcelData, FieldSource } from "@/lib/types";
+import type { ParcelData, FieldSource, FsrControl } from "@/lib/types";
 import { date, fsr, lotDp, sqm } from "@/lib/format";
 import { Badge, Button, LiveDataBadge, SourceTag } from "@/components/ui";
-import { APARTMENT_ZONES, effectiveFsr } from "@/lib/analysis/assembly";
+import { APARTMENT_ZONES } from "@/lib/analysis/assembly";
 import type { Assumptions } from "@/lib/analysis/assumptions";
 
 function Row({ label, value, source, children }: { label: string; value: React.ReactNode; source?: FieldSource; children?: React.ReactNode }) {
@@ -15,7 +15,7 @@ function Row({ label, value, source, children }: { label: string; value: React.R
       </div>
       {source && (
         <div className="mt-0.5 text-right text-[10.5px] text-muted">
-          {source.source.replace(/^NSW Planning Portal — EPI Primary Planning Layers — /, "NSW Planning Portal · ")} · Checked {date(source.retrievedAt)}
+          {source.source.replace(/^NSW Planning Portal — EPI Primary Planning Layers — /, "NSW Planning Portal · ").replace(/^NSW Planning Portal — Environmental Planning Instrument — /, "NSW Planning Portal · ")} · Checked {date(source.retrievedAt)}
         </div>
       )}
       {children}
@@ -23,9 +23,79 @@ function Row({ label, value, source, children }: { label: string; value: React.R
   );
 }
 
+function OfficialFsrBlock({
+  value,
+  instrument,
+  source,
+  controls,
+  status,
+}: {
+  value: number | null;
+  instrument: string | null;
+  source?: FieldSource;
+  controls: FsrControl[];
+  status: string;
+}) {
+  if (status === "UNAVAILABLE") {
+    return (
+      <div className="my-2 rounded-[3px] border border-amber-300 bg-amber-50 p-3">
+        <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-amber-900">Official FSR</div>
+        <div className="mt-1 text-[13px] font-semibold text-amber-950">Layer temporarily unavailable</div>
+      </div>
+    );
+  }
+  if (status === "NO_MAPPED" || value == null) {
+    return (
+      <div className="my-2 rounded-[3px] border border-line bg-canvas p-3">
+        <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Official FSR</div>
+        <div className="mt-1 text-[15px] font-semibold tracking-tight">NO MAPPED FSR CONTROL FOUND</div>
+        <p className="mt-1 text-[11px] text-muted">No official NSW EPI Floor Space Ratio polygon intersects this parcel. Enter a USER ASSUMPTION on the Yield tab if you need to model capacity — it stays separate from official data.</p>
+        {source && <div className="mt-1 text-[10.5px] text-muted">Checked {date(source.retrievedAt)} · NSW Planning Portal</div>}
+      </div>
+    );
+  }
+  return (
+    <div className="my-2 rounded-[3px] border border-sky-200 bg-sky-50/60 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-sky-900">Official FSR</div>
+        <SourceTag kind="OFFICIAL" />
+      </div>
+      <div className="num mt-1 text-[28px] font-semibold leading-none text-ink">{fsr(value)}</div>
+      {status === "SPLIT" && (
+        <div className="mt-2 space-y-1">
+          <div className="text-[11px] font-semibold text-sky-950">Split mapped controls</div>
+          {controls.map((c, i) => (
+            <div key={`${c.fsr}-${i}`} className="flex justify-between text-[12px]">
+              <span>
+                FSR {fsr(c.fsr)}
+              </span>
+              <span className="num text-muted">{Math.round(c.intersectionShare * 100)}% of parcel</span>
+            </div>
+          ))}
+          <div className="text-[10.5px] text-muted">Equivalent FSR {fsr(value)} used for theoretical GFA only — controls are not averaged for display.</div>
+        </div>
+      )}
+      <dl className="mt-2 space-y-0.5 text-[11px] text-sky-950/90">
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Source</dt>
+          <dd>NSW Planning Portal</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Instrument</dt>
+          <dd className="text-right">{controls[0]?.epiName ?? instrument ?? "—"}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted">Checked</dt>
+          <dd>{date(source?.retrievedAt ?? null)}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
 export function ParcelPanel({
   parcel,
-  assumptions,
+  assumptions: _unusedAssumptions,
   inAssembly,
   onAdd,
   onRemove,
@@ -34,6 +104,7 @@ export function ParcelPanel({
   onRetry,
 }: {
   parcel: ParcelData;
+  /** Kept for call-site compatibility; official FSR no longer uses silent assumptions. */
   assumptions: Assumptions;
   inAssembly: boolean;
   onAdd: () => void;
@@ -42,8 +113,8 @@ export function ParcelPanel({
   finding: boolean;
   onRetry: () => void;
 }) {
+  void _unusedAssumptions;
   const pl = parcel.planning;
-  const est = pl ? effectiveFsr({ fsr: pl.fsr, heightM: pl.heightM, zone: pl.zone }, assumptions) : null;
   return (
     <div>
       <div className="flex items-start justify-between gap-2">
@@ -88,14 +159,13 @@ export function ParcelPanel({
         ) : (
           <>
             <Row label="Zoning" value={pl.zone ? `${pl.zone} ${pl.zoneName ?? ""}` : "Not mapped"} source={pl.sources.zone} />
-            <Row label="Floor space ratio" value={pl.fsr != null ? fsr(pl.fsr) : "Not mapped"} source={pl.sources.fsr}>
-              {pl.fsr == null && est && (
-                <div className="mt-1 flex items-center justify-end gap-1.5 text-[11px] text-muted">
-                  <SourceTag kind="ESTIMATE" />
-                  {est.basis === "HEIGHT_ESTIMATE" ? `≈ ${fsr(est.fsr)} from height control` : `${fsr(est.fsr)} fallback assumption`}
-                </div>
-              )}
-            </Row>
+            <OfficialFsrBlock
+              value={pl.fsr}
+              instrument={pl.planningInstrument}
+              source={pl.sources.fsr}
+              controls={pl.fsrControls ?? []}
+              status={pl.fsrStatus ?? (pl.fsr != null ? "MAPPED" : "NO_MAPPED")}
+            />
             <Row label="Height of buildings" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
             <Row label="Minimum lot size" value={pl.minLotSizeSqm != null ? sqm(pl.minLotSizeSqm) : "Not mapped"} source={pl.sources.minLotSizeSqm} />
             <Row label="Heritage" value={pl.heritage ?? "Unknown"} source={pl.sources.heritage} />

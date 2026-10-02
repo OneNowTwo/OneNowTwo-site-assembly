@@ -157,7 +157,7 @@ export const ASSUMPTION_META: Record<
   connectivityWeight: { label: "Connectivity weight (offer allocation)", unit: "ratio", group: "Acquisition" },
   minViableSiteAreaSqm: { label: "Minimum viable site area", unit: "sqm", group: "Acquisition" },
   maxAssemblySize: { label: "Max lots in automatic assembly", unit: "count", group: "Acquisition" },
-  fallbackFsr: { label: "Fallback FSR where none mapped (system estimate)", unit: "ratio", group: "Discovery" },
+  fallbackFsr: { label: "Discovery-only FSR assumption where none mapped (never shown as official)", unit: "ratio", group: "Discovery", help: "Used only if allowAssumption is explicitly enabled for ranking. Official yield never silently uses this." },
   existingValuePerSqm: { label: "Existing value estimate where none entered ($/sqm land)", unit: "moneyPerSqm", group: "Discovery" },
 };
 

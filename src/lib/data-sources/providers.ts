@@ -1,5 +1,5 @@
 import type { BBox, ParcelData, PlanningControls } from "@/lib/types";
-import type { Point } from "geojson";
+import type { MultiPolygon, Point, Polygon } from "geojson";
 
 /**
  * Provider interfaces. V1 ships NSW government adapters plus manual-entry providers;
@@ -15,8 +15,15 @@ export interface CadastreProvider {
 
 export interface PlanningDataProvider {
   readonly name: string;
-  /** Planning controls for each point (keyed by caller id). Must reject with UpstreamError if the service is down. */
-  getControlsForPoints(bbox: BBox, points: { id: string; point: Point }[]): Promise<Map<string, PlanningControls>>;
+  /**
+   * Planning controls for each cadastral parcel (keyed by caller id).
+   * FSR must be resolved by intersecting the REAL parcel geometry against the
+   * official NSW EPI Floor Space Ratio layer — not a silent generic assumption.
+   * Must reject with UpstreamError if the service is down.
+   */
+  getControlsForParcels(bbox: BBox, parcels: { id: string; geometry: Polygon | MultiPolygon }[]): Promise<Map<string, PlanningControls>>;
+  /** Legacy point lookup — prefer getControlsForParcels. */
+  getControlsForPoints?(bbox: BBox, points: { id: string; point: Point }[]): Promise<Map<string, PlanningControls>>;
 }
 
 export interface GeocodeResult {
