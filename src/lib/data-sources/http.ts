@@ -38,7 +38,17 @@ export async function fetchJson<T>(
         cache: "no-store",
       });
       if (!res.ok) throw new UpstreamError(`${service} responded ${res.status}`, service, res.status);
-      const body = (await res.json()) as T & { error?: { message?: string } };
+      const text = await res.text();
+      const head = text.slice(0, 200).trimStart().toLowerCase();
+      if (head.startsWith("<!doctype") || head.startsWith("<html")) {
+        throw new UpstreamError(`${service} returned HTML instead of JSON`, service, res.status);
+      }
+      let body: T & { error?: { message?: string } };
+      try {
+        body = JSON.parse(text) as T & { error?: { message?: string } };
+      } catch {
+        throw new UpstreamError(`${service} returned invalid JSON`, service, res.status);
+      }
       if (body && typeof body === "object" && "error" in body && body.error) {
         throw new UpstreamError(`${service}: ${body.error.message ?? "service error"}`, service);
       }

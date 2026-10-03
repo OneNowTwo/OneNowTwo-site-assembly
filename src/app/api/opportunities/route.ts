@@ -10,37 +10,41 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET() {
-  const rows = await prisma.opportunity.findMany({
-    orderBy: { updatedAt: "desc" },
-    include: { parcels: { select: { acquisitionStage: true, included: true } } },
-  });
-  return NextResponse.json(
-    rows.map((o) => {
-      const inc = o.parcels.filter((p) => p.included);
-      return {
-        id: o.id,
-        name: o.name,
-        status: o.status,
-        suburb: o.suburb,
-        lga: o.lga,
-        demoFinancialData: o.demoFinancialData,
-        lotCount: inc.length,
-        totalSiteArea: o.totalSiteArea,
-        score: o.score,
-        grv: o.grv,
-        maxLandBudget: o.maxLandBudget,
-        profit: o.profit,
-        marginOnCost: o.marginOnCost,
-        combinedMarketValue: o.combinedMarketValue,
-        acquisitionHeadroom: o.acquisitionHeadroom,
-        acquisitionHeadroomPercent: o.acquisitionHeadroomPercent,
-        unitCount: o.unitCount,
-        acquisitionProgress: inc.length ? inc.reduce((s, p) => s + STAGE_PROGRESS[p.acquisitionStage], 0) / inc.length : 0,
-        controlledCount: inc.filter((p) => p.acquisitionStage === "CONTROLLED").length,
-        updatedAt: o.updatedAt.toISOString(),
-      };
-    }),
-  );
+  try {
+    const rows = await prisma.opportunity.findMany({
+      orderBy: { updatedAt: "desc" },
+      include: { parcels: { select: { acquisitionStage: true, included: true } } },
+    });
+    return NextResponse.json(
+      rows.map((o) => {
+        const inc = o.parcels.filter((p) => p.included);
+        return {
+          id: o.id,
+          name: o.name,
+          status: o.status,
+          suburb: o.suburb,
+          lga: o.lga,
+          demoFinancialData: o.demoFinancialData,
+          lotCount: inc.length,
+          totalSiteArea: o.totalSiteArea,
+          score: o.score,
+          grv: o.grv,
+          maxLandBudget: o.maxLandBudget,
+          profit: o.profit,
+          marginOnCost: o.marginOnCost,
+          combinedMarketValue: o.combinedMarketValue,
+          acquisitionHeadroom: o.acquisitionHeadroom,
+          acquisitionHeadroomPercent: o.acquisitionHeadroomPercent,
+          unitCount: o.unitCount,
+          acquisitionProgress: inc.length ? inc.reduce((s, p) => s + STAGE_PROGRESS[p.acquisitionStage], 0) / inc.length : 0,
+          controlledCount: inc.filter((p) => p.acquisitionStage === "CONTROLLED").length,
+          updatedAt: o.updatedAt.toISOString(),
+        };
+      }),
+    );
+  } catch (err) {
+    return jsonError(err instanceof Error ? err.message : "Failed to list opportunities", 503);
+  }
 }
 
 const polygon = z.object({ type: z.enum(["Polygon", "MultiPolygon"]), coordinates: z.array(z.any()).min(1) });
@@ -95,11 +99,15 @@ export async function POST(req: Request) {
   if (session instanceof NextResponse) return session;
   const parsed = createSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError("Invalid opportunity: " + parsed.error.issues[0]?.message);
-  const opp = await createOpportunity({
-    name: parsed.data.name,
-    parcels: parsed.data.parcels as ParcelData[],
-    userId: session.userId,
-    inputs: parsed.data.inputs,
-  });
-  return NextResponse.json({ id: opp.id }, { status: 201 });
+  try {
+    const opp = await createOpportunity({
+      name: parsed.data.name,
+      parcels: parsed.data.parcels as ParcelData[],
+      userId: session.userId,
+      inputs: parsed.data.inputs,
+    });
+    return NextResponse.json({ id: opp.id }, { status: 201 });
+  } catch (err) {
+    return jsonError(err instanceof Error ? err.message : "Could not save opportunity", 503);
+  }
 }

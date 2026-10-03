@@ -45,7 +45,10 @@ export function OverviewTab() {
     if (!detailLot) return;
     setRevaluing(true);
     try {
-      const res = await fetch("/api/valuations", {
+      const { fetchApiJson } = await import("@/lib/api-json");
+      // Same loose typing as the previous `res.json()` path — valuation payload is validated at use sites.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body = await fetchApiJson<any>("/api/valuations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -65,8 +68,6 @@ export function OverviewTab() {
           ],
         }),
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Revaluation failed");
       const v = body.results?.[0]?.valuation;
       if (!v) throw new Error("No valuation returned");
       await updateLot(detailLot.id, {
@@ -200,8 +201,8 @@ export function OverviewTab() {
                   onClick={async () => {
                     setAutoValuing(true);
                     try {
-                      const res = await fetch(`/api/opportunities/${dto.id}/valuate`, { method: "POST" });
-                      if (!res.ok) throw new Error("Auto-value failed");
+                      const { fetchApiJson } = await import("@/lib/api-json");
+                      await fetchApiJson(`/api/opportunities/${dto.id}/valuate`, { method: "POST" });
                       await refresh();
                     } catch {
                       // soft fail

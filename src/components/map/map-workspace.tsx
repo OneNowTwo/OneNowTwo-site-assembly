@@ -24,6 +24,7 @@ import {
   saveScanSession,
 } from "@/lib/map-state";
 import { SCAN_CALCULATION_VERSION } from "@/lib/analysis/assembly-feasibility";
+import { fetchApiJson } from "@/lib/api-json";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
@@ -210,15 +211,25 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     abortRef.current = ac;
     setLoad((s) => ({ ...s, loading: true }));
     try {
-      const res = await fetch(`/api/parcels?bbox=${[bbox.west, bbox.south, bbox.east, bbox.north].map((n) => n.toFixed(6)).join(",")}`, { signal: ac.signal });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Parcel request failed");
+      const body = await fetchApiJson<{
+        parcels: ParcelData[];
+        cadastreStatus?: string;
+        planningStatus?: string;
+        messages?: string[];
+        error?: string;
+      }>(`/api/parcels?bbox=${[bbox.west, bbox.south, bbox.east, bbox.north].map((n) => n.toFixed(6)).join(",")}`, { signal: ac.signal });
       setParcels((prev) => {
         const next = prev.size > 4000 ? new Map<string, ParcelData>() : new Map(prev);
         for (const p of body.parcels as ParcelData[]) next.set(p.externalParcelId, p);
         return next;
       });
-      setLoad((s) => ({ ...s, loading: false, cadastreStatus: body.cadastreStatus, planningStatus: body.planningStatus, messages: body.messages }));
+      setLoad((s) => ({
+        ...s,
+        loading: false,
+        cadastreStatus: body.cadastreStatus ?? s.cadastreStatus,
+        planningStatus: body.planningStatus ?? s.planningStatus,
+        messages: body.messages ?? [],
+      }));
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setLoad((s) => ({ ...s, loading: false, messages: [(err as Error).message] }));
@@ -239,8 +250,9 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
       timerRef.current = setTimeout(() => {
         fetchParcels(bbox);
         const pad = 0.02;
-        fetch(`/api/lmr/centres?bbox=${[bbox.west - pad, bbox.south - pad, bbox.east + pad, bbox.north + pad].map((n) => n.toFixed(5)).join(",")}`)
-          .then((r) => r.json())
+        fetchApiJson<{ centres?: NominatedCentre[] }>(
+          `/api/lmr/centres?bbox=${[bbox.west - pad, bbox.south - pad, bbox.east + pad, bbox.north + pad].map((n) => n.toFixed(5)).join(",")}`,
+        )
           .then((body) => {
             if (Array.isArray(body.centres)) setCentres(body.centres);
           })
@@ -351,11 +363,15 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     e?.preventDefault();
     if (query.trim().length < 2) return;
     setGeoMessage(null);
-    const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
-    const body = await res.json();
-    setResults(body.results ?? []);
-    setGeoMessage(body.message ?? (body.results?.length ? null : "No NSW matches found."));
-    if (body.results?.length === 1) goTo(body.results[0]);
+    try {
+      const body = await fetchApiJson<{ results?: GeocodeResult[]; message?: string }>(`/api/geocode?q=${encodeURIComponent(query)}`);
+      setResults(body.results ?? []);
+      setGeoMessage(body.message ?? (body.results?.length ? null : "No NSW matches found."));
+      if (body.results?.length === 1) goTo(body.results[0]!);
+    } catch (err) {
+      setResults([]);
+      setGeoMessage((err as Error).message);
+    }
   }
 
   function goTo(r: GeocodeResult) {
@@ -370,12 +386,20 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     setFindError(null);
     setActiveKey(null);
     try {
-      const res = await fetch("/api/assemblies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ startId: p.externalParcelId, lng: p.centroid[0], lat: p.centroid[1] }) });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Assembly search failed");
+      const body = await fetchApiJson<{
+        parcels: ParcelData[];
+        startId: string;
+        candidates: AssemblyCandidate[];
+        neighbours: string[];
+        messages: string[];
+      }>("/api/assemblies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startId: p.externalParcelId, lng: p.centroid[0], lat: p.centroid[1] }),
+      });
       setParcels((prev) => {
         const next = new Map(prev);
-        for (const x of body.parcels as ParcelData[]) if (!next.has(x.externalParcelId)) next.set(x.externalParcelId, x);
+        for (const x of body.parcels) if (!next.has(x.externalParcelId)) next.set(x.externalParcelId, x);
         return next;
       });
       setFind({ startId: body.startId, candidates: body.candidates, neighbours: body.neighbours, messages: body.messages });
@@ -420,9 +444,20 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
       } else {
         throw new Error("Search a suburb or zoom the map before scanning");
       }
-      const res = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Area scan failed");
+      const body = await fetchApiJson<{
+        bbox?: BBox;
+        centres?: NominatedCentre[];
+        valuedParcels?: ParcelData[];
+        candidates?: ScanCandidate[];
+        families?: ScanState["families"];
+        messages?: string[];
+        progress?: string[];
+        parcelsConsidered?: number;
+        parcelsEligible?: number;
+        assembliesGenerated?: number;
+        funnel?: { parcelsConsidered: number; parcelsEligible: number; assembliesGenerated: number; candidatesReturned: number };
+        error?: string;
+      }>("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) });
       if (body.bbox) {
         setFlyTo({
           lat: (body.bbox.south + body.bbox.north) / 2,
@@ -605,15 +640,18 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
 
     persistClientState({ activeKey: scanCandidate?.key ?? activeKey });
 
-    const res = await fetch("/api/opportunities", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name?.trim() || defaultName(ids), parcels: ps, inputs }),
-    });
-    const body = await res.json();
-    setSaving(false);
-    if (!res.ok) return setFindError(body.error ?? "Could not save opportunity");
-    router.push(`/opportunities/${body.id}`);
+    try {
+      const body = await fetchApiJson<{ id: string }>("/api/opportunities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name?.trim() || defaultName(ids), parcels: ps, inputs }),
+      });
+      setSaving(false);
+      router.push(`/opportunities/${body.id}`);
+    } catch (err) {
+      setSaving(false);
+      setFindError((err as Error).message || "Could not save opportunity");
+    }
   }
 
   useEffect(() => {

@@ -20,9 +20,8 @@ export function RadarClient() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/radar?limit=5");
-        const body = await res.json();
-        if (!res.ok) throw new Error(body.error ?? "Radar failed");
+        const { fetchApiJson } = await import("@/lib/api-json");
+        const body = await fetchApiJson<{ precincts?: PrecinctRadarRowDTO[]; messages?: string[] }>("/api/radar?limit=5");
         if (!cancelled) {
           setPrecincts(body.precincts ?? []);
           setMessages(body.messages ?? []);
