@@ -184,11 +184,36 @@ export const DEFAULT_SCENARIOS: Record<"BASE" | "UPSIDE" | "DOWNSIDE", ScenarioA
   DOWNSIDE: { salePricePct: -0.075, buildCostPct: 0.08, fsrPct: -0.05, existingValuePct: 0.05, financePctPoints: 0.015, targetMarginPctPoints: 0.03 },
 };
 
+export const scanProvenanceSchema = z.object({
+  originType: z.literal("AREA_SCAN"),
+  scanSessionId: z.string(),
+  assemblyFamilyId: z.string().nullable().optional(),
+  assemblyKey: z.string(),
+  scanRank: z.number().int().positive().nullable().optional(),
+  scanCalculatedAt: z.string(),
+  calculationVersion: z.string(),
+  /** Exact financial/planning snapshot from the scan card at Analyse time. */
+  scanCalculationSnapshot: z.record(z.string(), z.unknown()),
+  mapRestore: z
+    .object({
+      lat: z.number(),
+      lng: z.number(),
+      zoom: z.number(),
+      query: z.string().optional(),
+      scanQuery: z.string().optional(),
+    })
+    .optional(),
+});
+export type ScanProvenance = z.infer<typeof scanProvenanceSchema>;
+
 /** Per-opportunity inputs persisted in Opportunity.inputs. */
 export const opportunityInputsSchema = z.object({
   overrides: assumptionsSchema.partial().default({}),
   siteAreaOverride: z.number().positive().nullable().default(null),
   fsrOverride: z.number().positive().nullable().default(null),
+  /** Why fsrOverride was set — SCAN_MODELLED keeps provisional LMR; USER is manual. */
+  fsrOverrideKind: z.enum(["SCAN_MODELLED", "USER", "NONE"]).default("NONE"),
+  fsrOverrideCertainty: z.string().nullable().default(null),
   heightOverrideM: z.number().positive().nullable().default(null),
   /** Manual override of indicative achievable GFA (null = system estimate). */
   achievableGfaOverride: z.number().positive().nullable().default(null),
@@ -198,6 +223,7 @@ export const opportunityInputsSchema = z.object({
     .object({ BASE: scenarioAdjustmentSchema, UPSIDE: scenarioAdjustmentSchema, DOWNSIDE: scenarioAdjustmentSchema })
     .default(DEFAULT_SCENARIOS),
   contactDetails: z.string().max(300).default(""),
+  scanProvenance: scanProvenanceSchema.nullable().default(null),
 });
 export type OpportunityInputs = z.infer<typeof opportunityInputsSchema>;
 

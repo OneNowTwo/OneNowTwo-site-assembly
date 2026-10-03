@@ -25,6 +25,8 @@ export interface NominatedCentre {
   /** Representative point from official centre polygon (centroid of first ring). */
   lng: number;
   lat: number;
+  /** Outer ring of the official centre polygon (WGS84), when available. */
+  boundaryRing?: number[][];
   source: string;
   retrievedAt: string;
 }
@@ -105,13 +107,15 @@ export async function fetchNominatedCentres(bbox: BBox): Promise<NominatedCentre
   for (const f of res.features ?? []) {
     const label = f.attributes.LABEL?.trim();
     if (!label || !f.geometry?.rings?.[0]?.length) continue;
-    const c = ringCentroid(f.geometry.rings[0]);
+    const ring = f.geometry.rings[0]!;
+    const c = ringCentroid(ring);
     out.push({
       id: `town-centre:${f.attributes.OBJECTID ?? label}`,
       label,
       layClass: f.attributes.LAY_CLASS ?? null,
       lng: c.lng,
       lat: c.lat,
+      boundaryRing: ring,
       source: TOWN_CENTRES_SOURCE_LABEL,
       retrievedAt,
     });
@@ -123,7 +127,7 @@ export interface LmrProximity {
   centre: NominatedCentre;
   distanceM: number;
   band: LmrBand;
-  /** Always straight-line for V1 — not walking network. */
+  /** Straight-line screen only — walking confirmation is applied via WalkingDistanceProvider. */
   distanceBasis: "STRAIGHT_LINE_APPROXIMATION";
 }
 

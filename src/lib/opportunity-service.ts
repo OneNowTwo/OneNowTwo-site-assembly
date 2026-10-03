@@ -368,6 +368,7 @@ export async function upsertParcel(tx: Prisma.TransactionClient, p: ParcelData):
 export async function createOpportunity(input: { name: string; parcels: ParcelData[]; userId?: string | null; demoFinancialData?: boolean; notes?: string; inputs?: unknown }) {
   const suburbs = input.parcels.map((p) => p.suburb).filter(Boolean) as string[];
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
+  const parsedInputs = parseOpportunityInputs(input.inputs ?? {});
   const opp = await prisma.$transaction(
     async (tx) => {
       const created = await tx.opportunity.create({
@@ -378,7 +379,7 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
           status: "ANALYSING",
           demoFinancialData: input.demoFinancialData ?? false,
           notes: input.notes,
-          inputs: (input.inputs ?? {}) as Prisma.InputJsonValue,
+          inputs: parsedInputs as unknown as Prisma.InputJsonValue,
           createdById: input.userId ?? null,
         },
       });

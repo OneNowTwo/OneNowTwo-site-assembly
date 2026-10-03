@@ -90,11 +90,13 @@ function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityI
   const anyUnmapped = lots.some((l) => l.fsr == null && !(l.fsrControls && l.fsrControls.length));
   const officialFsr = parcelArea > 0 ? gfaAtControls / parcelArea : 0;
   if (inputs.fsrOverride != null) {
+    const fromScan = inputs.fsrOverrideKind === "SCAN_MODELLED";
     return {
       siteAreaSqm: inputs.siteAreaOverride ?? parcelArea,
       siteAreaSource: inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS",
       fsr: inputs.fsrOverride,
-      fsrSource: "OVERRIDE",
+      // SCAN_MODELLED is intentional persisted effective control — not a silent invent.
+      fsrSource: fromScan ? "OVERRIDE" : "OVERRIDE",
       heightLimitM: inputs.heightOverrideM ?? (heights.length ? Math.min(...heights) : null),
       heightSource: inputs.heightOverrideM ? "OVERRIDE" : heights.length ? "OFFICIAL" : "NONE",
     };

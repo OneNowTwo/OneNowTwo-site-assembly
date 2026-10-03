@@ -1,9 +1,11 @@
 import type { BBox, ParcelData } from "@/lib/types";
 import { clampBBox, MAX_BBOX_SPAN_DEG } from "@/lib/data-sources/nsw-cadastre";
-import { fetchNominatedCentres, bboxAround, type NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
+import { fetchNominatedCentres, bboxAround, nearestLmrCentre, type NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { getParcelsForBBox } from "@/lib/parcel-service";
 import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
+import type { WalkingDistanceHint } from "@/lib/analysis/effective-controls";
+import { nearestPointOnRing, walkingDistanceProvider, WALKING_PROVIDER_NAME } from "@/lib/data-sources/walking-distance";
 
 /** Tile a bbox into cadastre-safe cells. */
 export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
@@ -48,6 +50,74 @@ async function loadParcelsTiled(bbox: BBox): Promise<{ parcels: ParcelData[]; me
   return { parcels, messages, cadastreStatus, planningStatus };
 }
 
+/**
+ * Pedestrian walking checks for parcels within ~900 m straight-line of a nominated centre.
+ * Caps request volume; failures do not fall back to confirmed walking eligibility.
+ */
+async function enrichWalkingHints(
+  parcels: ParcelData[],
+  centres: NominatedCentre[],
+  maxRoutes = 36,
+): Promise<{ walkingByParcelId: Map<string, WalkingDistanceHint>; messages: string[] }> {
+  const walkingByParcelId = new Map<string, WalkingDistanceHint>();
+  const messages: string[] = [];
+  if (!centres.length) return { walkingByParcelId, messages };
+
+  type Cand = { id: string; from: [number, number]; to: [number, number]; straight: number };
+  const cands: Cand[] = [];
+  for (const p of parcels) {
+    const prox = nearestLmrCentre({ type: "Point", coordinates: p.centroid }, centres);
+    if (!prox || prox.distanceM > 900) continue;
+    const fromPt = { type: "Point" as const, coordinates: p.centroid };
+    const to = prox.centre.boundaryRing?.length
+      ? nearestPointOnRing(fromPt, prox.centre.boundaryRing)
+      : { type: "Point" as const, coordinates: [prox.centre.lng, prox.centre.lat] as [number, number] };
+    cands.push({
+      id: p.externalParcelId,
+      from: p.centroid,
+      to: [to.coordinates[0], to.coordinates[1]],
+      straight: Math.round(prox.distanceM),
+    });
+  }
+  cands.sort((a, b) => a.straight - b.straight);
+  const sample = cands.slice(0, maxRoutes);
+  if (!sample.length) return { walkingByParcelId, messages };
+
+  let ok = 0;
+  let failed = 0;
+  const concurrency = 4;
+  for (let i = 0; i < sample.length; i += concurrency) {
+    const batch = sample.slice(i, i + concurrency);
+    const results = await Promise.all(
+      batch.map(async (c) => {
+        const route = await walkingDistanceProvider.route(
+          { type: "Point", coordinates: c.from },
+          { type: "Point", coordinates: c.to },
+        );
+        return { id: c.id, route };
+      }),
+    );
+    for (const { id, route } of results) {
+      walkingByParcelId.set(id, {
+        walkingDistanceM: route.walkingDistanceM,
+        straightLineDistanceM: route.straightLineDistanceM,
+        status: route.status,
+        provider: route.provider,
+      });
+      if (route.status === "OK") ok++;
+      else failed++;
+    }
+  }
+
+  messages.push(
+    `Pedestrian routing via ${WALKING_PROVIDER_NAME}: ${ok} confirmed, ${failed} not confirmed (${sample.length} of ${cands.length} LMR-proximate parcels checked).`,
+  );
+  if (failed > 0) {
+    messages.push("WALKING DISTANCE NOT CONFIRMED for some parcels — straight-line screening only; modelled FSR stays REQUIRES PLANNING CONFIRMATION.");
+  }
+  return { walkingByParcelId, messages };
+}
+
 export async function scanArea(input: {
   bbox?: BBox;
   /** Search near an official nominated centre by label substring. */
@@ -86,16 +156,18 @@ export async function scanArea(input: {
   }
 
   const loaded = await loadParcelsTiled(bbox);
+  const walking = await enrichWalkingHints(loaded.parcels, centres);
   const result = runAreaScan({
     parcels: loaded.parcels,
     centres,
     assumptions,
     maxResults: input.maxResults ?? 15,
+    walkingByParcelId: walking.walkingByParcelId,
   });
 
   return {
     ...result,
-    messages: [...loaded.messages, ...result.messages],
+    messages: [...loaded.messages, ...walking.messages, ...result.messages],
     bbox,
     cadastreStatus: loaded.cadastreStatus,
     planningStatus: loaded.planningStatus,
