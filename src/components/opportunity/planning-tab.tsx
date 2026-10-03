@@ -7,6 +7,7 @@ import { hasHeritage, APARTMENT_ZONES } from "@/lib/analysis/assembly";
 import { DISCLAIMER } from "@/lib/constants";
 import { date, fsr, lotDp, sqm } from "@/lib/format";
 import { Badge, Button, NumberField, Panel, SourceTag, TextInput } from "@/components/ui";
+import { PlanningPathwaysPanel } from "./planning-pathways-panel";
 
 function sourceKind(l: LotDTO, field: string): "OFFICIAL" | "ASSUMPTION" | "ESTIMATE" {
   const s = l.planningSources[field];
@@ -23,6 +24,8 @@ export function PlanningTab() {
 
   return (
     <div className="space-y-4">
+      <PlanningPathwaysPanel />
+
       <Panel
         title="Planning controls by lot"
         actions={

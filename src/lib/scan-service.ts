@@ -3,9 +3,10 @@ import { clampBBox, MAX_BBOX_SPAN_DEG } from "@/lib/data-sources/nsw-cadastre";
 import { fetchNominatedCentres, bboxAround, nearestLmrCentre, type NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { getParcelsForBBox } from "@/lib/parcel-service";
 import { getGlobalAssumptions } from "@/lib/opportunity-service";
-import { runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
+import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
 import type { WalkingDistanceHint } from "@/lib/analysis/effective-controls";
 import { nearestPointOnRing, walkingDistanceProvider, WALKING_PROVIDER_NAME } from "@/lib/data-sources/walking-distance";
+import { valueParcels, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
 
 /** Tile a bbox into cadastre-safe cells. */
 export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
@@ -41,7 +42,6 @@ async function loadParcelsTiled(bbox: BBox): Promise<{ parcels: ParcelData[]; me
     if (result.cadastreStatus !== "live") cadastreStatus = result.cadastreStatus;
     if (result.planningStatus !== "live") planningStatus = result.planningStatus;
   }
-  // Cap parcel count for V1 scan cost
   let parcels = [...byId.values()];
   if (parcels.length > 450) {
     parcels = parcels.sort((a, b) => a.areaSqm - b.areaSqm).slice(0, 450);
@@ -50,10 +50,6 @@ async function loadParcelsTiled(bbox: BBox): Promise<{ parcels: ParcelData[]; me
   return { parcels, messages, cadastreStatus, planningStatus };
 }
 
-/**
- * Pedestrian walking checks for parcels within ~900 m straight-line of a nominated centre.
- * Caps request volume; failures do not fall back to confirmed walking eligibility.
- */
 async function enrichWalkingHints(
   parcels: ParcelData[],
   centres: NominatedCentre[],
@@ -118,20 +114,34 @@ async function enrichWalkingHints(
   return { walkingByParcelId, messages };
 }
 
+/**
+ * Staged area scan:
+ * 1) planning/geometry  2) assemblies  3) top candidates
+ * 4) auto-value only those lots  5) feasibility  6) rerank
+ */
 export async function scanArea(input: {
   bbox?: BBox;
-  /** Search near an official nominated centre by label substring. */
   centreQuery?: string;
   suburbHint?: string;
   maxResults?: number;
-}): Promise<AreaScanResult & { bbox: BBox; cadastreStatus: string; planningStatus: string }> {
+  /** Skip live AVM (tests / offline). */
+  skipValuation?: boolean;
+}): Promise<
+  AreaScanResult & {
+    bbox: BBox;
+    cadastreStatus: string;
+    planningStatus: string;
+    valuedParcels: ParcelData[];
+    valuationStatus: ReturnType<typeof valuationProviderStatus> & { valued: number; attempted: number };
+  }
+> {
   const assumptions = await getGlobalAssumptions();
   let bbox = input.bbox;
   let centres: NominatedCentre[] = [];
+  const progress: string[] = [];
 
   if (input.centreQuery || input.suburbHint) {
     const q = (input.centreQuery ?? input.suburbHint ?? "").toLowerCase();
-    // Broad search then filter centres by name
     const broad: BBox = bbox ?? { west: 150.6, south: -34.2, east: 151.4, north: -33.5 };
     const all = await fetchNominatedCentres(broad);
     const matched = all.filter((c) => c.label.toLowerCase().includes(q) || q.split(/\s+/).every((w) => c.label.toLowerCase().includes(w)));
@@ -145,7 +155,6 @@ export async function scanArea(input: {
   if (!bbox) throw new Error("bbox or centreQuery required");
 
   if (!centres.length) {
-    // Pad so centres near the edge of the scan are found
     const pad = 0.01;
     centres = await fetchNominatedCentres({
       west: bbox.west - pad,
@@ -155,26 +164,59 @@ export async function scanArea(input: {
     });
   }
 
+  progress.push("Planning scan");
   const loaded = await loadParcelsTiled(bbox);
   const walking = await enrichWalkingHints(loaded.parcels, centres);
-  const result = runAreaScan({
+
+  progress.push("Generating assemblies");
+  let result = runAreaScan({
     parcels: loaded.parcels,
     centres,
     assumptions,
     maxResults: input.maxResults ?? 15,
     walkingByParcelId: walking.walkingByParcelId,
   });
+  result = { ...result, progress: [...progress, "Planning scan complete", "Generating assemblies", ...result.progress] };
+
+  // Stage 3–6: value only lots in top candidate assemblies.
+  const topIds = new Set<string>();
+  for (const c of result.candidates) for (const id of c.lotIds) topIds.add(id);
+  // Also include family alternatives so Analyse paths are covered.
+  for (const f of result.families) {
+    for (const alt of f.alternatives) for (const id of alt.lotIds) topIds.add(id);
+  }
+
+  const toValue = loaded.parcels.filter((p) => topIds.has(p.externalParcelId));
+  let valuedParcels = loaded.parcels;
+  let valued = 0;
+  const valMessages: string[] = [];
+  const providerStatus = valuationProviderStatus();
+
+  if (!input.skipValuation && toValue.length) {
+    progress.push("Valuing properties");
+    const batch = await valueParcels(toValue, { concurrency: 2 });
+    valued = batch.valued;
+    valMessages.push(...batch.messages);
+    const byId = new Map(batch.parcels.map((p) => [p.externalParcelId, p]));
+    valuedParcels = loaded.parcels.map((p) => byId.get(p.externalParcelId) ?? p);
+
+    progress.push("Running feasibility");
+    result = applyValuationsToScanResult(result, valuedParcels, assumptions);
+    progress.push("Ranking opportunities");
+    result = { ...result, progress: [...new Set([...progress, ...result.progress])] };
+  }
 
   return {
     ...result,
-    messages: [...loaded.messages, ...walking.messages, ...result.messages],
+    messages: [...loaded.messages, ...walking.messages, ...valMessages, ...result.messages],
     bbox,
     cadastreStatus: loaded.cadastreStatus,
     planningStatus: loaded.planningStatus,
+    valuedParcels: valuedParcels.filter((p) => topIds.has(p.externalParcelId)),
+    valuationStatus: { ...providerStatus, valued, attempted: toValue.length },
   };
 }
 
-/** Resolve Balgowlah Stockland centre for tests / default demos. */
 export async function resolveCentre(labelIncludes: string): Promise<NominatedCentre | null> {
   const centres = await fetchNominatedCentres({ west: 150.6, south: -34.2, east: 151.4, north: -33.5 });
   return centres.find((c) => c.label.toLowerCase().includes(labelIncludes.toLowerCase())) ?? null;

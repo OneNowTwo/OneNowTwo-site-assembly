@@ -19,7 +19,7 @@ export interface PropertyValuation {
   status: ValuationStatus;
   confidence: ValuationConfidence;
   source: string;
-  provider: "DOMAIN" | "PROPTRACK" | "CORELOGIC" | "MANUAL" | "COMPS" | "SYSTEM" | null;
+  provider: "DOMAIN" | "PROPTRACK" | "CORELOGIC" | "MANUAL" | "COMPS" | "NSW" | "SYSTEM" | null;
   method: string | null;
   checkedAt: string | null;
   note?: string | null;
@@ -176,11 +176,14 @@ export function summariseAssemblyValuation(
 
 export function valuationSourceBadge(status: ValuationStatus, provider?: string | null): string {
   if (status === "LIVE_AVM") {
-    if (provider === "DOMAIN") return "DOMAIN AVM";
-    if (provider === "PROPTRACK") return "PROPTRACK AVM";
+    if (provider === "DOMAIN") return "Domain Price Estimate";
+    if (provider === "PROPTRACK") return "PropTrack AVM";
     return "LIVE AVM";
   }
-  if (status === "COMPARABLE_DERIVED") return "COMPS";
+  if (status === "COMPARABLE_DERIVED") {
+    if (provider === "NSW") return "NSW registered comps";
+    return "COMPS";
+  }
   if (status === "USER_ESTIMATE") return "USER";
   if (status === "SUBURB_FALLBACK") return "ROUGH ESTIMATE";
   return "VALUE REQUIRED";

@@ -55,12 +55,14 @@ export interface PropertyValuationResult {
   status: "LIVE_AVM" | "COMPARABLE_DERIVED" | "USER_ESTIMATE" | "SUBURB_FALLBACK" | "NO_VALUE";
   confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
   source: string;
-  provider: "DOMAIN" | "PROPTRACK" | "CORELOGIC" | "MANUAL" | "COMPS" | "SYSTEM" | null;
+  provider: "DOMAIN" | "PROPTRACK" | "CORELOGIC" | "MANUAL" | "COMPS" | "NSW" | "SYSTEM" | null;
   method: string | null;
   checkedAt: string;
   note?: string | null;
   cacheKey?: string;
   cacheable?: boolean;
+  /** Provider property id (e.g. Domain propertyId). */
+  externalId?: string | null;
 }
 
 export interface PropertyValuationProvider {
@@ -76,6 +78,11 @@ export interface PropertyValuationProvider {
     userHigh?: number | null;
     userLandRate?: number | null;
     comparableDerived?: number | null;
+    lng?: number | null;
+    lat?: number | null;
+    isStrata?: boolean;
+    zone?: string | null;
+    excludedIds?: string[];
   }): PropertyValuationResult | Promise<PropertyValuationResult>;
 }
 

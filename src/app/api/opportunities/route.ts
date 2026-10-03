@@ -7,6 +7,7 @@ import { jsonError, requireSession } from "@/lib/session";
 import type { ParcelData } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function GET() {
   const rows = await prisma.opportunity.findMany({
@@ -43,6 +44,27 @@ export async function GET() {
 }
 
 const polygon = z.object({ type: z.enum(["Polygon", "MultiPolygon"]), coordinates: z.array(z.any()).min(1) });
+const valuationSchema = z
+  .object({
+    mid: z.number().nullable(),
+    low: z.number().nullable().optional(),
+    high: z.number().nullable().optional(),
+    status: z.string(),
+    confidence: z.string(),
+    source: z.string(),
+    provider: z.string().nullable().optional(),
+    method: z.string().nullable().optional(),
+    checkedAt: z.string().nullable().optional(),
+    externalId: z.string().nullable().optional(),
+    note: z.string().nullable().optional(),
+    numberOfComps: z.number().nullable().optional(),
+    comps: z.array(z.any()).nullable().optional(),
+    subjectLastSale: z.any().nullable().optional(),
+    valuationLabel: z.string().nullable().optional(),
+  })
+  .nullable()
+  .optional();
+
 const parcelSchema = z.object({
   externalParcelId: z.string().regex(/^nsw-cadid:\d+$/),
   source: z.enum(["LIVE_NSW", "CACHED_NSW", "MANUAL"]),
@@ -59,6 +81,7 @@ const parcelSchema = z.object({
   planning: z.any().nullable(),
   planningStatus: z.enum(["ok", "partial", "unavailable"]),
   retrievedAt: z.string(),
+  valuation: valuationSchema,
 });
 const createSchema = z.object({
   name: z.string().trim().min(1).max(160),

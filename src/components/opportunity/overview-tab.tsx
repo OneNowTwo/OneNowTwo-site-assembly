@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useOpportunity } from "./context";
 import { LotsMap } from "./lots-map";
 import { SCORE_WEIGHTS } from "@/lib/analysis/assembly";
 import { STAGE_LABELS } from "@/lib/constants";
 import { resolveValuationStatus, valuationSourceBadge, viabilityLabel } from "@/lib/analysis/valuation";
 import { fsr, lotDp, money, num, pct, sqm } from "@/lib/format";
-import { Badge, DemoFinancialBadge, NumberField, Panel, Stat, TextArea, cx } from "@/components/ui";
+import { Badge, Button, DemoFinancialBadge, NumberField, Panel, Stat, TextArea, cx } from "@/components/ui";
+import type { OpportunityInputs } from "@/lib/analysis/assumptions";
 
 const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
   acquisitionHeadroom: "Acquisition headroom",
@@ -19,9 +20,11 @@ const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
 };
 
 export function OverviewTab() {
-  const { dto, analysis, updateLot, updateOpportunity } = useOpportunity();
+  const { dto, analysis, updateLot, updateOpportunity, updateInputs, refresh, saving } = useOpportunity();
   const [selected, setSelected] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [revaluing, setRevaluing] = useState(false);
+  const [autoValuing, setAutoValuing] = useState(false);
   const f = analysis.base.feasibility;
   const y = analysis.base.yield;
   const mv = analysis.combinedExistingValue;
@@ -33,6 +36,79 @@ export function OverviewTab() {
   const alloc = new Map(analysis.allocation.lots.map((l) => [l.id, l]));
   const marginal = new Map(analysis.marginal.map((m) => [m.id, m]));
   const detailLot = detailId ? dto.lots.find((l) => l.id === detailId) ?? null : null;
+  const detailVal = useMemo(() => {
+    if (!detailLot) return null;
+    return dto.inputs.lotValuationDetails?.[detailLot.externalParcelId] ?? null;
+  }, [detailLot, dto.inputs.lotValuationDetails]);
+
+  async function revalueWithExcluded(excludedIds: string[]) {
+    if (!detailLot) return;
+    setRevaluing(true);
+    try {
+      const res = await fetch("/api/valuations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prefer: "nsw",
+          parcels: [
+            {
+              externalParcelId: detailLot.externalParcelId,
+              address: detailLot.address,
+              suburb: detailLot.suburb,
+              areaSqm: detailLot.areaSqm,
+              lng: detailLot.centroid[0],
+              lat: detailLot.centroid[1],
+              isStrata: detailLot.isStrata,
+              zone: detailLot.zone,
+              excludedIds,
+            },
+          ],
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Revaluation failed");
+      const v = body.results?.[0]?.valuation;
+      if (!v) throw new Error("No valuation returned");
+      await updateLot(detailLot.id, {
+        marketValue: v.mid,
+        marketValueLow: v.low,
+        marketValueHigh: v.high,
+        marketValueSource: v.source === "COMPARABLE_DERIVED" ? "COMPARABLE_DERIVED" : v.mid != null ? "USER_ESTIMATE" : "NO_VALUE",
+        marketValueConfidence: v.confidence,
+        marketValueProvider: v.provider,
+        marketValueMethod: v.method,
+        marketValueCheckedAt: v.checkedAt,
+        marketValueNote: v.note,
+      });
+      const nextDetails: OpportunityInputs["lotValuationDetails"] = {
+        ...(dto.inputs.lotValuationDetails ?? {}),
+        [detailLot.externalParcelId]: {
+          mid: v.mid,
+          low: v.low,
+          high: v.high,
+          confidence: v.confidence,
+          source: v.source,
+          provider: v.provider,
+          numberOfComps: v.numberOfComps ?? null,
+          valuationLabel: v.valuationLabel ?? null,
+          subjectLastSale: v.subjectLastSale ?? null,
+          comps: v.comps ?? [],
+        },
+      };
+      updateInputs({ lotValuationDetails: nextDetails });
+    } catch {
+      // keep prior values; error surface is soft
+    } finally {
+      setRevaluing(false);
+    }
+  }
+
+  function toggleCompExcluded(compId: string, currentlyIncluded: boolean) {
+    if (!detailLot) return;
+    const comps = dto.inputs.lotValuationDetails?.[detailLot.externalParcelId]?.comps ?? [];
+    const excludedIds = comps.filter((c) => (c.id === compId ? currentlyIncluded : !c.included)).map((c) => c.id);
+    void revalueWithExcluded(excludedIds);
+  }
 
   return (
     <div className="grid grid-cols-12 gap-4">
@@ -105,8 +181,28 @@ export function OverviewTab() {
             <div className="rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-950">
               <div className="font-semibold">INSUFFICIENT VALUATION DATA</div>
               <p className="mt-1">
-                Suburb $/sqm fallback is a <strong>ROUGH SCREENING ESTIMATE</strong> only — <strong>DO NOT USE FOR ACQUISITION DECISION</strong>. Enter Est. Current Value for each lot (e.g. 5 Reserve Street = $3.12m). Maximum payable ({money(maxPay, { compact: true })}) still comes from development feasibility.
+                Automatic NSW registered comparable sales have not populated every lot yet. Click Auto-value to fetch them now. Manual entry is a last-resort override only. Maximum payable ({money(maxPay, { compact: true })}) still comes from development feasibility.
               </p>
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  disabled={autoValuing || saving}
+                  onClick={async () => {
+                    setAutoValuing(true);
+                    try {
+                      const res = await fetch(`/api/opportunities/${dto.id}/valuate`, { method: "POST" });
+                      if (!res.ok) throw new Error("Auto-value failed");
+                      await refresh();
+                    } catch {
+                      // soft fail
+                    } finally {
+                      setAutoValuing(false);
+                    }
+                  }}
+                >
+                  {autoValuing ? "Valuing from NSW sales…" : "Auto-value from NSW registered sales"}
+                </Button>
+              </div>
               {analysis.screeningExistingValue != null && (
                 <p className="mt-1 text-[11px] text-muted">Rough screening total (not trusted): {money(analysis.screeningExistingValue, { compact: true })}</p>
               )}
@@ -120,7 +216,7 @@ export function OverviewTab() {
                   label="Acquisition headroom (mid)"
                   value={money(val.headroomMid, { compact: true })}
                   tone={(val.headroomMid ?? 0) > 0 ? "good" : "bad"}
-                  sub={`Low case ${money(val.headroomLow, { compact: true })} · High case ${money(val.headroomHigh, { compact: true })}`}
+                  sub={`Low case ${money(val.headroomHigh, { compact: true })} · High case ${money(val.headroomLow, { compact: true })}`}
                 />
                 <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Max payable − mid existing value" />
               </div>
@@ -217,7 +313,7 @@ export function OverviewTab() {
             </tbody>
           </table>
           <p className="border-t border-line px-3 py-2 text-[11px] text-muted">
-            Edit Est. Current Value inline — combined value, headroom, offers and score recalculate immediately. Missing values show VALUE REQUIRED (never a silent suburb fallback).
+            Values populate automatically from Domain Price Estimate (then PropTrack / comps when available). Manual edit is an override — combined value, headroom, offers and score recalculate immediately. Missing values show VALUE REQUIRED (never a silent suburb fallback).
           </p>
         </Panel>
 
@@ -225,11 +321,11 @@ export function OverviewTab() {
           <Panel title={`Valuation · ${detailLot.label}`} actions={<button className="text-[11px] text-muted hover:text-ink" onClick={() => setDetailId(null)}>Close</button>}>
             <div className="grid grid-cols-2 gap-3 text-[12px]">
               <div>
-                <div className="text-[10.5px] uppercase text-muted">Estimated value</div>
+                <div className="text-[10.5px] uppercase text-muted">Estimated current value</div>
                 <div className="num font-semibold">{money(detailLot.marketValue, { compact: true })}</div>
               </div>
               <div>
-                <div className="text-[10.5px] uppercase text-muted">Range</div>
+                <div className="text-[10.5px] uppercase text-muted">Indicative range</div>
                 <div className="num">
                   {money(detailLot.marketValueLow, { compact: true })}–{money(detailLot.marketValueHigh, { compact: true })}
                 </div>
@@ -246,20 +342,90 @@ export function OverviewTab() {
                 <div className="text-[10.5px] uppercase text-muted">Checked</div>
                 <div>{detailLot.marketValueCheckedAt ? new Date(detailLot.marketValueCheckedAt).toLocaleDateString("en-AU") : "—"}</div>
               </div>
+              <div>
+                <div className="text-[10.5px] uppercase text-muted">Based on</div>
+                <div>{detailVal?.numberOfComps != null ? `${detailVal.numberOfComps} registered sales` : "—"}</div>
+              </div>
               <div className="col-span-2">
-                <div className="text-[10.5px] uppercase text-muted">Note</div>
-                <div>{detailLot.marketValueNote ?? "—"}</div>
+                <div className="text-[10.5px] uppercase text-muted">Label</div>
+                <div>{detailVal?.valuationLabel ?? detailLot.marketValueNote ?? "—"}</div>
               </div>
             </div>
+
+            {detailVal?.subjectLastSale && (
+              <div className="mt-3 rounded-[3px] border border-line bg-canvas px-3 py-2 text-[12px]">
+                <div className="text-[10.5px] font-semibold uppercase text-muted">Last registered sale (subject)</div>
+                <div className="mt-1">
+                  {money(detailVal.subjectLastSale.salePrice, { compact: true })}
+                  {detailVal.subjectLastSale.saleDate ? ` · ${detailVal.subjectLastSale.saleDate}` : ""}
+                  <span className="text-muted"> — supporting info only; not inflation-adjusted into the estimate</span>
+                </div>
+              </div>
+            )}
+
+            {!!detailVal?.comps?.length && (
+              <div className="mt-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted">Comparable registered sales</div>
+                  {revaluing && <span className="text-[11px] text-muted">Recalculating…</span>}
+                </div>
+                <table className="w-full text-[11.5px]">
+                  <thead className="bg-canvas text-[10px] uppercase text-muted">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">Include</th>
+                      <th className="px-2 py-1.5 text-left">Comparable</th>
+                      <th className="px-2 py-1.5 text-right">Price</th>
+                      <th className="px-2 py-1.5 text-right">Date</th>
+                      <th className="px-2 py-1.5 text-right">Area</th>
+                      <th className="px-2 py-1.5 text-right">Dist</th>
+                      <th className="px-2 py-1.5 text-right">Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailVal.comps.map((c) => (
+                      <tr key={c.id} className={cx("border-t border-line", !c.included && "text-muted")}>
+                        <td className="px-2 py-1.5">
+                          <input
+                            type="checkbox"
+                            checked={c.included}
+                            disabled={revaluing}
+                            onChange={() => void toggleCompExcluded(c.id, c.included)}
+                            aria-label={`Include ${c.address}`}
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <div className="font-medium">{c.address}</div>
+                          {!c.included && c.excludeReason && <div className="text-[10px]">{c.excludeReason}</div>}
+                        </td>
+                        <td className="num px-2 py-1.5 text-right">{money(c.salePrice, { compact: true })}</td>
+                        <td className="num px-2 py-1.5 text-right">{c.saleDate ?? "—"}</td>
+                        <td className="num px-2 py-1.5 text-right">{c.landAreaSqm != null ? sqm(c.landAreaSqm) : "—"}</td>
+                        <td className="num px-2 py-1.5 text-right">{Math.round(c.distanceM)}m</td>
+                        <td className="num px-2 py-1.5 text-right">{Math.round(c.similarity * 100)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-2 text-[11px] text-muted">
+                  NSW registered sales · exclude a bad comparable to recalculate immediately. Screening estimate only — not a certified valuation.
+                </p>
+              </div>
+            )}
+
             <div className="mt-3 grid grid-cols-2 gap-2" onClick={(e) => e.stopPropagation()}>
               <div>
-                <div className="mb-1 text-[10.5px] uppercase text-muted">Low</div>
+                <div className="mb-1 text-[10.5px] uppercase text-muted">Low override</div>
                 <NumberField kind="money" value={detailLot.marketValueLow} onCommit={(v) => updateLot(detailLot.id, { marketValueLow: v })} ariaLabel="Low estimate" />
               </div>
               <div>
-                <div className="mb-1 text-[10.5px] uppercase text-muted">High</div>
+                <div className="mb-1 text-[10.5px] uppercase text-muted">High override</div>
                 <NumberField kind="money" value={detailLot.marketValueHigh} onCommit={(v) => updateLot(detailLot.id, { marketValueHigh: v })} ariaLabel="High estimate" />
               </div>
+            </div>
+            <div className="mt-2">
+              <Button size="sm" variant="ghost" disabled={revaluing} onClick={() => void revalueWithExcluded([])}>
+                Refresh NSW comps
+              </Button>
             </div>
           </Panel>
         )}
