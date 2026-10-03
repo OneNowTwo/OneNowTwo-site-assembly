@@ -5,10 +5,15 @@ import { usePathname } from "next/navigation";
 import { cx } from "@/components/ui";
 
 const LINKS = [
+  { href: "/dashboard", label: "Today" },
+  { href: "/feed", label: "Feed" },
+  { href: "/watching", label: "Watching" },
+  { href: "/morning-report", label: "Report" },
   { href: "/map", label: "Map" },
   { href: "/radar", label: "Radar" },
   { href: "/opportunities", label: "Opportunities" },
   { href: "/acquisitions", label: "Acquisitions" },
+  { href: "/alerts", label: "Alerts" },
   { href: "/assumptions", label: "Assumptions" },
 ];
 

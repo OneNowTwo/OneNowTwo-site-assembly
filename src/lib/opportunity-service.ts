@@ -215,9 +215,17 @@ export async function loadOpportunity(id: string) {
 }
 
 /** Recalculate the opportunity and persist summary + per-lot computed fields (used by lists and the CRM board). */
-export async function recomputeOpportunity(id: string) {
+export async function recomputeOpportunity(id: string, meta?: { reason?: string; source?: string }) {
   const opp = await loadOpportunity(id);
   if (!opp) return null;
+  const before = {
+    status: opp.status,
+    score: opp.score,
+    acquisitionHeadroom: opp.acquisitionHeadroom,
+    maxLandBudget: opp.maxLandBudget,
+    grv: opp.grv,
+    combinedMarketValue: opp.combinedMarketValue,
+  };
   const inputs = parseOpportunityInputs(opp.inputs);
   // Prefer persisted unitTypes when inputs.unitMix is empty
   if (!inputs.unitMix.length && opp.unitTypes.length) {
@@ -303,6 +311,40 @@ export async function recomputeOpportunity(id: string) {
       });
     }),
   ]);
+
+  // Phase 2: append change-history + feed movements (never silently overwrite history).
+  try {
+    const { recordMetricChanges } = await import("@/lib/monitoring/change-history");
+    const { publishFeedItem } = await import("@/lib/monitoring/feed");
+    const after = {
+      status: opp.status,
+      score: analysis.score.score,
+      acquisitionHeadroom: analysis.acquisitionHeadroom,
+      maxLandBudget: f.maxAcquisitionBudget,
+      grv: f.grv,
+      combinedMarketValue: analysis.combinedExistingValue,
+    };
+    const deltas = await recordMetricChanges(id, before, after, meta);
+    const headroomDelta = (after.acquisitionHeadroom ?? 0) - (before.acquisitionHeadroom ?? 0);
+    const scoreDelta = (after.score ?? 0) - (before.score ?? 0);
+    if (Math.abs(headroomDelta) >= 25_000 || Math.abs(scoreDelta) >= 2) {
+      await publishFeedItem({
+        kind: headroomDelta >= 0 && scoreDelta >= 0 ? "IMPROVED" : headroomDelta < 0 || scoreDelta < 0 ? "DECLINED" : "IMPROVED",
+        title: `${opp.name} ${headroomDelta >= 0 ? "improved" : "declined"}`,
+        summary: deltas.map((d) => d.title).slice(0, 3).join(" · ") || "Metrics recalculated",
+        opportunityId: id,
+        score: after.score,
+        headroom: after.acquisitionHeadroom,
+        maxPayable: after.maxLandBudget,
+        scoreDelta,
+        headroomDelta,
+        importance: Math.min(12, Math.abs(headroomDelta) / 250_000 + Math.abs(scoreDelta)),
+      });
+    }
+  } catch {
+    // Monitoring must not break core recompute.
+  }
+
   return analysis;
 }
 
@@ -498,7 +540,45 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
     { timeout: 60000 },
   );
   await ensureModelledPlanningOverride(opp.id);
-  await recomputeOpportunity(opp.id);
+  await recomputeOpportunity(opp.id, { reason: "opportunity created", source: "createOpportunity" });
+  try {
+    const { publishFeedItem } = await import("@/lib/monitoring/feed");
+    const { recordOpportunityChange } = await import("@/lib/monitoring/change-history");
+    const fresh = await prisma.opportunity.findUnique({ where: { id: opp.id } });
+    await recordOpportunityChange({
+      opportunityId: opp.id,
+      kind: "OTHER",
+      title: "Opportunity created",
+      summary: `${opp.name} saved from Analyse`,
+      after: { status: "ANALYSING", lotCount: parcels.length },
+      source: "createOpportunity",
+    });
+    await publishFeedItem({
+      kind: "NEW",
+      title: `New opportunity: ${opp.name}`,
+      summary: `${suburb ?? "NSW"} · ${parcels.length} lots`,
+      opportunityId: opp.id,
+      score: fresh?.score,
+      headroom: fresh?.acquisitionHeadroom,
+      maxPayable: fresh?.maxLandBudget,
+      importance: 6,
+    });
+    if (input.userId) {
+      const { evaluateAlertsForOpportunity } = await import("@/lib/monitoring/alerts");
+      await evaluateAlertsForOpportunity(input.userId, {
+        id: opp.id,
+        name: opp.name,
+        suburb,
+        score: fresh?.score,
+        acquisitionHeadroom: fresh?.acquisitionHeadroom,
+        acquisitionHeadroomPercent: fresh?.acquisitionHeadroomPercent,
+        lotCount: parcels.length,
+        isNew: true,
+      });
+    }
+  } catch {
+    // feed/alerts optional
+  }
   return opp;
 }
 

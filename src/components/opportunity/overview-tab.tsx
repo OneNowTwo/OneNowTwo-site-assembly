@@ -9,6 +9,9 @@ import { resolveValuationStatus, valuationSourceBadge, viabilityLabel } from "@/
 import { fsr, lotDp, money, num, pct, sqm } from "@/lib/format";
 import { Badge, Button, DemoFinancialBadge, NumberField, Panel, Stat, TextArea, cx } from "@/components/ui";
 import type { OpportunityInputs } from "@/lib/analysis/assumptions";
+import { HistoryPanel } from "./history-panel";
+import { ConceptVisualsPanel } from "./concept-visuals-panel";
+import { WatchOpportunityButton } from "./watch-opportunity-button";
 
 const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
   acquisitionHeadroom: "Acquisition headroom",
@@ -472,7 +475,10 @@ export function OverviewTab() {
             ))}
           </ul>
         </Panel>
-        <Panel title="Development summary (base case)">
+        <Panel
+          title="Development summary (base case)"
+          actions={<WatchOpportunityButton />}
+        >
           <div className="grid grid-cols-3 gap-4">
             <Stat
               size="md"
@@ -517,6 +523,8 @@ export function OverviewTab() {
             </Badge>
           </div>
         </Panel>
+        <HistoryPanel />
+        <ConceptVisualsPanel />
       </div>
     </div>
   );
