@@ -10,7 +10,13 @@ export type ValuationStatus = TrustedValuationStatus | "SUBURB_FALLBACK" | "NO_V
 
 export type ValuationConfidence = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
 
-export type AcquisitionViability = "LIKELY_VIABLE" | "MARGINAL" | "UNLIKELY" | "INSUFFICIENT_VALUATION_DATA";
+export type AcquisitionViability =
+  | "LIKELY_VIABLE"
+  | "MARGINAL"
+  | "UNLIKELY"
+  | "INSUFFICIENT_VALUATION_DATA"
+  /** Missing LEP FSR and no confirmed State pathway — do not treat as uneconomic. */
+  | "REQUIRES_PLANNING_INPUT";
 
 export interface PropertyValuation {
   mid: number | null;
@@ -197,6 +203,8 @@ export function viabilityLabel(v: AcquisitionViability): string {
       return "MARGINAL";
     case "UNLIKELY":
       return "UNLIKELY AT CURRENT ASSUMPTIONS";
+    case "REQUIRES_PLANNING_INPUT":
+      return "REQUIRES PLANNING INPUT — NOT FSR 0";
     default:
       return "INSUFFICIENT VALUATION DATA";
   }

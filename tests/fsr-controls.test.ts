@@ -154,13 +154,25 @@ describe("per-parcel theoretical GFA and assembly equivalent FSR", () => {
     const lots = [lot("A", 0, { fsr: null }), lot("B", 20, { fsr: null })];
     const none = analyseOpportunity(lots, A, parseOpportunityInputs({}));
     expect(none.site.fsrSource).toBe("NO_MAPPED");
+    expect(none.site.yieldStatus).toBe("REQUIRES_PLANNING_INPUT");
+    expect(none.feasibilityCalculable).toBe(false);
     expect(none.site.fsr).toBe(0);
-    expect(none.metrics.theoreticalGfa).toBe(0);
+    expect(none.viability).toBe("REQUIRES_PLANNING_INPUT");
+    expect(none.acquisitionHeadroom).toBeNull();
 
     const assumed = analyseOpportunity(lots, A, parseOpportunityInputs({ fsrOverride: 1.4 }));
     expect(assumed.site.fsrSource).toBe("OVERRIDE");
     expect(assumed.site.fsr).toBe(1.4);
     expect(assumed.base.yield.theoreticalGfa).toBeCloseTo(lots.reduce((s, l) => s + l.areaSqm, 0) * 1.4);
+
+    const pathway = analyseOpportunity(
+      lots,
+      A,
+      parseOpportunityInputs({ fsrOverride: 0.8, fsrOverrideKind: "SCAN_MODELLED", fsrOverrideCertainty: "REQUIRES_PLANNING_CONFIRMATION" }),
+    );
+    expect(pathway.site.fsrSource).toBe("STATE_PATHWAY");
+    expect(pathway.feasibilityCalculable).toBe(true);
+    expect(pathway.base.yield.theoreticalGfa).toBeCloseTo(lots.reduce((s, l) => s + l.areaSqm, 0) * 0.8);
   });
 
   it("keeps geometry helper available for split tests", () => {

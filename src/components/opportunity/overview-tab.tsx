@@ -172,7 +172,17 @@ export function OverviewTab() {
         <Panel
           title="Why this assembly creates value"
           actions={
-            <Badge tone={analysis.viability === "LIKELY_VIABLE" ? "good" : analysis.viability === "MARGINAL" ? "warn" : analysis.viability === "UNLIKELY" ? "bad" : "estimate"}>
+            <Badge
+              tone={
+                analysis.viability === "LIKELY_VIABLE"
+                  ? "good"
+                  : analysis.viability === "MARGINAL" || analysis.viability === "REQUIRES_PLANNING_INPUT"
+                    ? "warn"
+                    : analysis.viability === "UNLIKELY"
+                      ? "bad"
+                      : "estimate"
+              }
+            >
               {viabilityLabel(analysis.viability)}
             </Badge>
           }
@@ -463,9 +473,47 @@ export function OverviewTab() {
         </Panel>
         <Panel title="Development summary (base case)">
           <div className="grid grid-cols-3 gap-4">
-            <Stat size="md" label="FSR used" value={analysis.site.fsrSource === "NO_MAPPED" ? "—" : fsr(analysis.site.fsr)} sub={analysis.site.fsrSource === "OVERRIDE" ? "USER ASSUMPTION" : analysis.site.fsrSource === "OFFICIAL" ? "OFFICIAL MAPPED FSR" : "NO MAPPED FSR"} />
-            <Stat size="md" label="Theoretical GFA" value={sqm(y.theoreticalGfa)} sub="Site × FSR" />
-            <Stat size="md" label="Achievable GFA" value={sqm(y.achievableGfa)} sub={y.gfaSource === "OVERRIDE" ? "Manual override" : `${Math.round(y.planningAdjustment * 100)}% planning adj.`} />
+            <Stat
+              size="md"
+              label="FSR used"
+              value={analysis.site.fsrSource === "NO_MAPPED" ? "—" : fsr(analysis.site.fsr)}
+              sub={
+                analysis.site.fsrSource === "STATE_PATHWAY"
+                  ? "STATE PATHWAY (modelled)"
+                  : analysis.site.fsrSource === "OVERRIDE"
+                    ? "USER ASSUMPTION"
+                    : analysis.site.fsrSource === "OFFICIAL"
+                      ? "OFFICIAL MAPPED FSR"
+                      : "NO MAPPED FSR ≠ 0:1"
+              }
+            />
+            <Stat
+              size="md"
+              label="Theoretical GFA"
+              value={analysis.feasibilityCalculable ? sqm(y.theoreticalGfa) : "—"}
+              sub={analysis.feasibilityCalculable ? "Site × FSR" : "Needs planning pathway"}
+            />
+            <Stat
+              size="md"
+              label="Achievable GFA"
+              value={analysis.feasibilityCalculable ? sqm(y.achievableGfa) : "—"}
+              sub={
+                !analysis.feasibilityCalculable
+                  ? "FEASIBILITY NOT YET CALCULABLE"
+                  : y.gfaSource === "OVERRIDE"
+                    ? "Manual override"
+                    : `${Math.round(y.planningAdjustment * 100)}% planning adj.`
+              }
+            />
+          </div>
+          <p className="mt-3 text-[12px] text-ink">{analysis.conclusion.summary}</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10.5px] uppercase tracking-wide">
+            <Badge tone={analysis.conclusion.planning === "LEP_CONTROLS" || analysis.conclusion.planning === "MODELLED_PATHWAY" ? "good" : "warn"}>
+              Planning: {analysis.conclusion.planning.replaceAll("_", " ")}
+            </Badge>
+            <Badge tone={analysis.conclusion.economics === "VIABLE" ? "good" : analysis.conclusion.economics === "NOT_CALCULABLE" ? "warn" : "bad"}>
+              Economics: {analysis.conclusion.economics.replaceAll("_", " ")}
+            </Badge>
           </div>
         </Panel>
       </div>

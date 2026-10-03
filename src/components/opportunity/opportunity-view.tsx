@@ -232,7 +232,9 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                 <span className="ml-2 flex gap-1.5">
                   <LiveDataBadge cached={cached} />
                   {dto.demoFinancialData && <DemoFinancialBadge />}
-                  {dto.inputs.fsrOverrideKind === "SCAN_MODELLED" && <Badge tone="warn">Modelled FSR from scan</Badge>}
+                  {(dto.inputs.fsrOverrideKind === "SCAN_MODELLED" || analysis?.site.fsrSource === "STATE_PATHWAY") && (
+                    <Badge tone="warn">State pathway modelled FSR</Badge>
+                  )}
                   {scanProv?.originType === "AREA_SCAN" && <Badge tone="estimate">From area scan</Badge>}
                 </span>
               </div>

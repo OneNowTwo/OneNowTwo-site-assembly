@@ -94,6 +94,21 @@ export interface ScanCandidate {
   >;
 }
 
+export interface ScanFunnel {
+  parcelsLoaded: number;
+  parcelsConsidered: number;
+  parcelsEligible: number;
+  adjacencyEdges: number;
+  generatedByLotCount: Record<string, number>;
+  assembliesGenerated: number;
+  assembliesAfterMinArea: number;
+  financiallyModelled: number;
+  familiesReturned: number;
+  candidatesReturned: number;
+  minAreaSqmUsed: number;
+  partialScan: boolean;
+}
+
 export interface AreaScanResult {
   progress: string[];
   parcelsConsidered: number;
@@ -101,6 +116,7 @@ export interface AreaScanResult {
   rejections: Record<RejectionReason, number>;
   rejectionSamples: { id: string; label: string; reasons: RejectionReason[] }[];
   assembliesGenerated: number;
+  funnel: ScanFunnel;
   families: ScanAssemblyFamily[];
   candidates: ScanCandidate[];
   centres: NominatedCentre[];
@@ -136,16 +152,23 @@ export function assessParcelEligibility(
   if (p.areaSqm > 2500 && (p.planning?.fsr ?? 0) >= 1.5) reasons.push("TOO_LARGE_ALREADY_DEVELOPED");
   if (isHeritageItem(p.planning?.heritage ?? null)) reasons.push("HERITAGE_ITEM");
 
-  const lepFsr = effective.lep.fsr ?? 0;
-  const modFsr = effective.modelled.fsr ?? 0;
-  const hasUplift = modFsr > lepFsr + 0.05 || (lepFsr > 0 && p.areaSqm >= 400);
-  const hasCapacity = modFsr >= 0.5 || (p.planning?.heightM ?? 0) >= 8;
-  if (!hasUplift && !hasCapacity) reasons.push("NO_UPLIFT_OR_CAPACITY");
+  // Missing LEP FSR is null — do not coerce to 0 when testing capacity.
+  const lepFsr = effective.lep.fsr;
+  const modFsr = effective.modelled.fsr;
+  const hasUplift =
+    (modFsr != null && lepFsr != null && modFsr > lepFsr + 0.05) ||
+    (modFsr != null && lepFsr == null && modFsr >= 0.5) ||
+    ((lepFsr ?? 0) > 0 && p.areaSqm >= 400);
+  const hasCapacity = (modFsr != null && modFsr >= 0.5) || (lepFsr != null && lepFsr >= 0.4) || (p.planning?.heightM ?? 0) >= 8;
+  // Ordinary LEP residential lots remain discoverable without LMR.
+  const ordinaryResidential = !!zone && RESIDENTIAL_ZONE.test(zone) && p.areaSqm >= 250 && (lepFsr != null || modFsr != null || (p.planning?.heightM ?? 0) >= 8);
+  if (!hasUplift && !hasCapacity && !ordinaryResidential) reasons.push("NO_UPLIFT_OR_CAPACITY");
 
   // Soft: keep R1/R2 with LMR uplift even if LEP FSR looks weak.
-  const lmrHelps = effective.fsrUplift >= 0.2 && effective.lmr.zoneEligible;
+  const lmrHelps = effective.lmr.zoneEligible && (effective.fsrUplift >= 0.2 || (lepFsr == null && (modFsr ?? 0) >= 0.5));
   const eligible =
-    reasons.filter((r) => r !== "NO_UPLIFT_OR_CAPACITY").length === 0 && (hasUplift || hasCapacity || lmrHelps);
+    reasons.filter((r) => r !== "NO_UPLIFT_OR_CAPACITY").length === 0 &&
+    (hasUplift || hasCapacity || lmrHelps || ordinaryResidential);
 
   if (!eligible && lmrHelps && reasons.length === 1 && reasons[0] === "NO_UPLIFT_OR_CAPACITY") {
     return { id: p.externalParcelId, eligible: true, reasons: [], effective, label: parcelLabel(p) };
@@ -199,10 +222,11 @@ export function generateAreaAssemblies(
   a: Assumptions,
   opts?: { maxSeeds?: number; maxSize?: number; maxPerSeed?: number; minAreaSqm?: number },
 ): AssemblyCandidate[] {
-  const maxSeeds = opts?.maxSeeds ?? 40;
+  const maxSeeds = opts?.maxSeeds ?? 100;
   const maxSize = opts?.maxSize ?? Math.min(a.maxAssemblySize, 6);
-  const maxPerSeed = opts?.maxPerSeed ?? 6;
-  const minArea = opts?.minAreaSqm ?? a.minViableSiteAreaSqm;
+  const maxPerSeed = opts?.maxPerSeed ?? 14;
+  // Scan discovery uses a lower floor than acquisition “min viable” so 2–4 lot sites survive.
+  const minArea = opts?.minAreaSqm ?? Math.min(a.minViableSiteAreaSqm, 800);
 
   // Seed lots with highest modelled FSR × area first (uplift / capacity).
   const seeds = [...lots]
@@ -216,7 +240,7 @@ export function generateAreaAssemblies(
       minSize: 2,
       maxSize,
       maxResults: maxPerSeed,
-      beamWidth: 24,
+      beamWidth: 32,
     });
     for (const c of found) {
       if (c.metrics.totalAreaSqm < minArea) continue;
@@ -300,7 +324,16 @@ export function runAreaScan(input: {
   progress.push("Generating assemblies");
   const lots = eligibleParcels.map((p) => toScanLot(p, elById.get(p.externalParcelId)!));
   const adj = buildAdjacency(eligibleParcels.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })));
-  const raw = generateAreaAssemblies(lots, adj, input.assumptions);
+  let adjacencyEdges = 0;
+  for (const [, ns] of adj) adjacencyEdges += ns.size;
+  adjacencyEdges = Math.floor(adjacencyEdges / 2);
+  const minAreaSqmUsed = Math.min(input.assumptions.minViableSiteAreaSqm, 800);
+  const raw = generateAreaAssemblies(lots, adj, input.assumptions, { minAreaSqm: minAreaSqmUsed });
+  const generatedByLotCount: Record<string, number> = {};
+  for (const c of raw) {
+    const k = String(c.metrics.lotCount);
+    generatedByLotCount[k] = (generatedByLotCount[k] ?? 0) + 1;
+  }
   progress.push("Running initial feasibility");
 
   const byParcel = new Map(parcels.map((p) => [p.externalParcelId, p]));
@@ -388,15 +421,34 @@ export function runAreaScan(input: {
   });
 
   progress.push("Ranking opportunities");
-  const maxResults = input.maxResults ?? 15;
-  const top = scanCandidates.slice(0, Math.max(maxResults * 3, 40));
+  const maxResults = input.maxResults ?? 20;
+  const top = scanCandidates.slice(0, Math.max(maxResults * 4, 80));
   const families = groupAssemblyFamilies(top).slice(0, maxResults);
   const candidates = families.map((f, i) => ({ ...f.best, rank: i + 1 }));
 
   if (candidates.every((c) => !c.financialRankingAvailable)) {
     messages.push("FINANCIAL RANKING PENDING PROPERTY VALUES — suburb $/sqm fallback is screening only and does not drive acquisition headroom. Rankings emphasise planning uplift, site size, geometry and constraints.");
   }
+  messages.push("LMR is one pathway — ordinary LEP capacity also qualifies. Negative headroom sites are kept in the ranking.");
   messages.push("LMR screening may use pedestrian routing when available; otherwise straight-line is screening only and modelled FSR stays REQUIRES PLANNING CONFIRMATION.");
+  messages.push(
+    `Scan funnel: ${parcels.length} considered → ${eligibleParcels.length} eligible → ${raw.length} assemblies (by size ${JSON.stringify(generatedByLotCount)}) → ${candidates.length} ranked (min area ${minAreaSqmUsed} sqm).`,
+  );
+
+  const funnel: ScanFunnel = {
+    parcelsLoaded: parcels.length,
+    parcelsConsidered: parcels.length,
+    parcelsEligible: eligibleParcels.length,
+    adjacencyEdges,
+    generatedByLotCount,
+    assembliesGenerated: raw.length,
+    assembliesAfterMinArea: raw.length,
+    financiallyModelled: scanCandidates.filter((c) => c.financialRankingAvailable).length,
+    familiesReturned: families.length,
+    candidatesReturned: candidates.length,
+    minAreaSqmUsed,
+    partialScan: false,
+  };
 
   return {
     progress,
@@ -405,6 +457,7 @@ export function runAreaScan(input: {
     rejections,
     rejectionSamples,
     assembliesGenerated: raw.length,
+    funnel,
     families,
     candidates,
     centres: input.centres,
@@ -549,6 +602,12 @@ export function applyValuationsToScanResult(
     progress: [...result.progress, "Valuing properties", "Running feasibility", "Ranking opportunities"],
     candidates,
     families: orderedFamilies.length ? orderedFamilies : families,
+    funnel: {
+      ...result.funnel,
+      financiallyModelled: candidates.filter((c) => c.financialRankingAvailable).length,
+      familiesReturned: (orderedFamilies.length ? orderedFamilies : families).length,
+      candidatesReturned: candidates.length,
+    },
     messages,
   };
 }
