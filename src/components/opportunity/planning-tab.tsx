@@ -145,20 +145,48 @@ export function PlanningTab() {
         <Panel title="Basis used for yield">
           <dl className="space-y-1.5 text-[12px]">
             <Line k="Site area" v={sqm(site.siteAreaSqm)} tag={site.siteAreaSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />
-            <Line
-              k="FSR"
-              v={site.fsrSource === "NO_MAPPED" ? "NO MAPPED FSR" : fsr(site.fsr)}
-              tag={site.fsrSource === "OVERRIDE" ? "ASSUMPTION" : site.fsrSource === "OFFICIAL" ? "OFFICIAL" : undefined}
-            />
+            <Line k="BASE LEP FSR" v={site.lepFsr != null ? fsr(site.lepFsr) : "Not mapped"} tag={site.lepFsr != null ? "OFFICIAL" : undefined} />
+            {site.fsrSource === "STATE_PATHWAY" ? (
+              <>
+                <Line k="State pathway" v={site.statePathwayName ?? "Low & Mid-Rise Housing"} />
+                <Line k="STATE LMR FSR" v={site.statePathwayFsr != null ? fsr(site.statePathwayFsr) : fsr(site.fsr)} />
+                <Line k="Modelled effective FSR" v={fsr(site.fsr)} />
+                <Line k="800 m proximity" v={site.lmrProximityLabel ?? "PASS — ESTIMATED"} />
+                <Line
+                  k="Distance (straight-line)"
+                  v={
+                    site.lmrNearestDistanceM != null
+                      ? `${site.lmrNearestDistanceM}${site.lmrFurthestDistanceM != null && site.lmrFurthestDistanceM !== site.lmrNearestDistanceM ? `–${site.lmrFurthestDistanceM}` : ""} m${site.lmrCentreName ? ` · ${site.lmrCentreName}` : ""}`
+                      : "—"
+                  }
+                />
+                <Line k="Status" v="REQUIRES PLANNING CONFIRMATION" />
+              </>
+            ) : (
+              <Line
+                k="FSR"
+                v={site.fsrSource === "NO_MAPPED" ? "NO MAPPED FSR" : fsr(site.fsr)}
+                tag={site.fsrSource === "OVERRIDE" ? "ASSUMPTION" : site.fsrSource === "OFFICIAL" ? "OFFICIAL" : undefined}
+              />
+            )}
             <Line k="Height" v={site.heightLimitM != null ? `${site.heightLimitM} m` : "—"} tag={site.heightSource === "OVERRIDE" ? "ASSUMPTION" : site.heightSource === "OFFICIAL" ? "OFFICIAL" : undefined} />
           </dl>
-          <p className="mt-2 text-[11px] text-muted">Override on the Yield tab as a USER ASSUMPTION — never silently mixed with official FSR.</p>
+          <p className="mt-2 text-[11px] text-muted">
+            {site.fsrSource === "STATE_PATHWAY"
+              ? "ESTIMATED ELIGIBILITY — VERIFY BEFORE ACQUISITION / DA. LEP and State pathway kept separate."
+              : site.fsrSource === "NO_MAPPED"
+                ? "USER FSR REQUIRED only when no LEP FSR and no State pathway apply."
+                : "Override on the Yield tab as a USER ASSUMPTION — never silently mixed with official FSR."}
+          </p>
         </Panel>
         <Panel title="Flags">
           <ul className="space-y-1 text-[12px]">
             {zones.some((z) => z !== "Unknown" && !APARTMENT_ZONES.test(z)) && <li className="text-bad">− Zone(s) {zones.filter((z) => !APARTMENT_ZONES.test(z)).join(", ")} generally exclude residential flat buildings</li>}
-            {analysis.metrics.fsrUnmappedLots > 0 && (
-              <li className="text-amber-800">− No mapped FSR for {analysis.metrics.fsrUnmappedLots} lot(s) — official theoretical GFA excludes those lots until a USER ASSUMPTION is entered</li>
+            {analysis.metrics.fsrUnmappedLots > 0 && site.fsrSource !== "STATE_PATHWAY" && (
+              <li className="text-amber-800">− No mapped LEP FSR for {analysis.metrics.fsrUnmappedLots} lot(s) — not FSR 0:1; check State pathways before asking for a user assumption</li>
+            )}
+            {site.fsrSource === "STATE_PATHWAY" && (
+              <li className="text-amber-800">− State LMR pathway modelled from 800 m straight-line screen (ESTIMATED) — planning confirmation required</li>
             )}
             {analysis.metrics.fsrSplitLots > 0 && <li className="text-amber-800">− {analysis.metrics.fsrSplitLots} lot(s) have split official FSR controls</li>}
             {analysis.metrics.heritageLots > 0 && <li className="text-bad">− {analysis.metrics.heritageLots} heritage-affected lot(s)</li>}

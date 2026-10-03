@@ -127,8 +127,30 @@ export interface LmrProximity {
   centre: NominatedCentre;
   distanceM: number;
   band: LmrBand;
-  /** Straight-line screen only — walking confirmation is applied via WalkingDistanceProvider. */
+  /** MVP: straight-line/geodesic screen only — not a statutory walking-distance test. */
   distanceBasis: "STRAIGHT_LINE_APPROXIMATION";
+}
+
+/** Straight-line distance (m) to centre boundary ring when available, else centre point. */
+export function straightLineDistanceToCentreM(point: Point, centre: NominatedCentre): number {
+  const ring = centre.boundaryRing;
+  if (ring?.length) {
+    let best = Infinity;
+    for (const pt of ring) {
+      const d = haversineM(point.coordinates[0], point.coordinates[1], pt[0]!, pt[1]!);
+      if (d < best) best = d;
+    }
+    return Math.round(best);
+  }
+  return Math.round(haversineM(point.coordinates[0], point.coordinates[1], centre.lng, centre.lat));
+}
+
+export type LmrProximityScreen = "PASS" | "FAIL" | "NONE";
+
+/** MVP 800 m straight-line proximity screen (estimate — not walking-confirmed). */
+export function lmrProximityScreenFromDistanceM(distanceM: number | null): LmrProximityScreen {
+  if (distanceM == null) return "NONE";
+  return distanceM <= 800 ? "PASS" : "FAIL";
 }
 
 /** Nearest nominated centre and approximate straight-line band. */
@@ -136,7 +158,7 @@ export function nearestLmrCentre(point: Point, centres: NominatedCentre[]): LmrP
   if (!centres.length) return null;
   let best: LmrProximity | null = null;
   for (const centre of centres) {
-    const distanceM = haversineM(point.coordinates[0], point.coordinates[1], centre.lng, centre.lat);
+    const distanceM = straightLineDistanceToCentreM(point, centre);
     const cand: LmrProximity = {
       centre,
       distanceM,

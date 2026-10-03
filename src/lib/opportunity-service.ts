@@ -550,15 +550,8 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
   const opp = await loadOpportunity(id);
   if (!opp) return { applied: false, modelledFsr: null, messages: ["Opportunity not found"] };
   const inputs = parseOpportunityInputs(opp.inputs);
-  if (inputs.fsrOverride != null) {
-    return { applied: false, modelledFsr: inputs.fsrOverride, messages: ["FSR override already set"] };
-  }
-
   const parcels = opportunityParcelsToData(opp);
-  const needsPathway = parcels.some((p) => p.planning?.fsr == null);
-  if (!needsPathway || !parcels.length) {
-    return { applied: false, modelledFsr: null, messages: ["LEP FSR already mapped on included lots"] };
-  }
+  if (!parcels.length) return { applied: false, modelledFsr: null, messages: ["No included parcels"] };
 
   const lngs = parcels.map((p) => p.centroid[0]);
   const lats = parcels.map((p) => p.centroid[1]);
@@ -569,8 +562,41 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
     east: Math.max(...lngs) + pad,
     north: Math.max(...lats) + pad,
   }).catch(() => []);
-
   const modelled = resolveAssemblyModelledControls(parcels, centres);
+
+  // Backfill pathway snapshot for existing SCAN_MODELLED opportunities (FSR display fix).
+  if (inputs.fsrOverride != null) {
+    if (inputs.fsrOverrideKind === "SCAN_MODELLED" && !inputs.pathwaySnapshot && modelled.usedStatePathway) {
+      await prisma.opportunity.update({
+        where: { id },
+        data: {
+          inputs: {
+            ...inputs,
+            pathwaySnapshot: {
+              lepFsr: modelled.lepFsr,
+              statePathwayFsr: modelled.statePathwayFsr,
+              statePathwayName: modelled.statePathwayName,
+              modelledFsr: inputs.fsrOverride,
+              certainty: modelled.certainty,
+              lmrCentre: modelled.lmrCentre,
+              nearestDistanceM: modelled.nearestDistanceM,
+              furthestDistanceM: modelled.furthestDistanceM,
+              proximityScreen: modelled.proximityScreen,
+              proximityLabel: modelled.proximityLabel,
+            },
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
+      return { applied: true, modelledFsr: inputs.fsrOverride, messages: ["Backfilled LEP vs State pathway snapshot for display"] };
+    }
+    return { applied: false, modelledFsr: inputs.fsrOverride, messages: ["FSR override already set"] };
+  }
+
+  const needsPathway = parcels.some((p) => p.planning?.fsr == null);
+  if (!needsPathway) {
+    return { applied: false, modelledFsr: null, messages: ["LEP FSR already mapped on included lots"] };
+  }
+
   if (modelled.modelledFsr == null || modelled.modelledFsr <= 0) {
     return {
       applied: false,
@@ -582,12 +608,37 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
     };
   }
 
+  if (!modelled.usedStatePathway || modelled.proximityScreen !== "PASS") {
+    return {
+      applied: false,
+      modelledFsr: null,
+      messages: [
+        modelled.proximityScreen === "FAIL" || modelled.proximityScreen === "MIXED"
+          ? "LMR proximity screen did not PASS for all lots — State LMR FSR not applied to modelled yield."
+          : "NO MAPPED LEP FSR and no usable State pathway FSR resolved — feasibility stays REQUIRES PLANNING INPUT (not FSR 0:1).",
+        ...modelled.notes.slice(0, 3),
+      ],
+    };
+  }
+
   const next = {
     ...inputs,
     fsrOverride: modelled.modelledFsr,
     fsrOverrideKind: "SCAN_MODELLED" as const,
     fsrOverrideCertainty: modelled.certainty,
     heightOverrideM: inputs.heightOverrideM ?? modelled.modelledHeightM,
+    pathwaySnapshot: {
+      lepFsr: modelled.lepFsr,
+      statePathwayFsr: modelled.statePathwayFsr,
+      statePathwayName: modelled.statePathwayName,
+      modelledFsr: modelled.modelledFsr,
+      certainty: modelled.certainty,
+      lmrCentre: modelled.lmrCentre,
+      nearestDistanceM: modelled.nearestDistanceM,
+      furthestDistanceM: modelled.furthestDistanceM,
+      proximityScreen: modelled.proximityScreen,
+      proximityLabel: modelled.proximityLabel,
+    },
   };
   await prisma.opportunity.update({
     where: { id },
@@ -599,6 +650,7 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
     messages: [
       `Applied CURRENT State pathway modelled FSR ${modelled.modelledFsr}:1` +
         (modelled.lmrCentre ? ` near ${modelled.lmrCentre}` : "") +
+        ` · 800 m proximity ${modelled.proximityLabel ?? "PASS — ESTIMATED"}` +
         ` (${modelled.certainty.replaceAll("_", " ")}). NOT a silent LEP invent.`,
       ...modelled.notes.slice(0, 4),
     ],

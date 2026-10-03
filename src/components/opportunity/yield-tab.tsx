@@ -49,14 +49,52 @@ export function YieldTab() {
                   />
                 }
                 hint={
-                  site.fsrSource === "NO_MAPPED"
-                    ? "NO MAPPED LEP FSR — not FSR 0:1. Waiting for a State pathway or enter a USER ASSUMPTION."
-                    : site.fsrSource === "STATE_PATHWAY"
-                      ? `CURRENT State pathway modelled FSR ${fsr(site.fsr)} (${(site.fsrCertainty ?? "candidate").replaceAll("_", " ")}).`
+                  site.fsrSource === "STATE_PATHWAY"
+                    ? `Modelled from State pathway — not a user assumption. Clear only to remove pathway modelling.`
+                    : site.fsrSource === "NO_MAPPED"
+                      ? "USER FSR REQUIRED — no mapped LEP FSR and no applicable State pathway."
                       : `Official equivalent: ${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (some lots unmapped)" : ""}. Clear to use official controls.`
                 }
               >
-                <NumberField value={dto.inputs.fsrOverride ?? (site.fsrSource === "NO_MAPPED" ? null : site.fsr)} dp={2} onCommit={(v) => updateInputs({ fsrOverride: v && Math.abs(v - analysis.metrics.weightedFsr) > 0.001 ? v : null })} />
+                {site.fsrSource === "STATE_PATHWAY" ? (
+                  <div className="space-y-2 text-[12px]">
+                    <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      <dt className="text-muted">BASE LEP FSR</dt>
+                      <dd className="num font-semibold">{site.lepFsr != null ? fsr(site.lepFsr) : "Not mapped"}</dd>
+                      <dt className="text-muted">State pathway</dt>
+                      <dd>{site.statePathwayName ?? "Low & Mid-Rise Housing"}</dd>
+                      <dt className="text-muted">STATE LMR FSR</dt>
+                      <dd className="num font-semibold">{site.statePathwayFsr != null ? fsr(site.statePathwayFsr) : fsr(site.fsr)}</dd>
+                      <dt className="text-muted">Modelled effective FSR</dt>
+                      <dd className="num font-semibold">{fsr(site.fsr)}</dd>
+                      <dt className="text-muted">800 m proximity</dt>
+                      <dd>{site.lmrProximityLabel ?? "PASS — ESTIMATED"}</dd>
+                      <dt className="text-muted">Distance (straight-line)</dt>
+                      <dd className="num">
+                        {site.lmrNearestDistanceM != null
+                          ? site.lmrFurthestDistanceM != null && site.lmrFurthestDistanceM !== site.lmrNearestDistanceM
+                            ? `${site.lmrNearestDistanceM}–${site.lmrFurthestDistanceM} m`
+                            : `${site.lmrNearestDistanceM} m`
+                          : "—"}
+                        {site.lmrCentreName ? ` to ${site.lmrCentreName}` : ""}
+                      </dd>
+                      <dt className="text-muted">Status</dt>
+                      <dd>REQUIRES PLANNING CONFIRMATION</dd>
+                    </dl>
+                    <p className="text-[11px] text-amber-900">ESTIMATED ELIGIBILITY — VERIFY BEFORE ACQUISITION / DA. Not a walking-distance confirmation.</p>
+                  </div>
+                ) : (
+                  <NumberField
+                    value={dto.inputs.fsrOverride ?? (site.fsrSource === "NO_MAPPED" ? null : site.fsr)}
+                    dp={2}
+                    onCommit={(v) =>
+                      updateInputs({
+                        fsrOverride: v && Math.abs(v - analysis.metrics.weightedFsr) > 0.001 ? v : null,
+                        fsrOverrideKind: v ? "USER" : "NONE",
+                      })
+                    }
+                  />
+                )}
               </Field>
               <Field label="Height limit (m)" tag={<SourceTag kind={site.heightSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />} hint={`Mapped: ${analysis.metrics.heightMinM ?? "—"} m`}>
                 <NumberField value={dto.inputs.heightOverrideM ?? site.heightLimitM} onCommit={(v) => updateInputs({ heightOverrideM: v && v !== analysis.metrics.heightMinM ? v : null })} />

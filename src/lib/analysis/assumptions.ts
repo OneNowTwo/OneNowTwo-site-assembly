@@ -219,6 +219,22 @@ export const opportunityInputsSchema = z.object({
   /** Why fsrOverride was set — SCAN_MODELLED keeps provisional LMR; USER is manual. */
   fsrOverrideKind: z.enum(["SCAN_MODELLED", "USER", "NONE"]).default("NONE"),
   fsrOverrideCertainty: z.string().nullable().default(null),
+  /** Persisted LEP vs State pathway split for consistent Analyse / Yield / Planning display. */
+  pathwaySnapshot: z
+    .object({
+      lepFsr: z.number().nullable(),
+      statePathwayFsr: z.number().nullable(),
+      statePathwayName: z.string().nullable(),
+      modelledFsr: z.number().nullable(),
+      certainty: z.string(),
+      lmrCentre: z.string().nullable(),
+      nearestDistanceM: z.number().nullable(),
+      furthestDistanceM: z.number().nullable(),
+      proximityScreen: z.enum(["PASS", "FAIL", "MIXED", "NONE"]),
+      proximityLabel: z.string().nullable(),
+    })
+    .nullable()
+    .default(null),
   heightOverrideM: z.number().positive().nullable().default(null),
   /** Manual override of indicative achievable GFA (null = system estimate). */
   achievableGfaOverride: z.number().positive().nullable().default(null),

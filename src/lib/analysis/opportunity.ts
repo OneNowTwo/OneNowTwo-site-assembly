@@ -59,6 +59,15 @@ export interface SiteBasis {
   fsrSource: SiteFsrSource;
   yieldStatus: YieldStatus;
   fsrCertainty: string | null;
+  /** Base LEP FSR — null when not mapped (never shown as 0). */
+  lepFsr: number | null;
+  statePathwayFsr: number | null;
+  statePathwayName: string | null;
+  lmrCentreName: string | null;
+  lmrNearestDistanceM: number | null;
+  lmrFurthestDistanceM: number | null;
+  lmrProximityScreen: "PASS" | "FAIL" | "MIXED" | "NONE" | null;
+  lmrProximityLabel: string | null;
   heightLimitM: number | null;
   heightSource: "OFFICIAL" | "OVERRIDE" | "NONE";
 }
@@ -126,6 +135,9 @@ function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityI
   const siteAreaSqm = inputs.siteAreaOverride ?? parcelArea;
   const siteAreaSource: SiteBasis["siteAreaSource"] = inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS";
 
+  const snap = inputs.pathwaySnapshot;
+  const lepFsr = snap?.lepFsr ?? (anyUnmapped && officialFsr <= 0 ? null : officialFsr > 0 ? officialFsr : null);
+
   if (inputs.fsrOverride != null) {
     const fromScan = inputs.fsrOverrideKind === "SCAN_MODELLED";
     return {
@@ -136,6 +148,14 @@ function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityI
       fsrSource: fromScan ? "STATE_PATHWAY" : "OVERRIDE",
       yieldStatus: "CALCULABLE",
       fsrCertainty: inputs.fsrOverrideCertainty ?? (fromScan ? "REQUIRES_PLANNING_CONFIRMATION" : null),
+      lepFsr,
+      statePathwayFsr: snap?.statePathwayFsr ?? (fromScan ? inputs.fsrOverride : null),
+      statePathwayName: snap?.statePathwayName ?? (fromScan ? "Low & Mid-Rise Housing (Housing SEPP)" : null),
+      lmrCentreName: snap?.lmrCentre ?? null,
+      lmrNearestDistanceM: snap?.nearestDistanceM ?? null,
+      lmrFurthestDistanceM: snap?.furthestDistanceM ?? null,
+      lmrProximityScreen: snap?.proximityScreen ?? (fromScan ? "PASS" : null),
+      lmrProximityLabel: snap?.proximityLabel ?? (fromScan ? "PASS — ESTIMATED" : null),
       heightLimitM,
       heightSource,
     };
@@ -150,6 +170,14 @@ function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityI
       fsrSource: "NO_MAPPED",
       yieldStatus: "REQUIRES_PLANNING_INPUT",
       fsrCertainty: null,
+      lepFsr: null,
+      statePathwayFsr: null,
+      statePathwayName: null,
+      lmrCentreName: snap?.lmrCentre ?? null,
+      lmrNearestDistanceM: snap?.nearestDistanceM ?? null,
+      lmrFurthestDistanceM: snap?.furthestDistanceM ?? null,
+      lmrProximityScreen: snap?.proximityScreen ?? null,
+      lmrProximityLabel: snap?.proximityLabel ?? null,
       heightLimitM,
       heightSource,
     };
@@ -162,6 +190,14 @@ function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityI
     fsrSource: "OFFICIAL",
     yieldStatus: "CALCULABLE",
     fsrCertainty: "OFFICIAL_LEP",
+    lepFsr: officialFsr,
+    statePathwayFsr: null,
+    statePathwayName: null,
+    lmrCentreName: null,
+    lmrNearestDistanceM: null,
+    lmrFurthestDistanceM: null,
+    lmrProximityScreen: null,
+    lmrProximityLabel: null,
     heightLimitM,
     heightSource,
   };

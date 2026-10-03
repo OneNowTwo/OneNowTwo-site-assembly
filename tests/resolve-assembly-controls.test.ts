@@ -67,7 +67,11 @@ describe("resolveAssemblyModelledControls", () => {
     expect(r.lepFsr).toBeNull();
     expect(r.anyUnmappedLep).toBe(true);
     expect(r.modelledFsr).toBe(0.8);
+    expect(r.statePathwayFsr).toBe(0.8);
     expect(r.usedStatePathway).toBe(true);
-    expect(r.notes.some((n) => /NO MAPPED LEP FSR/i.test(n))).toBe(true);
+    expect(r.proximityScreen).toBe("PASS");
+    expect(r.proximityLabel).toMatch(/PASS/);
+    expect(r.nearestDistanceM).not.toBeNull();
+    expect(r.notes.some((n) => /Not mapped|NO MAPPED LEP FSR/i.test(n))).toBe(true);
   });
 });

@@ -124,16 +124,14 @@ export async function getParcelPlanningContext(input: {
   const centres = input.centres ?? [];
   if (centres.length) {
     const eff = resolveEffectiveControls(p.planning, p.centroid, centres, input.walking);
-    if (eff.statePolicy) {
-      const walkingOk = eff.lmr.distanceBasis === "PEDESTRIAN_ROUTE";
+    if (eff.statePolicy && eff.lmr.proximityScreen === "PASS") {
+      const dist = eff.lmr.straightLineDistanceM;
       pathways.push({
         id: "pathway:lmr",
         kind: "LMR",
         title: "Low & Mid-Rise Housing (Housing SEPP)",
-        status: walkingOk ? "CANDIDATE" : "REQUIRES_PLANNING_CONFIRMATION",
-        summary: walkingOk
-          ? `LMR ${eff.lmr.band} near ${eff.lmr.centreName ?? "nominated centre"} — walking distance confirmed.`
-          : `LMR proximity screen near ${eff.lmr.centreName ?? "nominated centre"} — walking not confirmed; modelled FSR requires planning confirmation.`,
+        status: "REQUIRES_PLANNING_CONFIRMATION",
+        summary: `LMR proximity ${eff.lmr.proximityLabel ?? "PASS — ESTIMATED"} · ${dist != null ? `${dist} m straight-line` : "—"} to ${eff.lmr.centreName ?? "nominated centre"}. WITHIN 800M SCREENING AREA — planning confirmation required.`,
         meta: LMR_META,
         controls: {
           baseFsr: eff.lep.fsr,
@@ -143,10 +141,11 @@ export async function getParcelPlanningContext(input: {
           pathwayHeightM: eff.statePolicy.heightM,
           effectiveHeightM: eff.modelled.heightM,
           howCalculated: [
-            `LEP FSR: ${eff.lep.fsr ?? "—"}`,
-            `LMR non-discretionary FSR: ${eff.statePolicy.fsr ?? "—"}`,
-            `Modelled effective FSR: ${eff.modelled.fsr ?? "—"} (${eff.modelled.certainty})`,
-            `Distance basis: ${eff.lmr.distanceBasis}`,
+            `BASE LEP FSR: ${eff.lep.fsr != null ? `${eff.lep.fsr}:1` : "Not mapped"}`,
+            `STATE LMR FSR: ${eff.statePolicy.fsr ?? "—"}:1`,
+            `MODELLED EFFECTIVE FSR: ${eff.modelled.fsr ?? "—"}:1`,
+            `800 m proximity: ${eff.lmr.proximityLabel ?? "—"} (${dist != null ? `${dist} m straight-line` : "—"})`,
+            "ESTIMATED ELIGIBILITY — VERIFY BEFORE ACQUISITION / DA",
           ],
         },
         eligibilityNotes: [
