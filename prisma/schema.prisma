@@ -66,12 +66,15 @@ enum MarketValueSource {
 }
 
 model User {
-  id            String        @id @default(cuid())
-  email         String        @unique
+  id            String         @id @default(cuid())
+  email         String         @unique
   name          String?
-  createdAt     DateTime      @default(now())
+  createdAt     DateTime       @default(now())
   lastLoginAt   DateTime?
   opportunities Opportunity[]
+  watchItems    WatchItem[]
+  alertRules    AlertRule[]
+  morningReports MorningReport[]
 }
 
 model Opportunity {
@@ -115,6 +118,9 @@ model Opportunity {
   scenarios         FeasibilityScenario[]
   comparableSales   ComparableSale[]
   unitTypes         UnitType[]
+  changeEvents      OpportunityChangeEvent[]
+  feedItems         FeedItem[]
+  watchItems        WatchItem[]
 
   @@index([status])
   @@index([updatedAt])
@@ -317,4 +323,261 @@ model UnitType {
   updatedAt        DateTime    @updatedAt
 
   @@index([opportunityId])
+}
+
+// ─── Phase 2: stickiness / monitoring ───────────────────────────────────────
+
+enum WatchItemKind {
+  SUBURB
+  MAP_AREA
+  PRECINCT
+  PARCEL
+  OPPORTUNITY
+}
+
+enum ScanCadence {
+  MANUAL
+  DAILY
+  WEEKLY
+}
+
+enum ScanJobStatus {
+  IDLE
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum FeedKind {
+  NEW
+  IMPROVED
+  DECLINED
+  PLANNING_CHANGE
+  NEW_SALE
+  WATCHLIST_CHANGE
+  ALERT
+  REPORT
+}
+
+enum AlertChannel {
+  IN_APP
+  EMAIL
+  PUSH
+}
+
+enum ChangeEventKind {
+  STATUS
+  SCORE
+  HEADROOM
+  MAX_PAYABLE
+  GRV
+  EXISTING_VALUE
+  PLANNING
+  PATHWAY
+  COMPARABLE
+  SALE
+  ASSUMPTIONS
+  OTHER
+}
+
+/// Saved area / parcel / opportunity on a user's watchlist.
+model WatchItem {
+  id                 String        @id @default(cuid())
+  userId             String
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind               WatchItemKind
+  label              String
+  /// Suburb name when kind=SUBURB / MAP_AREA hint.
+  suburb             String?
+  /// Optional GeoJSON bbox {west,south,east,north} for MAP_AREA / PRECINCT.
+  bbox               Json?
+  precinctId         String?
+  externalParcelId   String?
+  opportunityId      String?
+  opportunity        Opportunity?  @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  /// Filter criteria JSON (minSiteArea, minHeadroom, minScore, zoning, lots, pathway, …).
+  filters            Json          @default("{}")
+  notes              String?
+  scanCadence        ScanCadence   @default(MANUAL)
+  lastScanAt         DateTime?
+  nextScanAt         DateTime?
+  scanStatus         ScanJobStatus @default(IDLE)
+  lastScanSummary    Json?
+  active             Boolean       @default(true)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  scanJobs           AreaScanJob[]
+  alertRules         AlertRule[]
+
+  @@index([userId, active])
+  @@index([kind])
+  @@index([nextScanAt])
+}
+
+/// Opportunity metric / narrative timeline — never silently overwrite history.
+model OpportunityChangeEvent {
+  id             String          @id @default(cuid())
+  opportunityId  String
+  opportunity    Opportunity     @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  kind           ChangeEventKind
+  title          String
+  summary        String?
+  /// Before snapshot (numbers / status / pathway labels).
+  before         Json?
+  /// After snapshot.
+  after          Json?
+  /// Why this change was recorded (sale id, planning id, user action…).
+  reason         String?
+  source         String?
+  createdAt      DateTime        @default(now())
+
+  @@index([opportunityId, createdAt])
+  @@index([kind, createdAt])
+}
+
+/// Workspace feed — "what should I look at today?"
+model FeedItem {
+  id             String       @id @default(cuid())
+  kind           FeedKind
+  title          String
+  summary        String?
+  opportunityId  String?
+  opportunity    Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  watchItemId    String?
+  href           String?
+  /// Sort helpers persisted at write time.
+  score          Int?
+  headroom       Float?
+  maxPayable     Float?
+  scoreDelta     Int?
+  headroomDelta  Float?
+  importance     Float        @default(0)
+  payload        Json?
+  createdAt      DateTime     @default(now())
+  readAt         DateTime?
+
+  @@index([createdAt])
+  @@index([kind, createdAt])
+  @@index([importance])
+  @@index([opportunityId])
+}
+
+/// User-defined alert criteria. Delivery channels expandable later.
+model AlertRule {
+  id             String        @id @default(cuid())
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  active         Boolean       @default(true)
+  /// Criteria JSON: suburb, minScore, minHeadroom, minHeadroomPct, pathway, minLots, viable, …
+  criteria       Json          @default("{}")
+  watchItemId    String?
+  watchItem      WatchItem?    @relation(fields: [watchItemId], references: [id], onDelete: SetNull)
+  channels       AlertChannel[] @default([IN_APP])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  events         AlertEvent[]
+
+  @@index([userId, active])
+}
+
+model AlertEvent {
+  id             String     @id @default(cuid())
+  ruleId         String
+  rule           AlertRule  @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  title          String
+  summary        String?
+  opportunityId  String?
+  href           String?
+  payload        Json?
+  /// Delivery bookkeeping for future email/push.
+  deliveredInApp Boolean    @default(true)
+  deliveredEmail Boolean    @default(false)
+  deliveredPush  Boolean    @default(false)
+  readAt         DateTime?
+  createdAt      DateTime   @default(now())
+
+  @@index([ruleId, createdAt])
+  @@index([createdAt])
+}
+
+/// Generated daily morning report (in-app first).
+model MorningReport {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reportDate     DateTime @db.Date
+  title          String
+  /// Structured sections JSON.
+  body           Json
+  summaryLine    String?
+  createdAt      DateTime @default(now())
+
+  @@unique([userId, reportDate])
+  @@index([reportDate])
+}
+
+/// Scheduled / manual re-scan job for a saved area.
+model AreaScanJob {
+  id              String        @id @default(cuid())
+  watchItemId     String
+  watchItem       WatchItem     @relation(fields: [watchItemId], references: [id], onDelete: Cascade)
+  status          ScanJobStatus @default(QUEUED)
+  cadence         ScanCadence   @default(MANUAL)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  resultsAdded    Int           @default(0)
+  resultsChanged  Int           @default(0)
+  resultsRemoved  Int           @default(0)
+  summary         Json?
+  error           String?
+  createdAt       DateTime      @default(now())
+
+  @@index([watchItemId, createdAt])
+  @@index([status])
+}
+
+/// Deduped NSW registered sales observed by the monitor.
+model MonitoredSale {
+  id             String   @id @default(cuid())
+  /// Stable key: dealing|propid|address|saleDate|price
+  saleKey        String   @unique
+  address        String
+  suburb         String?
+  salePrice      Float
+  saleDate       DateTime?
+  dealing        String?
+  propid         Int?
+  lng            Float?
+  lat            Float?
+  landAreaSqm    Float?
+  raw            Json?
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+
+  @@index([suburb])
+  @@index([saleDate])
+}
+
+/// Planning updates attributed to watched areas (proposed stays separate from current law).
+model PlanningMonitorEvent {
+  id             String   @id @default(cuid())
+  changeKey      String
+  title          String
+  summary        String?
+  status         String?
+  suburb         String?
+  watchItemId    String?
+  opportunityId  String?
+  /// Current vs proposed payload — proposed never applied to feasibility here.
+  current        Json?
+  proposed       Json?
+  impact         String?
+  sourceUrl      String?
+  payload        Json?
+  createdAt      DateTime @default(now())
+
+  @@index([changeKey, createdAt])
+  @@index([createdAt])
 }

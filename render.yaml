@@ -36,3 +36,6 @@ services:
         sync: false
       - key: AUTH_PASSWORD_HASH
         sync: false
+      # Optional: protect /api/cron/monitoring and /api/cron/planning-watch
+      - key: CRON_SECRET
+        sync: false
