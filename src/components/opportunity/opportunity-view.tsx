@@ -244,13 +244,17 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                   <ScoreBadge score={analysis.score.score} />
                 </div>
               </div>
-              <HeaderStat label="Existing value" value={money(analysis.combinedExistingValue, { compact: true })} />
+              <HeaderStat
+                label="Existing value"
+                value={analysis.marketValueComplete ? money(analysis.combinedExistingValue, { compact: true }) : "—"}
+                sub={analysis.marketValueComplete ? undefined : "VALUE REQUIRED"}
+              />
               <HeaderStat label="Max payable to owners" value={money(analysis.maxPayableToOwners, { compact: true })} tone={analysis.maxPayableToOwners > 0 ? "brand" : "bad"} large />
               <HeaderStat
                 label="Acquisition headroom"
-                value={money(analysis.acquisitionHeadroom, { compact: true })}
-                tone={analysis.acquisitionHeadroom > 0 ? "good" : "bad"}
-                sub={pct(analysis.acquisitionHeadroomPercent, 0, true)}
+                value={analysis.marketValueComplete ? money(analysis.acquisitionHeadroom, { compact: true }) : "—"}
+                tone={analysis.marketValueComplete ? ((analysis.acquisitionHeadroom ?? 0) > 0 ? "good" : "bad") : undefined}
+                sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : "Enter lot values"}
                 large
               />
               <HeaderStat label="GRV" value={money(f.grv, { compact: true })} />

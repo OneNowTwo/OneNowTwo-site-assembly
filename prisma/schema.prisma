@@ -58,8 +58,11 @@ enum MarketValueSource {
   USER_ESTIMATE
   COMPARABLE_DERIVED
   LIVE_PROVIDER
+  LIVE_AVM
   SYSTEM_ESTIMATE
+  SUBURB_FALLBACK
   DEMO
+  NO_VALUE
 }
 
 model User {
@@ -162,8 +165,14 @@ model OpportunityParcel {
   included              Boolean               @default(true)
   /// Estimated current market value of the existing property (acquisition-side).
   marketValue           Float?
+  marketValueLow        Float?
+  marketValueHigh       Float?
   marketValueSource     MarketValueSource?
   marketValueConfidence String?
+  marketValueProvider   String?
+  marketValueMethod     String?
+  marketValueCheckedAt  DateTime?
+  marketValueNote       String?
   landValuePerSqm       Float?
   comparableValue       Float?
   maxAllocationOverride Float?

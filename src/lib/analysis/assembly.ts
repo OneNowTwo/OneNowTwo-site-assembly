@@ -109,12 +109,17 @@ export interface AssemblyMetrics {
   owners: number;
   combinedValue: number;
   combinedValueEstimated: boolean;
+  /** True only when every lot has a trusted market value (AVM / comps / user). */
+  financialValuationAvailable: boolean;
+  /** Rough screening total (area × generic rate) — DO NOT USE FOR ACQUISITION DECISION. */
+  screeningCombinedValue: number;
   /** Maximum payable to owners. */
   indicativeBudget: number;
   maxPayableToOwners: number;
-  acquisitionHeadroom: number;
+  /** Null when valuations are insufficient — never invent headroom from suburb fallback. */
+  acquisitionHeadroom: number | null;
   acquisitionHeadroomPercent: number | null;
-  assemblyUplift: number;
+  assemblyUplift: number | null;
   profit: number;
   marginOnCost: number;
   upliftRatio: number;
@@ -137,8 +142,15 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
   const minLotSizeIssues: string[] = [];
   const maxMinLot = minLotSizes.length ? Math.max(...minLotSizes) : null;
   if (maxMinLot != null && totalAreaSqm < maxMinLot) minLotSizeIssues.push(`Combined area below ${maxMinLot.toLocaleString("en-AU")} sqm minimum lot size`);
-  const valueEstimated = lots.some((l) => !(l.marketValue && l.marketValue > 0));
-  const combinedValue = lots.reduce((s, l) => s + (l.marketValue && l.marketValue > 0 ? l.marketValue : l.areaSqm * a.existingValuePerSqm), 0);
+  // Trusted values only — never invent suburb $/sqm into acquisition economics.
+  const trustedLots = lots.filter((l) => l.marketValue != null && l.marketValue > 0);
+  const financialValuationAvailable = lots.length > 0 && trustedLots.length === lots.length;
+  const combinedValue = financialValuationAvailable ? trustedLots.reduce((s, l) => s + (l.marketValue as number), 0) : 0;
+  const valueEstimated = !financialValuationAvailable;
+  const screeningCombinedValue = lots.reduce(
+    (s, l) => s + (l.marketValue != null && l.marketValue > 0 ? l.marketValue : l.areaSqm * a.existingValuePerSqm),
+    0,
+  );
   const heightLimitM = heights.length ? Math.min(...heights) : null;
   const yProbe = computeYield({
     siteAreaSqm: totalAreaSqm,
@@ -178,7 +190,7 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
     unitMix: a.revenueMode === "UNIT_MIX" ? resolvedMix : unitMix,
     a,
   });
-  const headroom = acquisitionHeadroom(f.maxAcquisitionBudget, combinedValue);
+  const headroom = financialValuationAvailable ? acquisitionHeadroom(f.maxAcquisitionBudget, combinedValue) : null;
   return {
     lotIds: lots.map((l) => l.id),
     lotCount: lots.length,
@@ -204,14 +216,16 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
     owners: lots.length,
     combinedValue,
     combinedValueEstimated: valueEstimated,
+    financialValuationAvailable,
+    screeningCombinedValue,
     indicativeBudget: f.maxAcquisitionBudget,
     maxPayableToOwners: f.maxAcquisitionBudget,
-    acquisitionHeadroom: headroom.acquisitionHeadroom,
-    acquisitionHeadroomPercent: headroom.acquisitionHeadroomPercent,
-    assemblyUplift: headroom.assemblyUplift,
+    acquisitionHeadroom: headroom?.acquisitionHeadroom ?? null,
+    acquisitionHeadroomPercent: headroom?.acquisitionHeadroomPercent ?? null,
+    assemblyUplift: headroom?.assemblyUplift ?? null,
     profit: f.profit,
     marginOnCost: f.marginOnCost,
-    upliftRatio: combinedValue > 0 ? f.maxAcquisitionBudget / combinedValue : 0,
+    upliftRatio: financialValuationAvailable && combinedValue > 0 ? f.maxAcquisitionBudget / combinedValue : 0,
     planningUnknownLots: lots.filter((l) => !l.planningKnown).length,
     connected: adj ? isConnected(
       lots.map((l) => l.id),
@@ -254,24 +268,35 @@ const count = (n: number, noun: string) => `${words[n] ?? n} ${noun}${n === 1 ? 
 export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunityScore {
   const factors: ScoreFactor[] = [];
 
-  // Acquisition headroom $ — primary ranking signal
-  const headroomScore = clamp01(m.acquisitionHeadroom / 8_000_000) * 70 + clamp01((m.acquisitionHeadroomPercent ?? 0) / 1.5) * 30;
-  if (m.acquisitionHeadroom >= 1_000_000) {
-    factors.push({
-      sign: "+",
-      text: `acquisition headroom $${(m.acquisitionHeadroom / 1e6).toFixed(1)}m (${m.acquisitionHeadroomPercent != null ? `${Math.round(m.acquisitionHeadroomPercent * 100)}%` : "—"} over existing value)`,
-    });
+  // Acquisition headroom — only when trusted valuations exist. Never reward suburb fallback.
+  let headroomScore = 40;
+  if (!m.financialValuationAvailable) {
+    headroomScore = 35;
+    factors.push({ sign: "-", text: "FINANCIAL RANKING PENDING PROPERTY VALUES — enter market estimates before trusting headroom" });
   } else {
-    factors.push({ sign: "-", text: `acquisition headroom only $${(m.acquisitionHeadroom / 1e6).toFixed(2)}m — limited room to overpay` });
+    const hr = m.acquisitionHeadroom ?? 0;
+    headroomScore = clamp01(hr / 8_000_000) * 70 + clamp01((m.acquisitionHeadroomPercent ?? 0) / 1.5) * 30;
+    if (hr >= 1_000_000) {
+      factors.push({
+        sign: "+",
+        text: `acquisition headroom $${(hr / 1e6).toFixed(1)}m (${m.acquisitionHeadroomPercent != null ? `${Math.round(m.acquisitionHeadroomPercent * 100)}%` : "—"} over existing value)`,
+      });
+    } else {
+      factors.push({ sign: "-", text: `acquisition headroom only $${(hr / 1e6).toFixed(2)}m — limited room to overpay` });
+    }
   }
 
-  const developmentUplift = clamp01((m.upliftRatio - 0.9) / (1.8 - 0.9)) * 100;
-  if (m.upliftRatio >= 1.15)
-    factors.push({
-      sign: "+",
-      text: `max payable ${m.upliftRatio.toFixed(1)}× existing property value${m.combinedValueEstimated ? " (estimated)" : ""}`,
-    });
-  else factors.push({ sign: "-", text: `max payable only ${m.upliftRatio.toFixed(2)}× existing value — little assembly uplift` });
+  const developmentUplift = m.financialValuationAvailable ? clamp01((m.upliftRatio - 0.9) / (1.8 - 0.9)) * 100 : 45;
+  if (m.financialValuationAvailable) {
+    if (m.upliftRatio >= 1.15)
+      factors.push({
+        sign: "+",
+        text: `max payable ${m.upliftRatio.toFixed(1)}× existing property value`,
+      });
+    else factors.push({ sign: "-", text: `max payable only ${m.upliftRatio.toFixed(2)}× existing value — little assembly uplift` });
+  } else {
+    factors.push({ sign: "-", text: "ROUGH SCREENING ESTIMATE only — DO NOT USE FOR ACQUISITION DECISION" });
+  }
 
   const planningCapacity = clamp01(m.weightedFsr / 2) * 80 + clamp01((m.heightMinM ?? 0) / 24) * 20;
   const fsrText =
@@ -365,17 +390,17 @@ function sortCandidates(list: AssemblyCandidate[], sortBy: GenerateOptions["sort
   const cmp = (x: AssemblyCandidate, y: AssemblyCandidate) => {
     switch (sortBy) {
       case "headroom":
-        return y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+        return (y.metrics.acquisitionHeadroom ?? -Infinity) - (x.metrics.acquisitionHeadroom ?? -Infinity);
       case "profit":
         return y.metrics.profit - x.metrics.profit;
       case "owners":
-        return x.metrics.owners - y.metrics.owners || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+        return x.metrics.owners - y.metrics.owners || (y.metrics.acquisitionHeadroom ?? -Infinity) - (x.metrics.acquisitionHeadroom ?? -Infinity);
       case "area":
         return y.metrics.totalAreaSqm - x.metrics.totalAreaSqm;
       case "moc":
         return y.metrics.marginOnCost - x.metrics.marginOnCost;
       default:
-        return y.score.score - x.score.score || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+        return y.score.score - x.score.score || (y.metrics.acquisitionHeadroom ?? -Infinity) - (x.metrics.acquisitionHeadroom ?? -Infinity);
     }
   };
   return [...list].sort(cmp);

@@ -150,7 +150,7 @@ async function main() {
     `  site ${Math.round(analysis!.site.siteAreaSqm)} sqm · achievable GFA ${Math.round(analysis!.base.yield.achievableGfa)} · ${analysis!.base.yield.dwellings} dwellings · GRV $${(f.grv / 1e6).toFixed(1)}m`,
   );
   console.log(
-    `  existing $${(analysis!.combinedExistingValue / 1e6).toFixed(2)}m → max payable $${(analysis!.maxPayableToOwners / 1e6).toFixed(2)}m → headroom $${(analysis!.acquisitionHeadroom / 1e6).toFixed(2)}m (${Math.round((analysis!.acquisitionHeadroomPercent ?? 0) * 100)}%)`,
+    `  existing $${(((analysis!.combinedExistingValue ?? 0) / 1e6).toFixed(2))}m → max payable $${(analysis!.maxPayableToOwners / 1e6).toFixed(2)}m → headroom $${(((analysis!.acquisitionHeadroom ?? 0) / 1e6).toFixed(2))}m (${Math.round((analysis!.acquisitionHeadroomPercent ?? 0) * 100)}%)`,
   );
 }
 

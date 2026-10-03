@@ -144,7 +144,7 @@ export interface ScanCalculationSnapshot {
   existingValue: number;
   existingValueEstimated: boolean;
   maxPayable: number;
-  headroom: number;
+  headroom: number | null;
   headroomPercent: number | null;
   grv: number;
   theoreticalGfa: number;
