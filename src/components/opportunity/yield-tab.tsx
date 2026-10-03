@@ -35,11 +35,25 @@ export function YieldTab() {
               </Field>
               <Field
                 label="Theoretical FSR (:1)"
-                tag={<SourceTag kind={site.fsrSource === "OVERRIDE" ? "ASSUMPTION" : site.fsrSource === "OFFICIAL" ? "OFFICIAL" : "ESTIMATE"} />}
+                tag={
+                  <SourceTag
+                    kind={
+                      site.fsrSource === "OVERRIDE"
+                        ? "ASSUMPTION"
+                        : site.fsrSource === "OFFICIAL"
+                          ? "OFFICIAL"
+                          : site.fsrSource === "STATE_PATHWAY"
+                            ? "ESTIMATE"
+                            : "ESTIMATE"
+                    }
+                  />
+                }
                 hint={
                   site.fsrSource === "NO_MAPPED"
-                    ? "NO MAPPED FSR on included lots — enter a USER ASSUMPTION here."
-                    : `Official equivalent: ${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (some lots unmapped)" : ""}. Clear to use official controls.`
+                    ? "NO MAPPED LEP FSR — not FSR 0:1. Waiting for a State pathway or enter a USER ASSUMPTION."
+                    : site.fsrSource === "STATE_PATHWAY"
+                      ? `CURRENT State pathway modelled FSR ${fsr(site.fsr)} (${(site.fsrCertainty ?? "candidate").replaceAll("_", " ")}).`
+                      : `Official equivalent: ${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (some lots unmapped)" : ""}. Clear to use official controls.`
                 }
               >
                 <NumberField value={dto.inputs.fsrOverride ?? (site.fsrSource === "NO_MAPPED" ? null : site.fsr)} dp={2} onCommit={(v) => updateInputs({ fsrOverride: v && Math.abs(v - analysis.metrics.weightedFsr) > 0.001 ? v : null })} />

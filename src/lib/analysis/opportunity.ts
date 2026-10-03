@@ -42,12 +42,23 @@ export interface ScenarioResult {
   acquisitionHeadroomPercent: number | null;
 }
 
+export type SiteFsrSource = "OFFICIAL" | "NO_MAPPED" | "OVERRIDE" | "STATE_PATHWAY";
+/** CALCULABLE = a usable FSR exists; REQUIRES_PLANNING_INPUT = missing LEP FSR and no State pathway yet. */
+export type YieldStatus = "CALCULABLE" | "REQUIRES_PLANNING_INPUT";
+
 export interface SiteBasis {
   siteAreaSqm: number;
   siteAreaSource: "PARCELS" | "OVERRIDE";
   fsr: number;
-  /** OFFICIAL = mapped EPI FSR only; OVERRIDE = USER ASSUMPTION; NO_MAPPED = no official FSR and no override. */
-  fsrSource: "OFFICIAL" | "NO_MAPPED" | "OVERRIDE";
+  /**
+   * OFFICIAL = mapped EPI FSR;
+   * STATE_PATHWAY = current Housing SEPP / LMR (or similar) modelled control;
+   * OVERRIDE = explicit user assumption;
+   * NO_MAPPED = no LEP FSR and no pathway/override — NOT the same as FSR 0:1.
+   */
+  fsrSource: SiteFsrSource;
+  yieldStatus: YieldStatus;
+  fsrCertainty: string | null;
   heightLimitM: number | null;
   heightSource: "OFFICIAL" | "OVERRIDE" | "NONE";
 }
@@ -68,6 +79,8 @@ export interface OpportunityAnalysis {
   screeningExistingValue: number | null;
   valuation: AssemblyValuationSummary;
   viability: AcquisitionViability;
+  /** False when yield cannot be calculated (missing FSR / pathway) — do not treat $0 GRV as a real result. */
+  feasibilityCalculable: boolean;
   maxPayableToOwners: number;
   acquisitionHeadroom: number | null;
   acquisitionHeadroomPercent: number | null;
@@ -80,6 +93,12 @@ export interface OpportunityAnalysis {
   critical: CriticalLotResult[];
   marginal: MarginalLotResult[];
   strategy: StrategyStep[];
+  /** Short conclusion for UI: planning vs economics. */
+  conclusion: {
+    planning: "NOT_PERMITTED" | "REQUIRES_CONFIRMATION" | "MODELLED_PATHWAY" | "LEP_CONTROLS";
+    economics: "NOT_CALCULABLE" | "UNECONOMIC" | "MARGINAL" | "VIABLE";
+    summary: string;
+  };
 }
 
 export function applyScenario(a: Assumptions, adj: ScenarioAdjustment): Assumptions {
@@ -102,25 +121,49 @@ function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityI
   const heights = lots.map((l) => l.heightM).filter((h): h is number => h != null);
   const anyUnmapped = lots.some((l) => l.fsr == null && !(l.fsrControls && l.fsrControls.length));
   const officialFsr = parcelArea > 0 ? gfaAtControls / parcelArea : 0;
+  const heightLimitM = inputs.heightOverrideM ?? (heights.length ? Math.min(...heights) : null);
+  const heightSource: SiteBasis["heightSource"] = inputs.heightOverrideM ? "OVERRIDE" : heights.length ? "OFFICIAL" : "NONE";
+  const siteAreaSqm = inputs.siteAreaOverride ?? parcelArea;
+  const siteAreaSource: SiteBasis["siteAreaSource"] = inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS";
+
   if (inputs.fsrOverride != null) {
     const fromScan = inputs.fsrOverrideKind === "SCAN_MODELLED";
     return {
-      siteAreaSqm: inputs.siteAreaOverride ?? parcelArea,
-      siteAreaSource: inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS",
+      siteAreaSqm,
+      siteAreaSource,
       fsr: inputs.fsrOverride,
-      // SCAN_MODELLED is intentional persisted effective control — not a silent invent.
-      fsrSource: fromScan ? "OVERRIDE" : "OVERRIDE",
-      heightLimitM: inputs.heightOverrideM ?? (heights.length ? Math.min(...heights) : null),
-      heightSource: inputs.heightOverrideM ? "OVERRIDE" : heights.length ? "OFFICIAL" : "NONE",
+      // Persisted scan/State pathway — not a silent invent, and not “user typed a number”.
+      fsrSource: fromScan ? "STATE_PATHWAY" : "OVERRIDE",
+      yieldStatus: "CALCULABLE",
+      fsrCertainty: inputs.fsrOverrideCertainty ?? (fromScan ? "REQUIRES_PLANNING_CONFIRMATION" : null),
+      heightLimitM,
+      heightSource,
     };
   }
+
+  // Missing LEP FSR must NOT become a fake 0:1 development control.
+  if (anyUnmapped && officialFsr <= 0) {
+    return {
+      siteAreaSqm,
+      siteAreaSource,
+      fsr: 0,
+      fsrSource: "NO_MAPPED",
+      yieldStatus: "REQUIRES_PLANNING_INPUT",
+      fsrCertainty: null,
+      heightLimitM,
+      heightSource,
+    };
+  }
+
   return {
-    siteAreaSqm: inputs.siteAreaOverride ?? parcelArea,
-    siteAreaSource: inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS",
+    siteAreaSqm,
+    siteAreaSource,
     fsr: officialFsr,
-    fsrSource: anyUnmapped && officialFsr === 0 ? "NO_MAPPED" : "OFFICIAL",
-    heightLimitM: inputs.heightOverrideM ?? (heights.length ? Math.min(...heights) : null),
-    heightSource: inputs.heightOverrideM ? "OVERRIDE" : heights.length ? "OFFICIAL" : "NONE",
+    fsrSource: "OFFICIAL",
+    yieldStatus: "CALCULABLE",
+    fsrCertainty: "OFFICIAL_LEP",
+    heightLimitM,
+    heightSource,
   };
 }
 
@@ -210,11 +253,22 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     DOWNSIDE: runScenario("DOWNSIDE", site, lots.length, marketValueComplete ? combinedMarketValue : 0, a, inputs.scenarios.DOWNSIDE, inputs),
   };
   const base = scenarios.BASE;
-  const budget = Math.max(0, base.feasibility.maxAcquisitionBudget);
+  const feasibilityCalculable = site.yieldStatus === "CALCULABLE";
+  // Do not clamp negative residual to $0 when yield ran — that hides “uneconomic”.
+  // When yield is not calculable, budget/headroom must stay non-decision numbers.
+  const budget = feasibilityCalculable ? base.feasibility.maxAcquisitionBudget : 0;
   const existingValue = marketValueComplete ? combinedMarketValue : null;
-  const head = existingValue != null ? acquisitionHeadroom(budget, existingValue) : null;
-  const valuation = summariseAssemblyValuation(lots, budget, a.existingValuePerSqm);
-
+  const head =
+    feasibilityCalculable && existingValue != null ? acquisitionHeadroom(budget, existingValue) : null;
+  const valuation = feasibilityCalculable
+    ? summariseAssemblyValuation(lots, budget, a.existingValuePerSqm)
+    : {
+        ...summariseAssemblyValuation(lots, 0, a.existingValuePerSqm),
+        headroomMid: null,
+        headroomLow: null,
+        headroomHigh: null,
+        viability: "REQUIRES_PLANNING_INPUT" as const,
+      };
   // Critical first (for allocation weights), then allocate, then marginal.
   const baseEcon: Economics = {
     areaSqm: site.siteAreaSqm,
@@ -324,6 +378,35 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     critical,
   );
 
+  const viability: AcquisitionViability = !feasibilityCalculable
+    ? "REQUIRES_PLANNING_INPUT"
+    : valuation.viability;
+
+  const planningConclusion =
+    site.fsrSource === "NO_MAPPED"
+      ? "REQUIRES_CONFIRMATION"
+      : site.fsrSource === "STATE_PATHWAY"
+        ? site.fsrCertainty === "REQUIRES_PLANNING_CONFIRMATION"
+          ? "REQUIRES_CONFIRMATION"
+          : "MODELLED_PATHWAY"
+        : "LEP_CONTROLS";
+  const economicsConclusion = !feasibilityCalculable
+    ? "NOT_CALCULABLE"
+    : viability === "LIKELY_VIABLE"
+      ? "VIABLE"
+      : viability === "MARGINAL"
+        ? "MARGINAL"
+        : "UNECONOMIC";
+  const conclusionSummary = !feasibilityCalculable
+    ? "FEASIBILITY NOT YET CALCULABLE — no mapped LEP FSR and no modelled State pathway applied. Missing FSR is not FSR 0:1."
+    : economicsConclusion === "UNECONOMIC" && existingValue != null
+      ? `DEVELOPABLE UNDER MODELLED CONTROLS BUT UNECONOMIC — existing ~$${Math.round(existingValue / 1e5) / 10}m vs max payable ~$${Math.round(budget / 1e5) / 10}m.`
+      : economicsConclusion === "VIABLE"
+        ? "Modelled pathway looks financially workable under current assumptions."
+        : economicsConclusion === "MARGINAL"
+          ? "Modelled pathway is marginal under current assumptions."
+          : "Review planning confirmation and assumptions before acquisition.";
+
   return {
     includedIds: lots.map((l) => l.id),
     excludedIds: allLots.filter((l) => !l.included).map((l) => l.id),
@@ -337,7 +420,8 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     marketValueComplete,
     screeningExistingValue: valuation.screeningMid,
     valuation,
-    viability: valuation.viability,
+    viability,
+    feasibilityCalculable,
     maxPayableToOwners: budget,
     acquisitionHeadroom: head?.acquisitionHeadroom ?? null,
     acquisitionHeadroomPercent: head?.acquisitionHeadroomPercent ?? null,
@@ -353,5 +437,10 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     critical,
     marginal,
     strategy,
+    conclusion: {
+      planning: planningConclusion,
+      economics: economicsConclusion,
+      summary: conclusionSummary,
+    },
   };
 }

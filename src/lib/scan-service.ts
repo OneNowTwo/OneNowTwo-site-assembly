@@ -29,7 +29,13 @@ export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
   return tiles.slice(0, 9); // hard cap for V1 performance
 }
 
-async function loadParcelsTiled(bbox: BBox): Promise<{ parcels: ParcelData[]; messages: string[]; cadastreStatus: string; planningStatus: string }> {
+async function loadParcelsTiled(bbox: BBox): Promise<{
+  parcels: ParcelData[];
+  messages: string[];
+  cadastreStatus: string;
+  planningStatus: string;
+  loadedCount: number;
+}> {
   const tiles = tileBBox(bbox);
   const byId = new Map<string, ParcelData>();
   const messages: string[] = [];
@@ -43,11 +49,24 @@ async function loadParcelsTiled(bbox: BBox): Promise<{ parcels: ParcelData[]; me
     if (result.planningStatus !== "live") planningStatus = result.planningStatus;
   }
   let parcels = [...byId.values()];
-  if (parcels.length > 450) {
-    parcels = parcels.sort((a, b) => a.areaSqm - b.areaSqm).slice(0, 450);
-    messages.push(`Scan capped at 450 parcels for performance (${byId.size} loaded).`);
+  const loadedCount = parcels.length;
+  const SCAN_PARCEL_CAP = 1200;
+  if (parcels.length > SCAN_PARCEL_CAP) {
+    // Prefer residential / mid-size lots — NOT the smallest 450 (that starved suburb scans).
+    const scoreParcel = (p: ParcelData) => {
+      const zone = p.planning?.zone ?? "";
+      const residential = /^R[1-4]$/.test(zone) ? 1000 : 0;
+      const strataPenalty = p.isStrata ? -500 : 0;
+      // Prefer typical house lots for assembly (250–1200 sqm).
+      const areaFit = p.areaSqm >= 250 && p.areaSqm <= 1200 ? 200 : p.areaSqm >= 200 && p.areaSqm <= 2000 ? 80 : 0;
+      return residential + strataPenalty + areaFit + Math.min(p.areaSqm, 800) / 10;
+    };
+    parcels = [...parcels].sort((a, b) => scoreParcel(b) - scoreParcel(a)).slice(0, SCAN_PARCEL_CAP);
+    messages.push(
+      `PARTIAL SCAN — processed ${parcels.length} of ${loadedCount} parcels (cap ${SCAN_PARCEL_CAP} for performance). Not a complete suburb inventory.`,
+    );
   }
-  return { parcels, messages, cadastreStatus, planningStatus };
+  return { parcels, messages, cadastreStatus, planningStatus, loadedCount };
 }
 
 async function enrichWalkingHints(
@@ -173,10 +192,25 @@ export async function scanArea(input: {
     parcels: loaded.parcels,
     centres,
     assumptions,
-    maxResults: input.maxResults ?? 15,
+    maxResults: input.maxResults ?? 20,
     walkingByParcelId: walking.walkingByParcelId,
   });
-  result = { ...result, progress: [...progress, "Planning scan complete", "Generating assemblies", ...result.progress] };
+  const partial = loaded.loadedCount > loaded.parcels.length;
+  result = {
+    ...result,
+    funnel: {
+      ...result.funnel,
+      parcelsLoaded: loaded.loadedCount,
+      partialScan: partial || result.funnel.partialScan,
+    },
+    progress: [...progress, "Planning scan complete", "Generating assemblies", ...result.progress],
+  };
+  if (partial) {
+    result.messages = [
+      `SCAN AREA: map bbox / centre catchment (not necessarily full suburb boundary). Loaded ${loaded.loadedCount} parcels; processed ${loaded.parcels.length}.`,
+      ...result.messages,
+    ];
+  }
 
   // Stage 3–6: value only lots in top candidate assemblies.
   const topIds = new Set<string>();

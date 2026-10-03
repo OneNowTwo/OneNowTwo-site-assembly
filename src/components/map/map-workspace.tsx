@@ -74,6 +74,7 @@ interface ScanState {
   parcelsConsidered: number;
   parcelsEligible: number;
   assembliesGenerated: number;
+  funnelSummary: string | null;
   hiddenKeys: string[];
   showAllAssemblies: boolean;
   bbox: BBox | null;
@@ -92,6 +93,7 @@ function emptyScan(): ScanState {
     parcelsConsidered: 0,
     parcelsEligible: 0,
     assembliesGenerated: 0,
+    funnelSummary: null,
     hiddenKeys: [],
     showAllAssemblies: true,
     bbox: null,
@@ -135,6 +137,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
           parcelsConsidered: restoredScan.parcelsConsidered ?? 0,
           parcelsEligible: restoredScan.parcelsEligible ?? 0,
           assembliesGenerated: restoredScan.assembliesGenerated ?? 0,
+          funnelSummary: (restoredScan.messages ?? []).find((m: string) => m.startsWith("Scan funnel:")) ?? null,
           hiddenKeys: restoredScan.hiddenKeys ?? [],
           showAllAssemblies: restoredScan.showAllAssemblies ?? true,
           bbox: restoredScan.bbox,
@@ -454,6 +457,11 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         parcelsConsidered: body.parcelsConsidered ?? 0,
         parcelsEligible: body.parcelsEligible ?? 0,
         assembliesGenerated: body.assembliesGenerated ?? 0,
+        funnelSummary:
+          (body.messages as string[] | undefined)?.find((m) => m.startsWith("Scan funnel:")) ??
+          (body.funnel
+            ? `Scan funnel: ${body.funnel.parcelsConsidered} considered → ${body.funnel.parcelsEligible} eligible → ${body.funnel.assembliesGenerated} assemblies → ${body.funnel.candidatesReturned} ranked`
+            : null),
         hiddenKeys: [],
         showAllAssemblies: true,
         bbox: body.bbox ?? bbox,
@@ -847,12 +855,13 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                   Clear results
                 </button>
                 <span className="text-[10.5px] text-muted">
-                  {scan.parcelsEligible}/{scan.parcelsConsidered} eligible · {scan.assembliesGenerated} combos
+                  {scan.parcelsEligible}/{scan.parcelsConsidered} eligible · {scan.assembliesGenerated} combos · top {scan.candidates.length}
                 </span>
               </div>
             </div>
             <div className="mt-1 flex flex-wrap gap-2 text-[10.5px]">
               <Badge tone="neutral">Planning first · auto-value top assemblies</Badge>
+              <Badge tone="neutral">Negative headroom kept</Badge>
               <button className="underline text-muted" onClick={showAllAssemblies}>
                 Show all
               </button>
@@ -860,6 +869,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                 Hide all
               </button>
             </div>
+            {scan.funnelSummary && <p className="mt-1 text-[11px] font-medium text-ink">{scan.funnelSummary}</p>}
             {scan.messages.map((m) => (
               <p key={m} className="mt-1 text-[11px] text-amber-900">
                 {m}

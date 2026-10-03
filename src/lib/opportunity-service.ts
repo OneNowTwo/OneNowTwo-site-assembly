@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import type { ParcelData, FsrControl, FsrMappedStatus } from "@/lib/types";
 import { mergeAssumptions, parseOpportunityInputs, DEFAULT_ASSUMPTIONS, type Assumptions } from "@/lib/analysis/assumptions";
 import { analyseOpportunity, type OpportunityLot } from "@/lib/analysis/opportunity";
+import { resolveAssemblyModelledControls } from "@/lib/analysis/resolve-assembly-controls";
+import { fetchNominatedCentres } from "@/lib/data-sources/housing-sepp-lmr";
 import { lotDp } from "@/lib/format";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ComparableSaleDTO, LotDTO, OpportunityDTO, UnitTypeDTO } from "@/lib/opportunity-dto";
@@ -495,8 +497,112 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
     },
     { timeout: 60000 },
   );
+  await ensureModelledPlanningOverride(opp.id);
   await recomputeOpportunity(opp.id);
   return opp;
+}
+
+function opportunityParcelsToData(opp: OpportunityWithRelations): ParcelData[] {
+  return opp.parcels
+    .filter((op) => op.included)
+    .map((op) => {
+      const p = op.parcel;
+      const snap = p.snapshots[0]?.data as { fsrStatus?: FsrMappedStatus; fsrControls?: FsrControl[] } | undefined;
+      return {
+        externalParcelId: p.externalParcelId,
+        source: p.source,
+        lot: p.lot,
+        section: p.section,
+        dp: p.dp,
+        lotIdString: p.lotIdString,
+        address: p.address,
+        suburb: p.suburb,
+        geometry: p.geometry as unknown as ParcelData["geometry"],
+        centroid: [p.centroidLng, p.centroidLat] as [number, number],
+        areaSqm: p.areaSqm,
+        isStrata: p.isStrata,
+        planning: p.zone
+          ? {
+              zone: p.zone,
+              zoneName: p.zoneName,
+              fsr: p.fsr,
+              fsrStatus: snap?.fsrStatus ?? (p.fsr != null ? "MAPPED" : "NO_MAPPED"),
+              fsrControls: snap?.fsrControls ?? [],
+              heightM: p.heightM,
+              minLotSizeSqm: p.minLotSizeSqm,
+              heritage: p.heritage,
+              planningInstrument: p.planningInstrument,
+              lga: p.lga,
+              sources: {},
+            }
+          : null,
+        planningStatus: p.zone ? "ok" : "unavailable",
+        retrievedAt: (p.planningCheckedAt ?? p.updatedAt).toISOString(),
+      };
+    });
+}
+
+/**
+ * When LEP FSR is unmapped, apply CURRENT State pathway modelled FSR (e.g. LMR)
+ * as SCAN_MODELLED override — never invent a silent 0:1.
+ */
+export async function ensureModelledPlanningOverride(id: string): Promise<{ applied: boolean; modelledFsr: number | null; messages: string[] }> {
+  const opp = await loadOpportunity(id);
+  if (!opp) return { applied: false, modelledFsr: null, messages: ["Opportunity not found"] };
+  const inputs = parseOpportunityInputs(opp.inputs);
+  if (inputs.fsrOverride != null) {
+    return { applied: false, modelledFsr: inputs.fsrOverride, messages: ["FSR override already set"] };
+  }
+
+  const parcels = opportunityParcelsToData(opp);
+  const needsPathway = parcels.some((p) => p.planning?.fsr == null);
+  if (!needsPathway || !parcels.length) {
+    return { applied: false, modelledFsr: null, messages: ["LEP FSR already mapped on included lots"] };
+  }
+
+  const lngs = parcels.map((p) => p.centroid[0]);
+  const lats = parcels.map((p) => p.centroid[1]);
+  const pad = 0.02;
+  const centres = await fetchNominatedCentres({
+    west: Math.min(...lngs) - pad,
+    south: Math.min(...lats) - pad,
+    east: Math.max(...lngs) + pad,
+    north: Math.max(...lats) + pad,
+  }).catch(() => []);
+
+  const modelled = resolveAssemblyModelledControls(parcels, centres);
+  if (modelled.modelledFsr == null || modelled.modelledFsr <= 0) {
+    return {
+      applied: false,
+      modelledFsr: null,
+      messages: [
+        "NO MAPPED LEP FSR and no usable State pathway FSR resolved — feasibility stays REQUIRES PLANNING INPUT (not FSR 0:1).",
+        ...modelled.notes.slice(0, 3),
+      ],
+    };
+  }
+
+  const next = {
+    ...inputs,
+    fsrOverride: modelled.modelledFsr,
+    fsrOverrideKind: "SCAN_MODELLED" as const,
+    fsrOverrideCertainty: modelled.certainty,
+    heightOverrideM: inputs.heightOverrideM ?? modelled.modelledHeightM,
+  };
+  await prisma.opportunity.update({
+    where: { id },
+    data: { inputs: next as unknown as Prisma.InputJsonValue },
+  });
+  return {
+    applied: true,
+    modelledFsr: modelled.modelledFsr,
+    messages: [
+      `Applied CURRENT State pathway modelled FSR ${modelled.modelledFsr}:1` +
+        (modelled.lmrCentre ? ` near ${modelled.lmrCentre}` : "") +
+        ` (${modelled.certainty.replaceAll("_", " ")}). NOT a silent LEP invent.`,
+      ...modelled.notes.slice(0, 4),
+    ],
+  };
 }
 
 /**
@@ -590,6 +696,7 @@ export async function autoValueOpportunity(id: string): Promise<{ valued: number
     where: { id },
     data: { inputs: { ...inputs, lotValuationDetails } as unknown as Prisma.InputJsonValue },
   });
+  const planning = await ensureModelledPlanningOverride(id);
   await recomputeOpportunity(id);
-  return { valued: batch.valued, messages: batch.messages };
+  return { valued: batch.valued, messages: [...batch.messages, ...planning.messages] };
 }

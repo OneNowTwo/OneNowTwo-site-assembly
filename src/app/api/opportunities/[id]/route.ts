@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { getGlobalAssumptions, loadOpportunity, recomputeOpportunity, serializeOpportunity, syncUnitTypes } from "@/lib/opportunity-service";
+import {
+  ensureModelledPlanningOverride,
+  getGlobalAssumptions,
+  loadOpportunity,
+  recomputeOpportunity,
+  serializeOpportunity,
+  syncUnitTypes,
+} from "@/lib/opportunity-service";
 import { opportunityInputsSchema } from "@/lib/analysis/assumptions";
 import { OPPORTUNITY_STATUSES } from "@/lib/constants";
 import { jsonError } from "@/lib/session";
@@ -12,8 +19,15 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, { params }: Ctx) {
   const { id } = await params;
-  const opp = await loadOpportunity(id);
+  let opp = await loadOpportunity(id);
   if (!opp) return jsonError("Opportunity not found", 404);
+  // Missing LEP FSR → try CURRENT State pathway before the UI shows a fake 0:1.
+  const planning = await ensureModelledPlanningOverride(id);
+  if (planning.applied) {
+    await recomputeOpportunity(id);
+    opp = await loadOpportunity(id);
+    if (!opp) return jsonError("Opportunity not found", 404);
+  }
   return NextResponse.json(serializeOpportunity(opp, await getGlobalAssumptions()));
 }
 
