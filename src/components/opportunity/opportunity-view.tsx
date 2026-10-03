@@ -258,6 +258,17 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                   {analysis.includedIds.length} lots{analysis.excludedIds.length ? ` (+${analysis.excludedIds.length} excluded)` : ""}
                 </span>
                 <span>·</span>
+                <span>
+                  Owner count{" "}
+                  {dto.lots.filter((l) => l.included).every((l) => l.owner?.name?.trim() && !/^unknown$/i.test(l.owner.name.trim()) && !/^demo\s*[—-]\s*unknown$/i.test(l.owner.name.trim()))
+                    ? new Set(
+                        dto.lots
+                          .filter((l) => l.included)
+                          .map((l) => l.owner!.name!.trim().toLowerCase()),
+                      ).size
+                    : "unknown"}
+                </span>
+                <span>·</span>
                 <span className="num">{sqm(analysis.site.siteAreaSqm)}</span>
                 <span>·</span>
                 <span>{dto.lga ?? ""}</span>
@@ -312,9 +323,14 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
               </div>
               {dto.inputs.fsrOverride != null && (
                 <div className="mt-1 text-[11px] text-muted">
-                  Persisted scan FSR {dto.inputs.fsrOverride.toFixed(2)}:1
+                  Current effective FSR {dto.inputs.fsrOverride.toFixed(2)}:1
                   {dto.inputs.fsrOverrideCertainty ? ` · ${dto.inputs.fsrOverrideCertainty.replaceAll("_", " ")}` : ""}
-                  {typeof scanSnap.modelledEffectiveFsr === "number" ? ` · scan modelled ${scanSnap.modelledEffectiveFsr.toFixed(2)}:1` : ""}
+                  {dto.inputs.originalScanFsr != null && Math.abs(dto.inputs.originalScanFsr - dto.inputs.fsrOverride) > 0.0005
+                    ? ` · Original scan FSR ${dto.inputs.originalScanFsr.toFixed(2)}:1 (historical)`
+                    : typeof scanSnap.modelledEffectiveFsr === "number"
+                      ? ` · scan modelled ${scanSnap.modelledEffectiveFsr.toFixed(2)}:1`
+                      : ""}
+                  {dto.inputs.fsrRecalculationStatus ? ` · ${dto.inputs.fsrRecalculationStatus.replaceAll("_", " ")}` : ""}
                 </div>
               )}
               {showScanDelta && (
