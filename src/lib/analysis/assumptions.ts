@@ -229,6 +229,49 @@ export const opportunityInputsSchema = z.object({
     .default(DEFAULT_SCENARIOS),
   contactDetails: z.string().max(300).default(""),
   scanProvenance: scanProvenanceSchema.nullable().default(null),
+  /** Transparent NSW comps / valuation detail keyed by externalParcelId. */
+  lotValuationDetails: z
+    .record(
+      z.string(),
+      z.object({
+        mid: z.number().nullable().optional(),
+        low: z.number().nullable().optional(),
+        high: z.number().nullable().optional(),
+        confidence: z.string().optional(),
+        source: z.string().optional(),
+        provider: z.string().nullable().optional(),
+        numberOfComps: z.number().nullable().optional(),
+        valuationLabel: z.string().nullable().optional(),
+        subjectLastSale: z
+          .object({
+            address: z.string(),
+            salePrice: z.number(),
+            saleDate: z.string().nullable(),
+            landAreaSqm: z.number().nullable(),
+            source: z.string(),
+          })
+          .nullable()
+          .optional(),
+        comps: z
+          .array(
+            z.object({
+              id: z.string(),
+              address: z.string(),
+              salePrice: z.number(),
+              saleDate: z.string().nullable(),
+              landAreaSqm: z.number().nullable(),
+              distanceM: z.number(),
+              similarity: z.number(),
+              included: z.boolean(),
+              excludeReason: z.string().nullable().optional(),
+              source: z.string(),
+              dealing: z.string().nullable().optional(),
+            }),
+          )
+          .optional(),
+      }),
+    )
+    .default({}),
 });
 export type OpportunityInputs = z.infer<typeof opportunityInputsSchema>;
 

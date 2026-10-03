@@ -85,7 +85,8 @@ Each viewport request queries the cadastre once per layer and each planning laye
 - Heritage is point-in-polygon at each lot's interior point; partially affected lots can be missed.
 - Strata schemes appear as one common-property lot (plan `SP…`); they're flagged and excluded from automatic assembly.
 - Addresses come from principal-address property records; some lots (lanes, common property) have none.
-- No sales or valuation data: market values are developer estimates.
+- **Property values (MVP):** top scan assemblies are auto-valued from **NSW registered comparable sales** (SIX Maps Valuation MapServer — Urban Property Sales). Labelled *COMPARABLE-DERIVED SCREENING ESTIMATE* — not a certified valuation. Domain / PropTrack remain optional later providers.
+- **Licensing:** NSW Property Sales Information is used here for MVP/research. Before commercial release, obtain the appropriate commercial PSI licence from Valuation NSW. Do not scrape realestate.com.au / Domain for valuations.
 
 ## How the calculations work
 
@@ -133,7 +134,11 @@ Plans default to `starter` (web) and `basic-256mb` (database). To use free plans
 
 ## Future integrations
 
-Interfaces in `src/lib/data-sources/providers.ts`: `CadastreProvider`, `PlanningDataProvider`, `GeocoderProvider`, `PropertyValuationProvider` (CoreLogic / PriceFinder / Domain / licensed NSW sales), `OwnerDataProvider` (title search), `ConstructionCostProvider`, `ComparableSalesProvider`, `AIAnalysisProvider`. Later: suburb-wide scanning, planning-change alerts, comparable sales, massing / test-fit, DA history, team collaboration, other states.
+Interfaces in `src/lib/data-sources/providers.ts`: `CadastreProvider`, `PlanningDataProvider`, `GeocoderProvider`, `PropertyValuationProvider` (NSW comps → Domain → PropTrack waterfall), `OwnerDataProvider` (title search), `ConstructionCostProvider`, `ComparableSalesProvider`, `AIAnalysisProvider`. NSW comps: `NSWComparableSalesProvider` + `PublicWebComparableProvider` stub (robots/terms-aware enrichment only). Later: suburb-wide scanning, planning-change alerts, massing / test-fit, DA history, team collaboration, other states.
+
+### NSW Property Sales Information (PSI) licence note
+
+The MVP queries the public SIX Maps Valuation property-sales layers for research/testing. NSW states PSI requires an appropriate commercial licence if used in a commercial product. Confirm/obtain that licence before selling the product; the valuation engine is provider-agnostic so the data source can be swapped without changing scoring.
 
 ## MVP limitations
 

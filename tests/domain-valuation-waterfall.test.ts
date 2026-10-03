@@ -112,12 +112,13 @@ describe("valuation waterfall order", () => {
     delete process.env.PROPTRACK_ENABLED;
   });
 
-  it("uses comparable-derived before user estimate when no live AVM", async () => {
+  it("uses caller comparable-derived before user estimate when NSW/Domain unavailable", async () => {
     const result = await valueProperty({
       externalParcelId: "nsw-cadid:1",
       address: "5 Reserve Street",
       suburb: "Neutral Bay",
       areaSqm: 400,
+      // no lng/lat → skip NSW spatial comps
       comparableDerived: 3_000_000,
       userValue: 2_500_000,
     });
@@ -139,7 +140,7 @@ describe("valuation waterfall order", () => {
     expect(result.mid).toBe(3_120_000);
   });
 
-  it("returns NO_VALUE when credentials absent and no fallbacks", async () => {
+  it("returns NO_VALUE when no coordinates and no fallbacks", async () => {
     const result = await valueProperty({
       externalParcelId: "nsw-cadid:1",
       address: "5 Reserve Street",
@@ -148,7 +149,7 @@ describe("valuation waterfall order", () => {
     });
     expect(result.status).toBe("NO_VALUE");
     expect(result.mid).toBeNull();
-    expect(result.note ?? "").toMatch(/DOMAIN|VALUE REQUIRED/i);
+    expect(result.note ?? "").toMatch(/VALUE REQUIRED|no NSW|DOMAIN/i);
   });
 });
 

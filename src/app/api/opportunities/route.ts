@@ -56,6 +56,10 @@ const valuationSchema = z
     checkedAt: z.string().nullable().optional(),
     externalId: z.string().nullable().optional(),
     note: z.string().nullable().optional(),
+    numberOfComps: z.number().nullable().optional(),
+    comps: z.array(z.any()).nullable().optional(),
+    subjectLastSale: z.any().nullable().optional(),
+    valuationLabel: z.string().nullable().optional(),
   })
   .nullable()
   .optional();

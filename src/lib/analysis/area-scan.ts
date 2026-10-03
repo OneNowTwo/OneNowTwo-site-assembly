@@ -1,4 +1,4 @@
-import type { ParcelData } from "@/lib/types";
+import type { ParcelCompSale, ParcelData } from "@/lib/types";
 import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { resolveEffectiveControls, type EffectiveDevelopmentControls, type WalkingDistanceHint } from "./effective-controls";
 import {
@@ -86,6 +86,10 @@ export interface ScanCandidate {
       provider: string | null;
       checkedAt: string | null;
       note?: string | null;
+      numberOfComps?: number | null;
+      comps?: ParcelCompSale[] | null;
+      subjectLastSale?: NonNullable<NonNullable<ParcelData["valuation"]>["subjectLastSale"]> | null;
+      valuationLabel?: string | null;
     }
   >;
 }
@@ -453,6 +457,10 @@ export function applyValuationsToScanResult(
         provider: v.provider,
         checkedAt: v.checkedAt,
         note: v.note,
+        numberOfComps: v.numberOfComps ?? null,
+        comps: v.comps ?? null,
+        subjectLastSale: v.subjectLastSale ?? null,
+        valuationLabel: v.valuationLabel ?? null,
       };
       if (v.mid != null && v.mid > 0) {
         existingLow += v.low != null && v.low > 0 ? v.low : v.mid * 0.9;

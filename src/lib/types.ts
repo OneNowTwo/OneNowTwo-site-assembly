@@ -45,6 +45,21 @@ export interface PlanningControls {
 
 export type PlanningStatus = "ok" | "partial" | "unavailable";
 
+/** One comparable used in a transparent screening valuation. */
+export interface ParcelCompSale {
+  id: string;
+  address: string;
+  salePrice: number;
+  saleDate: string | null;
+  landAreaSqm: number | null;
+  distanceM: number;
+  similarity: number;
+  included: boolean;
+  excludeReason?: string | null;
+  source: string;
+  dealing?: string | null;
+}
+
 /** Live / manual valuation attached to a parcel (scan → Analyse handoff). */
 export interface ParcelValuationData {
   mid: number | null;
@@ -58,6 +73,16 @@ export interface ParcelValuationData {
   checkedAt: string | null;
   externalId?: string | null;
   note?: string | null;
+  numberOfComps?: number | null;
+  comps?: ParcelCompSale[] | null;
+  subjectLastSale?: {
+    address: string;
+    salePrice: number;
+    saleDate: string | null;
+    landAreaSqm: number | null;
+    source: string;
+  } | null;
+  valuationLabel?: string | null;
 }
 
 export interface ParcelData {

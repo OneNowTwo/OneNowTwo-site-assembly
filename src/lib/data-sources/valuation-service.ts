@@ -2,18 +2,25 @@ import type { ParcelData, ParcelValuationData } from "@/lib/types";
 import type { PropertyValuationResult } from "./providers";
 import { domainValuationConfigured, domainValuationProvider, domainCredentialStatus } from "./domain-valuation";
 import { propTrackValuationConfigured, propTrackValuationProvider } from "./proptrack-valuation";
+import {
+  nswComparableSalesProvider,
+  nswCompsConfigured,
+  type NswCompValuationResult,
+} from "./nsw-comparable-valuation";
 import { manualValuationProvider } from "./providers";
 import { getCachedValuation, setCachedValuation } from "./valuation-cache";
+import { publicWebComparableProvider } from "./public-web-comparable";
 
-export type ValuationProviderName = "domain" | "proptrack" | "auto";
+export type ValuationProviderName = "nsw" | "domain" | "proptrack" | "auto";
 
 /**
- * Provider waterfall:
- * 1. LIVE DOMAIN
- * 2. LIVE PROPTRACK (when licensed)
- * 3. COMPARABLE_DERIVED (caller-supplied)
- * 4. USER ESTIMATE (caller-supplied override)
- * 5. NO_VALUE
+ * Provider waterfall (MVP):
+ * 1. NSW registered comparable sales (primary — no Domain fee)
+ * 2. LIVE DOMAIN (optional, when credentials present)
+ * 3. LIVE PROPTRACK (when licensed)
+ * 4. Caller-supplied comparableDerived
+ * 5. USER ESTIMATE (override / last resort)
+ * 6. NO_VALUE
  *
  * Manual is last-resort / override — not the default path.
  */
@@ -22,6 +29,11 @@ export async function valueProperty(input: {
   address?: string | null;
   suburb?: string | null;
   areaSqm: number;
+  lng?: number | null;
+  lat?: number | null;
+  isStrata?: boolean;
+  zone?: string | null;
+  excludedIds?: string[];
   /** Force provider; default auto waterfall. */
   prefer?: ValuationProviderName;
   userValue?: number | null;
@@ -31,13 +43,12 @@ export async function valueProperty(input: {
   domainPropertyId?: string | null;
   /**
    * When true, honour an explicit USER override immediately (manual edit path).
-   * Automatic scan/value flow leaves this false so live AVMs run first.
+   * Automatic scan/value flow leaves this false so live sources run first.
    */
   preferUserOverride?: boolean;
-  /** When true, skip live AVM and honour user/comps only. */
+  /** When true, skip live sources and honour user/comps only. */
   manualOnly?: boolean;
-}): Promise<PropertyValuationResult> {
-  // Explicit manual override (user edited a lot) wins immediately.
+}): Promise<NswCompValuationResult> {
   if (input.preferUserOverride && input.userValue != null && input.userValue > 0) {
     return manualValuationProvider.estimate(input);
   }
@@ -46,11 +57,19 @@ export async function valueProperty(input: {
   }
 
   const prefer = input.prefer ?? (process.env.VALUATION_PROVIDER as ValuationProviderName | undefined) ?? "auto";
-  const order: Array<"domain" | "proptrack"> =
-    prefer === "proptrack" ? ["proptrack", "domain"] : prefer === "domain" ? ["domain"] : ["domain", "proptrack"];
+  let last: NswCompValuationResult | null = null;
 
-  let last: PropertyValuationResult | null = null;
-  for (const name of order) {
+  const tryNsw = prefer === "auto" || prefer === "nsw";
+  if (tryNsw && nswCompsConfigured() && input.lng != null && input.lat != null) {
+    const result = await nswComparableSalesProvider.estimate(input);
+    if (result.status === "COMPARABLE_DERIVED" && result.mid != null) return result;
+    last = result;
+  }
+
+  const liveOrder: Array<"domain" | "proptrack"> =
+    prefer === "proptrack" ? ["proptrack", "domain"] : prefer === "domain" ? ["domain"] : prefer === "nsw" ? [] : ["domain", "proptrack"];
+
+  for (const name of liveOrder) {
     if (name === "domain") {
       if (!domainValuationConfigured()) {
         last = await domainValuationProvider.estimate(input);
@@ -79,12 +98,10 @@ export async function valueProperty(input: {
     }
   }
 
-  // 3) Comparable-derived from an approved/licensed source (caller-supplied).
   if (input.comparableDerived != null && input.comparableDerived > 0) {
     return manualValuationProvider.estimate({ ...input, userValue: null });
   }
 
-  // 4) User estimate as last-resort fallback (not the default workflow).
   if (input.userValue != null && input.userValue > 0) {
     return manualValuationProvider.estimate(input);
   }
@@ -100,12 +117,16 @@ export async function valueProperty(input: {
       provider: null,
       method: null,
       checkedAt: new Date().toISOString(),
-      note: "VALUE REQUIRED — no live AVM available",
+      note: "VALUE REQUIRED — no NSW comps or live AVM available",
+      numberOfComps: 0,
+      comps: [],
+      subjectLastSale: null,
     }
   );
 }
 
-export function toParcelValuation(result: PropertyValuationResult): ParcelValuationData {
+export function toParcelValuation(result: PropertyValuationResult | NswCompValuationResult): ParcelValuationData {
+  const nsw = result as NswCompValuationResult;
   return {
     mid: result.mid,
     low: result.low,
@@ -118,7 +139,37 @@ export function toParcelValuation(result: PropertyValuationResult): ParcelValuat
     checkedAt: result.checkedAt,
     externalId: result.externalId ?? null,
     note: result.note ?? null,
+    numberOfComps: nsw.numberOfComps ?? null,
+    comps: nsw.comps
+      ? nsw.comps.slice(0, 12).map((c) => ({
+          id: c.id,
+          address: c.address,
+          salePrice: c.salePrice,
+          saleDate: c.saleDate,
+          landAreaSqm: c.landAreaSqm,
+          distanceM: c.distanceM,
+          similarity: Math.round(c.similarity * 1000) / 1000,
+          included: c.included,
+          excludeReason: c.excludeReason ?? null,
+          source: c.source,
+          dealing: c.dealing ?? null,
+        }))
+      : null,
+    subjectLastSale: nsw.subjectLastSale
+      ? {
+          address: nsw.subjectLastSale.address,
+          salePrice: nsw.subjectLastSale.salePrice,
+          saleDate: nsw.subjectLastSale.saleDate,
+          landAreaSqm: nsw.subjectLastSale.landAreaSqm,
+          source: nsw.subjectLastSale.source,
+        }
+      : null,
+    valuationLabel: nsw.valuationLabel ?? null,
   };
+}
+
+function isTrustedAutoValue(result: PropertyValuationResult): boolean {
+  return result.mid != null && (result.status === "LIVE_AVM" || result.status === "COMPARABLE_DERIVED");
 }
 
 /** Value unique parcels (concurrency-limited). Attaches `.valuation` on each parcel. */
@@ -126,17 +177,18 @@ export async function valueParcels(
   parcels: ParcelData[],
   opts?: { concurrency?: number; prefer?: ValuationProviderName },
 ): Promise<{ parcels: ParcelData[]; valued: number; failed: number; messages: string[] }> {
-  const concurrency = opts?.concurrency ?? 3;
+  const concurrency = opts?.concurrency ?? 2;
   let valued = 0;
   let failed = 0;
   const messages: string[] = [];
   const out = [...parcels];
   const byId = new Map(out.map((p, i) => [p.externalParcelId, i]));
 
-  const creds = domainCredentialStatus();
-  if (!creds.configured && !propTrackValuationConfigured()) {
-    messages.push(`DOMAIN VALUATION NOT CONNECTED — missing ${creds.missing.join(", ")}. Assemblies keep planning ranking until credentials are set.`);
+  if (nswCompsConfigured()) {
+    messages.push("Valuing top assemblies via NSW registered comparable sales (MVP/research PSI — commercial licence required before product sale).");
   }
+  // Touch stub so the optional enrichment path stays imported/available.
+  void publicWebComparableProvider.name;
 
   for (let i = 0; i < out.length; i += concurrency) {
     const batch = out.slice(i, i + concurrency);
@@ -147,6 +199,10 @@ export async function valueParcels(
           address: p.address,
           suburb: p.suburb,
           areaSqm: p.areaSqm,
+          lng: p.centroid[0],
+          lat: p.centroid[1],
+          isStrata: p.isStrata,
+          zone: p.planning?.zone ?? null,
           prefer: opts?.prefer,
         });
         return { id: p.externalParcelId, result };
@@ -157,24 +213,36 @@ export async function valueParcels(
       if (idx == null) continue;
       const valuation = toParcelValuation(result);
       out[idx] = { ...out[idx]!, valuation };
-      if (result.mid != null && result.status === "LIVE_AVM") valued++;
+      if (isTrustedAutoValue(result)) valued++;
       else failed++;
     }
   }
 
-  if (valued > 0) messages.push(`Automatic valuations: ${valued} live AVM · ${failed} without estimate`);
-  else if (creds.configured) messages.push(`Automatic valuations: 0 live AVM of ${out.length} (check Price Estimation package / address match)`);
+  if (valued > 0) messages.push(`Automatic valuations: ${valued} comparable-derived/AVM · ${failed} without estimate`);
+  else messages.push(`Automatic valuations: 0 of ${out.length} — check NSW sales coverage or Domain credentials`);
 
   return { parcels: out, valued, failed, messages };
 }
 
 export function valuationProviderStatus() {
   return {
-    waterfall: ["DOMAIN", "PROPTRACK", "COMPARABLE_DERIVED", "USER_ESTIMATE", "NO_VALUE"] as const,
+    waterfall: ["NSW_REGISTERED_COMPS", "DOMAIN", "PROPTRACK", "COMPARABLE_DERIVED", "USER_ESTIMATE", "NO_VALUE"] as const,
+    nsw: {
+      configured: nswCompsConfigured(),
+      service: process.env.NSW_PROPERTY_SALES_URL ?? "https://maps.six.nsw.gov.au/arcgis/rest/services/public/Valuation/MapServer",
+      notes: [
+        "MVP/research use of NSW Property Sales Information.",
+        "Obtain a commercial PSI licence from Valuation NSW before commercial release.",
+      ],
+    },
     domain: domainCredentialStatus(),
     proptrack: {
       configured: propTrackValuationConfigured(),
       notes: ["Set PROPTRACK_API_KEY and PROPTRACK_ENABLED=true when licensed. Do not scrape realestate.com.au."],
+    },
+    publicWebEnrichment: {
+      enabled: false,
+      notes: ["Stub only — never scrape REA/Domain without authorisation."],
     },
     prefer: process.env.VALUATION_PROVIDER ?? "auto",
   };

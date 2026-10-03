@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { valueProperty, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
+import { valueProperty, valuationProviderStatus, toParcelValuation } from "@/lib/data-sources/valuation-service";
 import { jsonError, requireSession } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +11,11 @@ const parcelSchema = z.object({
   address: z.string().nullable().optional(),
   suburb: z.string().nullable().optional(),
   areaSqm: z.number().positive(),
+  lng: z.number().optional(),
+  lat: z.number().optional(),
+  isStrata: z.boolean().optional(),
+  zone: z.string().nullable().optional(),
+  excludedIds: z.array(z.string()).max(40).optional(),
   domainPropertyId: z.string().nullable().optional(),
   userValue: z.number().positive().nullable().optional(),
   userLow: z.number().positive().nullable().optional(),
@@ -21,15 +26,15 @@ const parcelSchema = z.object({
 
 const bodySchema = z.object({
   parcels: z.array(parcelSchema).min(1).max(40),
-  prefer: z.enum(["domain", "proptrack", "auto"]).optional(),
+  prefer: z.enum(["nsw", "domain", "proptrack", "auto"]).optional(),
 });
 
-/** GET — credential / waterfall status (no secrets). */
+/** GET — provider / waterfall status (no secrets). */
 export async function GET() {
   return NextResponse.json(valuationProviderStatus());
 }
 
-/** POST — value one or more parcels via Domain → PropTrack → comps → user waterfall. */
+/** POST — value parcels via NSW comps → Domain → PropTrack → user waterfall. */
 export async function POST(req: Request) {
   const session = await requireSession();
   if (session instanceof NextResponse) return session;
@@ -43,6 +48,11 @@ export async function POST(req: Request) {
         address: p.address,
         suburb: p.suburb,
         areaSqm: p.areaSqm,
+        lng: p.lng,
+        lat: p.lat,
+        isStrata: p.isStrata,
+        zone: p.zone,
+        excludedIds: p.excludedIds,
         domainPropertyId: p.domainPropertyId,
         userValue: p.userValue,
         userLow: p.userLow,
@@ -51,12 +61,12 @@ export async function POST(req: Request) {
         preferUserOverride: p.preferUserOverride,
         prefer: parsed.data.prefer,
       });
-      return { externalParcelId: p.externalParcelId, valuation };
+      return { externalParcelId: p.externalParcelId, valuation: toParcelValuation(valuation), raw: valuation };
     }),
   );
 
   return NextResponse.json({
-    results,
+    results: results.map(({ externalParcelId, valuation }) => ({ externalParcelId, valuation })),
     status: valuationProviderStatus(),
   });
 }

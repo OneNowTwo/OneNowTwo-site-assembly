@@ -514,20 +514,29 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         const base = parcels.get(id);
         if (!base) return null;
         const fromScan = scanCandidate?.lotValuations?.[id];
-        if (!fromScan) return base;
+        const fromParcel = base.valuation;
+        const src = fromScan ?? fromParcel;
+        if (!src) return base;
         return {
           ...base,
           valuation: {
-            mid: fromScan.mid,
-            low: fromScan.low,
-            high: fromScan.high,
-            status: fromScan.source,
-            confidence: fromScan.confidence,
-            source: fromScan.source,
-            provider: fromScan.provider,
-            method: fromScan.provider === "DOMAIN" ? "priceEstimate" : null,
-            checkedAt: fromScan.checkedAt,
-            note: fromScan.note ?? null,
+            mid: src.mid ?? null,
+            low: src.low ?? null,
+            high: src.high ?? null,
+            status: ("source" in src ? src.source : fromParcel?.source) ?? "COMPARABLE_DERIVED",
+            confidence: ("confidence" in src ? src.confidence : fromParcel?.confidence) ?? "UNKNOWN",
+            source: ("source" in src ? src.source : fromParcel?.source) ?? "COMPARABLE_DERIVED",
+            provider: ("provider" in src ? src.provider : fromParcel?.provider) ?? "NSW",
+            method:
+              ("provider" in src ? src.provider : fromParcel?.provider) === "DOMAIN"
+                ? "priceEstimate"
+                : "nsw_registered_comps_weighted",
+            checkedAt: ("checkedAt" in src ? src.checkedAt : fromParcel?.checkedAt) ?? null,
+            note: ("note" in src ? src.note : fromParcel?.note) ?? null,
+            numberOfComps: ("numberOfComps" in src ? src.numberOfComps : fromParcel?.numberOfComps) ?? null,
+            comps: ("comps" in src ? src.comps : fromParcel?.comps) ?? null,
+            subjectLastSale: ("subjectLastSale" in src ? src.subjectLastSale : fromParcel?.subjectLastSale) ?? null,
+            valuationLabel: ("valuationLabel" in src ? src.valuationLabel : fromParcel?.valuationLabel) ?? null,
           },
         } satisfies ParcelData;
       })
@@ -535,6 +544,23 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     if (!ps.length) {
       setSaving(false);
       return setFindError("Parcels for this assembly are not loaded — zoom to the site and retry Analyse");
+    }
+
+    const lotValuationDetails: NonNullable<OpportunityInputs["lotValuationDetails"]> = {};
+    for (const p of ps) {
+      if (!p.valuation) continue;
+      lotValuationDetails[p.externalParcelId] = {
+        mid: p.valuation.mid,
+        low: p.valuation.low,
+        high: p.valuation.high,
+        confidence: p.valuation.confidence,
+        source: p.valuation.source,
+        provider: p.valuation.provider,
+        numberOfComps: p.valuation.numberOfComps ?? null,
+        valuationLabel: p.valuation.valuationLabel ?? null,
+        subjectLastSale: p.valuation.subjectLastSale ?? null,
+        comps: p.valuation.comps ?? undefined,
+      };
     }
 
     let inputs: Partial<OpportunityInputs> | undefined;
@@ -546,6 +572,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         fsrOverrideKind: snap.modelledEffectiveFsr != null ? "SCAN_MODELLED" : "NONE",
         fsrOverrideCertainty: snap.effectiveCertainty,
         heightOverrideM: snap.effectiveHeightM,
+        lotValuationDetails,
         scanProvenance: {
           originType: "AREA_SCAN",
           scanSessionId: scan.sessionId ?? newScanSessionId(),
@@ -564,6 +591,8 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
           },
         },
       };
+    } else if (Object.keys(lotValuationDetails).length) {
+      inputs = { lotValuationDetails };
     }
 
     persistClientState({ activeKey: scanCandidate?.key ?? activeKey });

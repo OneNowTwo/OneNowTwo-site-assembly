@@ -6,8 +6,7 @@ import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
 import type { WalkingDistanceHint } from "@/lib/analysis/effective-controls";
 import { nearestPointOnRing, walkingDistanceProvider, WALKING_PROVIDER_NAME } from "@/lib/data-sources/walking-distance";
-import { valueParcels } from "@/lib/data-sources/valuation-service";
-import { domainCredentialStatus } from "@/lib/data-sources/domain-valuation";
+import { valueParcels, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
 
 /** Tile a bbox into cadastre-safe cells. */
 export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
@@ -133,7 +132,7 @@ export async function scanArea(input: {
     cadastreStatus: string;
     planningStatus: string;
     valuedParcels: ParcelData[];
-    valuationStatus: ReturnType<typeof domainCredentialStatus> & { valued: number; attempted: number };
+    valuationStatus: ReturnType<typeof valuationProviderStatus> & { valued: number; attempted: number };
   }
 > {
   const assumptions = await getGlobalAssumptions();
@@ -191,11 +190,11 @@ export async function scanArea(input: {
   let valuedParcels = loaded.parcels;
   let valued = 0;
   const valMessages: string[] = [];
-  const creds = domainCredentialStatus();
+  const providerStatus = valuationProviderStatus();
 
   if (!input.skipValuation && toValue.length) {
     progress.push("Valuing properties");
-    const batch = await valueParcels(toValue, { concurrency: 3 });
+    const batch = await valueParcels(toValue, { concurrency: 2 });
     valued = batch.valued;
     valMessages.push(...batch.messages);
     const byId = new Map(batch.parcels.map((p) => [p.externalParcelId, p]));
@@ -205,8 +204,6 @@ export async function scanArea(input: {
     result = applyValuationsToScanResult(result, valuedParcels, assumptions);
     progress.push("Ranking opportunities");
     result = { ...result, progress: [...new Set([...progress, ...result.progress])] };
-  } else if (!creds.configured) {
-    valMessages.push(`DOMAIN VALUATION NOT CONNECTED — missing ${creds.missing.join(", ")}. Set credentials to auto-populate house values.`);
   }
 
   return {
@@ -216,7 +213,7 @@ export async function scanArea(input: {
     cadastreStatus: loaded.cadastreStatus,
     planningStatus: loaded.planningStatus,
     valuedParcels: valuedParcels.filter((p) => topIds.has(p.externalParcelId)),
-    valuationStatus: { ...creds, valued, attempted: toValue.length },
+    valuationStatus: { ...providerStatus, valued, attempted: toValue.length },
   };
 }
 

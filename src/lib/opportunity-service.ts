@@ -413,7 +413,13 @@ function marketValueFieldsFromParcel(p: ParcelData): {
     marketValueProvider: v.provider ?? null,
     marketValueMethod: v.method ?? null,
     marketValueCheckedAt: v.checkedAt ? new Date(v.checkedAt) : new Date(),
-    marketValueNote: v.note ?? (source === "LIVE_AVM" && v.provider === "DOMAIN" ? "Domain Price Estimate" : null),
+    marketValueNote:
+      v.note ??
+      (source === "COMPARABLE_DERIVED"
+        ? `COMPARABLE-DERIVED SCREENING ESTIMATE${v.numberOfComps ? ` · ${v.numberOfComps} NSW registered sales` : ""}`
+        : source === "LIVE_AVM" && v.provider === "DOMAIN"
+          ? "Domain Price Estimate"
+          : null),
   };
 }
 
@@ -421,6 +427,24 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
   const suburbs = input.parcels.map((p) => p.suburb).filter(Boolean) as string[];
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
   const parsedInputs = parseOpportunityInputs(input.inputs ?? {});
+  // Ensure parcel valuations (NSW comps) are stored for Analyse transparency.
+  const lotValuationDetails = { ...parsedInputs.lotValuationDetails };
+  for (const p of input.parcels) {
+    if (!p.valuation || lotValuationDetails[p.externalParcelId]) continue;
+    lotValuationDetails[p.externalParcelId] = {
+      mid: p.valuation.mid,
+      low: p.valuation.low,
+      high: p.valuation.high,
+      confidence: p.valuation.confidence,
+      source: p.valuation.source,
+      provider: p.valuation.provider,
+      numberOfComps: p.valuation.numberOfComps ?? null,
+      valuationLabel: p.valuation.valuationLabel ?? null,
+      subjectLastSale: p.valuation.subjectLastSale ?? null,
+      comps: p.valuation.comps ?? undefined,
+    };
+  }
+  const inputsWithVals = { ...parsedInputs, lotValuationDetails };
   const opp = await prisma.$transaction(
     async (tx) => {
       const created = await tx.opportunity.create({
@@ -431,7 +455,7 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
           status: "ANALYSING",
           demoFinancialData: input.demoFinancialData ?? false,
           notes: input.notes,
-          inputs: parsedInputs as unknown as Prisma.InputJsonValue,
+          inputs: inputsWithVals as unknown as Prisma.InputJsonValue,
           createdById: input.userId ?? null,
         },
       });
