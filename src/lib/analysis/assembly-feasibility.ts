@@ -85,7 +85,7 @@ export function parcelsToEffectiveLots(
       heritage: p.planning?.heritage ?? null,
       isStrata: p.isStrata,
       planningKnown: !!p.planning,
-      marketValue: undefined,
+      marketValue: p.valuation?.mid != null && p.valuation.mid > 0 ? p.valuation.mid : undefined,
     };
   });
   return { lots, effectiveByLot };

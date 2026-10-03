@@ -105,7 +105,7 @@ export function OverviewTab() {
             <div className="rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-950">
               <div className="font-semibold">INSUFFICIENT VALUATION DATA</div>
               <p className="mt-1">
-                Suburb $/sqm fallback is a <strong>ROUGH SCREENING ESTIMATE</strong> only — <strong>DO NOT USE FOR ACQUISITION DECISION</strong>. Enter Est. Current Value for each lot (e.g. 5 Reserve Street = $3.12m). Maximum payable ({money(maxPay, { compact: true })}) still comes from development feasibility.
+                Automatic Domain / PropTrack valuation did not return a complete set for every lot. Manual Est. Current Value is a last-resort override only — not the normal workflow. Maximum payable ({money(maxPay, { compact: true })}) still comes from development feasibility.
               </p>
               {analysis.screeningExistingValue != null && (
                 <p className="mt-1 text-[11px] text-muted">Rough screening total (not trusted): {money(analysis.screeningExistingValue, { compact: true })}</p>
@@ -120,7 +120,7 @@ export function OverviewTab() {
                   label="Acquisition headroom (mid)"
                   value={money(val.headroomMid, { compact: true })}
                   tone={(val.headroomMid ?? 0) > 0 ? "good" : "bad"}
-                  sub={`Low case ${money(val.headroomLow, { compact: true })} · High case ${money(val.headroomHigh, { compact: true })}`}
+                  sub={`Low case ${money(val.headroomHigh, { compact: true })} · High case ${money(val.headroomLow, { compact: true })}`}
                 />
                 <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Max payable − mid existing value" />
               </div>
@@ -217,7 +217,7 @@ export function OverviewTab() {
             </tbody>
           </table>
           <p className="border-t border-line px-3 py-2 text-[11px] text-muted">
-            Edit Est. Current Value inline — combined value, headroom, offers and score recalculate immediately. Missing values show VALUE REQUIRED (never a silent suburb fallback).
+            Values populate automatically from Domain Price Estimate (then PropTrack / comps when available). Manual edit is an override — combined value, headroom, offers and score recalculate immediately. Missing values show VALUE REQUIRED (never a silent suburb fallback).
           </p>
         </Panel>
 

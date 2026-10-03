@@ -45,6 +45,21 @@ export interface PlanningControls {
 
 export type PlanningStatus = "ok" | "partial" | "unavailable";
 
+/** Live / manual valuation attached to a parcel (scan → Analyse handoff). */
+export interface ParcelValuationData {
+  mid: number | null;
+  low: number | null;
+  high: number | null;
+  status: string;
+  confidence: string;
+  source: string;
+  provider: string | null;
+  method: string | null;
+  checkedAt: string | null;
+  externalId?: string | null;
+  note?: string | null;
+}
+
 export interface ParcelData {
   /** Stable id, e.g. "nsw-cadid:100104808". */
   externalParcelId: string;
@@ -63,6 +78,8 @@ export interface ParcelData {
   planningStatus: PlanningStatus;
   planningMessage?: string;
   retrievedAt: string;
+  /** Populated by automatic valuation waterfall (Domain / PropTrack / override). */
+  valuation?: ParcelValuationData | null;
 }
 
 export interface BBox {

@@ -176,8 +176,8 @@ export function summariseAssemblyValuation(
 
 export function valuationSourceBadge(status: ValuationStatus, provider?: string | null): string {
   if (status === "LIVE_AVM") {
-    if (provider === "DOMAIN") return "DOMAIN AVM";
-    if (provider === "PROPTRACK") return "PROPTRACK AVM";
+    if (provider === "DOMAIN") return "Domain Price Estimate";
+    if (provider === "PROPTRACK") return "PropTrack AVM";
     return "LIVE AVM";
   }
   if (status === "COMPARABLE_DERIVED") return "COMPS";

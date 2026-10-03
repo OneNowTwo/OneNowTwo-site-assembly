@@ -371,6 +371,52 @@ export async function upsertParcel(tx: Prisma.TransactionClient, p: ParcelData):
   return row.id;
 }
 
+function marketValueFieldsFromParcel(p: ParcelData): {
+  marketValue: number | null;
+  marketValueLow: number | null;
+  marketValueHigh: number | null;
+  marketValueSource: "LIVE_AVM" | "COMPARABLE_DERIVED" | "USER_ESTIMATE" | "NO_VALUE" | null;
+  marketValueConfidence: string | null;
+  marketValueProvider: string | null;
+  marketValueMethod: string | null;
+  marketValueCheckedAt: Date | null;
+  marketValueNote: string | null;
+} {
+  const v = p.valuation;
+  if (!v || v.mid == null || !(v.mid > 0)) {
+    return {
+      marketValue: null,
+      marketValueLow: null,
+      marketValueHigh: null,
+      marketValueSource: null,
+      marketValueConfidence: null,
+      marketValueProvider: null,
+      marketValueMethod: null,
+      marketValueCheckedAt: null,
+      marketValueNote: null,
+    };
+  }
+  const source =
+    v.source === "LIVE_AVM" || v.status === "LIVE_AVM"
+      ? "LIVE_AVM"
+      : v.source === "COMPARABLE_DERIVED" || v.status === "COMPARABLE_DERIVED"
+        ? "COMPARABLE_DERIVED"
+        : v.source === "USER_ESTIMATE" || v.status === "USER_ESTIMATE"
+          ? "USER_ESTIMATE"
+          : "LIVE_AVM";
+  return {
+    marketValue: v.mid,
+    marketValueLow: v.low,
+    marketValueHigh: v.high,
+    marketValueSource: source,
+    marketValueConfidence: v.confidence ?? null,
+    marketValueProvider: v.provider ?? null,
+    marketValueMethod: v.method ?? null,
+    marketValueCheckedAt: v.checkedAt ? new Date(v.checkedAt) : new Date(),
+    marketValueNote: v.note ?? (source === "LIVE_AVM" && v.provider === "DOMAIN" ? "Domain Price Estimate" : null),
+  };
+}
+
 export async function createOpportunity(input: { name: string; parcels: ParcelData[]; userId?: string | null; demoFinancialData?: boolean; notes?: string; inputs?: unknown }) {
   const suburbs = input.parcels.map((p) => p.suburb).filter(Boolean) as string[];
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
@@ -392,7 +438,15 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
       let i = 0;
       for (const p of input.parcels) {
         const parcelId = await upsertParcel(tx, p);
-        await tx.opportunityParcel.create({ data: { opportunityId: created.id, parcelId, sortOrder: i++ } });
+        const mv = marketValueFieldsFromParcel(p);
+        await tx.opportunityParcel.create({
+          data: {
+            opportunityId: created.id,
+            parcelId,
+            sortOrder: i++,
+            ...mv,
+          },
+        });
       }
       return created;
     },

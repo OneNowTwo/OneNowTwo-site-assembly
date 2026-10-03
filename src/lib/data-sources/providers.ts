@@ -61,6 +61,8 @@ export interface PropertyValuationResult {
   note?: string | null;
   cacheKey?: string;
   cacheable?: boolean;
+  /** Provider property id (e.g. Domain propertyId). */
+  externalId?: string | null;
 }
 
 export interface PropertyValuationProvider {

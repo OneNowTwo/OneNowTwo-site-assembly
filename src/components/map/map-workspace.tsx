@@ -30,6 +30,15 @@ const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading:
 const MIN_PARCEL_ZOOM = 17;
 const DEFAULT_START = { lat: -33.8362, lng: 151.2176, zoom: 18 };
 
+/** Client-side stage labels while /api/scan is in flight (server returns final progress). */
+const SCAN_STAGE_LABELS = [
+  "Planning scan complete",
+  "Generating assemblies",
+  "Valuing properties",
+  "Running feasibility",
+  "Ranking opportunities",
+] as const;
+
 function initialMapStart() {
   const saved = typeof window !== "undefined" ? loadMapState() : null;
   if (saved) return { lat: saved.lat, lng: saved.lng, zoom: saved.zoom };
@@ -378,9 +387,25 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     const bbox = lastBBox.current;
     const q = (forceQuery ?? query).trim();
     const sessionId = newScanSessionId();
-    setScan((s) => ({ ...s, scanning: true, stage: "Loading parcels…", error: null, candidates: [], families: [], sessionId, hiddenKeys: [], showAllAssemblies: true }));
+    setScan((s) => ({
+      ...s,
+      scanning: true,
+      stage: SCAN_STAGE_LABELS[0],
+      progress: [...SCAN_STAGE_LABELS],
+      error: null,
+      candidates: [],
+      families: [],
+      sessionId,
+      hiddenKeys: [],
+      showAllAssemblies: true,
+    }));
     setFind(null);
     setActiveKey(null);
+    let stageIdx = 0;
+    const stageTimer = setInterval(() => {
+      stageIdx = Math.min(stageIdx + 1, SCAN_STAGE_LABELS.length - 1);
+      setScan((s) => (s.scanning ? { ...s, stage: SCAN_STAGE_LABELS[stageIdx]! } : s));
+    }, 2200);
     try {
       const bodyPayload: Record<string, unknown> = { maxResults: 12 };
       if (q.length >= 2) bodyPayload.suburbHint = q;
@@ -392,7 +417,6 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
       } else {
         throw new Error("Search a suburb or zoom the map before scanning");
       }
-      setScan((s) => ({ ...s, stage: "Applying planning controls…" }));
       const res = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Area scan failed");
@@ -407,6 +431,17 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         fetchParcels(body.bbox);
       }
       if (Array.isArray(body.centres)) setCentres(body.centres);
+      // Merge automatic valuations onto the in-memory parcel map for Analyse handoff.
+      if (Array.isArray(body.valuedParcels)) {
+        setParcels((prev) => {
+          const next = new Map(prev);
+          for (const p of body.valuedParcels as ParcelData[]) {
+            const existing = next.get(p.externalParcelId);
+            next.set(p.externalParcelId, existing ? { ...existing, valuation: p.valuation ?? existing.valuation } : p);
+          }
+          return next;
+        });
+      }
       const next: ScanState = {
         scanning: false,
         stage: "Done",
@@ -415,7 +450,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         candidates: body.candidates ?? [],
         families: body.families ?? [],
         messages: body.messages ?? [],
-        progress: body.progress ?? [],
+        progress: body.progress?.length ? body.progress : [...SCAN_STAGE_LABELS],
         parcelsConsidered: body.parcelsConsidered ?? 0,
         parcelsEligible: body.parcelsEligible ?? 0,
         assembliesGenerated: body.assembliesGenerated ?? 0,
@@ -427,6 +462,8 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
       persistClientState({ scanOverride: next, activeKey: null });
     } catch (err) {
       setScan((s) => ({ ...s, scanning: false, stage: "", error: (err as Error).message }));
+    } finally {
+      clearInterval(stageTimer);
     }
   }
 
@@ -472,7 +509,29 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
   async function save(ids: string[], name?: string, scanCandidate?: ScanCandidate, familyId?: string | null) {
     setSaving(true);
     setFindError(null);
-    const ps = ids.map((id) => parcels.get(id)).filter(Boolean) as ParcelData[];
+    const ps = ids
+      .map((id) => {
+        const base = parcels.get(id);
+        if (!base) return null;
+        const fromScan = scanCandidate?.lotValuations?.[id];
+        if (!fromScan) return base;
+        return {
+          ...base,
+          valuation: {
+            mid: fromScan.mid,
+            low: fromScan.low,
+            high: fromScan.high,
+            status: fromScan.source,
+            confidence: fromScan.confidence,
+            source: fromScan.source,
+            provider: fromScan.provider,
+            method: fromScan.provider === "DOMAIN" ? "priceEstimate" : null,
+            checkedAt: fromScan.checkedAt,
+            note: fromScan.note ?? null,
+          },
+        } satisfies ParcelData;
+      })
+      .filter((p): p is ParcelData => !!p);
     if (!ps.length) {
       setSaving(false);
       return setFindError("Parcels for this assembly are not loaded — zoom to the site and retry Analyse");
@@ -589,6 +648,11 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
             <Button size="sm" variant="accent" className="h-8" disabled={scan.scanning} onClick={() => scanThisArea()}>
               {scan.scanning ? scan.stage || "Scanning…" : "Scan this area"}
             </Button>
+            {scan.scanning && (
+              <span className="hidden max-w-[220px] truncate px-1 text-[10.5px] text-muted sm:inline" title={scan.stage}>
+                {scan.stage}
+              </span>
+            )}
             {!!scan.candidates.length && (
               <>
                 <Button size="sm" className="h-8" onClick={clearScanResults}>
@@ -726,6 +790,25 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         {findError && <div className="mx-4 mb-3 rounded-[3px] border border-red-200 bg-red-50 p-2 text-[12px] text-bad">{findError}</div>}
         {scan.error && <div className="mx-4 mb-3 rounded-[3px] border border-red-200 bg-red-50 p-2 text-[12px] text-bad">{scan.error}</div>}
 
+        {scan.scanning && (
+          <div className="border-t border-line p-4" ref={candidatesRef}>
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Scanning area</h3>
+            <ol className="mt-3 space-y-1.5 text-[12px]">
+              {SCAN_STAGE_LABELS.map((label) => {
+                const current = scan.stage === label;
+                const done = SCAN_STAGE_LABELS.indexOf(label as (typeof SCAN_STAGE_LABELS)[number]) < SCAN_STAGE_LABELS.indexOf(scan.stage as (typeof SCAN_STAGE_LABELS)[number]);
+                return (
+                  <li key={label} className={cx(current ? "font-semibold text-ink" : done ? "text-good" : "text-muted")}>
+                    {done ? "✓ " : current ? "→ " : "· "}
+                    {label}
+                  </li>
+                );
+              })}
+            </ol>
+            <p className="mt-3 text-[11px] text-muted">Headroom figures stay hidden until property valuation finishes — no fake green numbers.</p>
+          </div>
+        )}
+
         {!!scan.candidates.length && (
           <div className="border-t border-line p-4" ref={candidatesRef}>
             <div className="flex items-baseline justify-between gap-2">
@@ -740,7 +823,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
               </div>
             </div>
             <div className="mt-1 flex flex-wrap gap-2 text-[10.5px]">
-              <Badge tone="neutral">Scan-level financial estimate</Badge>
+              <Badge tone="neutral">Planning first · auto-value top assemblies</Badge>
               <button className="underline text-muted" onClick={showAllAssemblies}>
                 Show all
               </button>
@@ -827,19 +910,29 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                         {c.indicativeUnits}
                       </div>
                       <div>
-                        <div className="text-[10px] uppercase text-muted">Existing</div>
+                        <div className="text-[10px] uppercase text-muted">Existing mid</div>
                         {c.financialRankingAvailable ? money(c.existingValue, { compact: true }) : "—"}
+                        {c.financialRankingAvailable && c.existingValueLow != null && c.existingValueHigh != null && (
+                          <div className="text-[9.5px] font-sans text-muted">
+                            L {money(c.existingValueLow, { compact: true })} · H {money(c.existingValueHigh, { compact: true })}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <div className="text-[10px] uppercase text-muted">Max payable</div>
                         {money(c.maxPayable, { compact: true })}
                       </div>
                       <div>
-                        <div className="text-[10px] uppercase text-muted">Headroom</div>
+                        <div className="text-[10px] uppercase text-muted">Headroom mid</div>
                         {c.financialRankingAvailable ? (
-                          <span className="font-semibold text-good">{money(c.headroom, { compact: true })}</span>
+                          <span className={cx("font-semibold", (c.headroom ?? 0) >= 0 ? "text-good" : "text-bad")}>{money(c.headroom, { compact: true })}</span>
                         ) : (
                           <span className="text-[10px] font-sans text-amber-800">Pending values</span>
+                        )}
+                        {c.financialRankingAvailable && c.headroomLow != null && c.headroomHigh != null && (
+                          <div className="text-[9.5px] font-sans text-muted">
+                            Low case {money(c.headroomHigh, { compact: true })} · High case {money(c.headroomLow, { compact: true })}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -914,7 +1007,9 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                             <span>
                               {alt.lotCount} lots · {sqm(alt.siteAreaSqm)} · eff {alt.effectiveFsr != null ? fsr(alt.effectiveFsr) : "—"}
                             </span>
-                            <span className="num text-good">{money(alt.headroom, { compact: true })}</span>
+                            <span className={cx("num", alt.financialRankingAvailable ? ((alt.headroom ?? 0) >= 0 ? "text-good" : "text-bad") : "text-muted")}>
+                              {alt.financialRankingAvailable ? money(alt.headroom, { compact: true }) : "Pending"}
+                            </span>
                           </button>
                         ))}
                       </div>

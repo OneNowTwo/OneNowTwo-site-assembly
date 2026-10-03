@@ -56,9 +56,13 @@ export interface ScanCandidate {
   developmentType: string;
   indicativeUnits: number;
   existingValue: number;
+  existingValueLow: number | null;
+  existingValueHigh: number | null;
   existingValueEstimated: boolean;
   maxPayable: number | null;
   headroom: number | null;
+  headroomLow: number | null;
+  headroomHigh: number | null;
   headroomPercent: number | null;
   financialRankingAvailable: boolean;
   planningPotentialScore: number;
@@ -70,6 +74,20 @@ export interface ScanCandidate {
   score: AssemblyCandidate["score"];
   /** Exact snapshot used for Analyse — Opportunity must reproduce these figures. */
   calculationSnapshot: ScanCalculationSnapshot;
+  /** Per-lot automatic valuations when Stage 4 completed. */
+  lotValuations?: Record<
+    string,
+    {
+      mid: number | null;
+      low: number | null;
+      high: number | null;
+      confidence: string;
+      source: string;
+      provider: string | null;
+      checkedAt: string | null;
+      note?: string | null;
+    }
+  >;
 }
 
 export interface AreaScanResult {
@@ -90,6 +108,10 @@ const RESIDENTIAL_ZONE = /^R[1-4]$/;
 function streetKey(address: string | null): string {
   if (!address) return "Site";
   return address.replace(/^[\d\-/A-Za-z]+\s+/, "").replace(/,.*$/, "").trim() || "Site";
+}
+
+function financialLotsComplete(parcels: ParcelData[]): boolean {
+  return parcels.length > 0 && parcels.every((p) => p.valuation?.mid != null && p.valuation.mid > 0);
 }
 
 export function assessParcelEligibility(
@@ -162,6 +184,7 @@ function toScanLot(p: ParcelData, el: ParcelEligibility): AnalysisLot {
     heritage: p.planning?.heritage ?? null,
     isStrata: p.isStrata,
     planningKnown: !!p.planning,
+    marketValue: p.valuation?.mid != null && p.valuation.mid > 0 ? p.valuation.mid : undefined,
   };
 }
 
@@ -322,9 +345,13 @@ export function runAreaScan(input: {
       developmentType: feasibility.developmentType ?? "Residential redevelopment",
       indicativeUnits: feasibility.metrics.dwellings,
       existingValue: feasibility.metrics.financialValuationAvailable ? feasibility.metrics.combinedValue : 0,
+      existingValueLow: null,
+      existingValueHigh: null,
       existingValueEstimated: !feasibility.metrics.financialValuationAvailable,
       maxPayable: feasibility.metrics.maxPayableToOwners,
       headroom: feasibility.metrics.acquisitionHeadroom,
+      headroomLow: null,
+      headroomHigh: null,
       headroomPercent: feasibility.metrics.acquisitionHeadroomPercent,
       financialRankingAvailable: feasibility.metrics.financialValuationAvailable,
       planningPotentialScore: pps,
@@ -377,6 +404,143 @@ export function runAreaScan(input: {
     families,
     candidates,
     centres: input.centres,
+    messages,
+  };
+}
+
+/**
+ * After automatic valuations are attached to parcels, rebuild financials for existing
+ * scan candidates and rerank (planning score retained when values still missing).
+ */
+export function applyValuationsToScanResult(
+  result: AreaScanResult,
+  valuedParcels: ParcelData[],
+  assumptions: Assumptions,
+): AreaScanResult {
+  const byParcel = new Map(valuedParcels.map((p) => [p.externalParcelId, p]));
+  const adj = buildAdjacency(valuedParcels.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })));
+  const effectiveById = new Map(
+    valuedParcels.map((p) => {
+      const el = assessParcelEligibility(p, result.centres);
+      return [p.externalParcelId, el.effective] as const;
+    }),
+  );
+
+  const rebuild = (c: ScanCandidate): ScanCandidate => {
+    const memberParcels = c.lotIds.map((id) => byParcel.get(id)).filter((p): p is ParcelData => !!p);
+    if (!memberParcels.length) return c;
+    const feasibility = calculateAssemblyFeasibility({
+      parcels: memberParcels,
+      assumptions,
+      centres: result.centres,
+      effectiveByParcelId: effectiveById,
+      adjacency: adj,
+    });
+    const snapshot = buildScanCalculationSnapshot(feasibility, memberParcels);
+    const lotValuations: NonNullable<ScanCandidate["lotValuations"]> = {};
+    let existingLow = 0;
+    let existingHigh = 0;
+    const rangeComplete = financialLotsComplete(memberParcels);
+    for (const p of memberParcels) {
+      const v = p.valuation;
+      if (!v) continue;
+      lotValuations[p.externalParcelId] = {
+        mid: v.mid,
+        low: v.low,
+        high: v.high,
+        confidence: v.confidence,
+        source: v.source,
+        provider: v.provider,
+        checkedAt: v.checkedAt,
+        note: v.note,
+      };
+      if (v.mid != null && v.mid > 0) {
+        existingLow += v.low != null && v.low > 0 ? v.low : v.mid * 0.9;
+        existingHigh += v.high != null && v.high > 0 ? v.high : v.mid * 1.1;
+      }
+    }
+    const candidateForScore: AssemblyCandidate = {
+      key: c.key,
+      lotIds: feasibility.lotIds,
+      metrics: feasibility.metrics,
+      score: feasibility.score,
+    };
+    const pps = planningPotentialScore(candidateForScore, effectiveById);
+    const scored = feasibility.score;
+    const financial = feasibility.metrics.financialValuationAvailable;
+    const maxPay = feasibility.metrics.maxPayableToOwners;
+    return {
+      ...c,
+      lotIds: feasibility.lotIds,
+      lotCount: feasibility.metrics.lotCount,
+      owners: feasibility.metrics.owners,
+      siteAreaSqm: feasibility.metrics.totalAreaSqm,
+      lepFsr: feasibility.lepFsr,
+      effectiveFsr: feasibility.effectiveFsr,
+      effectiveCertainty: feasibility.effectiveCertainty,
+      indicativeUnits: feasibility.metrics.dwellings,
+      existingValue: financial ? feasibility.metrics.combinedValue : 0,
+      existingValueLow: financial && rangeComplete ? existingLow : null,
+      existingValueHigh: financial && rangeComplete ? existingHigh : null,
+      existingValueEstimated: !financial,
+      maxPayable: maxPay,
+      headroom: feasibility.metrics.acquisitionHeadroom,
+      // High existing → lowest headroom; low existing → highest headroom.
+      headroomLow: financial && rangeComplete && maxPay != null ? maxPay - existingHigh : null,
+      headroomHigh: financial && rangeComplete && maxPay != null ? maxPay - existingLow : null,
+      headroomPercent: feasibility.metrics.acquisitionHeadroomPercent,
+      financialRankingAvailable: financial,
+      planningPotentialScore: pps,
+      constraints: financial
+        ? c.constraints.filter((x) => x !== "FINANCIAL RANKING PENDING PROPERTY VALUES")
+        : [...new Set([...c.constraints, "FINANCIAL RANKING PENDING PROPERTY VALUES"])],
+      scoreFactors: scored.factors.slice(0, 5),
+      metrics: feasibility.metrics,
+      score: {
+        ...scored,
+        score: financial ? Math.round(scored.score * 0.55 + pps * 0.45) : Math.round(pps * 0.85 + scored.components.planningCapacity * 0.1 + scored.components.geometry * 0.05),
+      },
+      calculationSnapshot: snapshot,
+      lotValuations,
+    };
+  };
+
+  const candidates = result.candidates.map(rebuild);
+  candidates.sort((a, b) => {
+    if (a.financialRankingAvailable !== b.financialRankingAvailable) return a.financialRankingAvailable ? -1 : 1;
+    if (a.financialRankingAvailable) return b.score.score - a.score.score || (b.headroom ?? -Infinity) - (a.headroom ?? -Infinity);
+    return b.planningPotentialScore - a.planningPotentialScore || b.score.score - a.score.score;
+  });
+  candidates.forEach((c, i) => {
+    c.rank = i + 1;
+  });
+
+  const families = result.families.map((f) => ({
+    familyId: f.familyId,
+    best: rebuild(f.best),
+    alternatives: f.alternatives.map(rebuild),
+  }));
+  // Re-order families to match reranked candidates
+  const byKey = new Map(candidates.map((c) => [c.key, c]));
+  const orderedFamilies = candidates
+    .map((c) => {
+      const fam = families.find((f) => f.best.key === c.key || f.alternatives.some((a) => a.key === c.key));
+      if (!fam) return { familyId: `family:${c.key}`, best: c, alternatives: [] as ScanCandidate[] };
+      const best = byKey.get(fam.best.key) ?? rebuild(fam.best);
+      return { ...fam, best, alternatives: fam.alternatives.map((a) => byKey.get(a.key) ?? a) };
+    })
+    .filter((f, i, arr) => arr.findIndex((x) => x.familyId === f.familyId) === i);
+
+  const messages = [...result.messages];
+  if (candidates.some((c) => c.financialRankingAvailable)) {
+    messages.push("Property valuations applied — assemblies reranked with acquisition headroom where AVM data exists.");
+  }
+
+  return {
+    ...result,
+    progress: [...result.progress, "Valuing properties", "Running feasibility", "Ranking opportunities"],
+    candidates,
+    families: orderedFamilies.length ? orderedFamilies : families,
     messages,
   };
 }
