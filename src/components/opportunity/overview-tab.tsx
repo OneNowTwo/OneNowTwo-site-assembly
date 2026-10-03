@@ -479,7 +479,7 @@ export function OverviewTab() {
               value={analysis.site.fsrSource === "NO_MAPPED" ? "—" : fsr(analysis.site.fsr)}
               sub={
                 analysis.site.fsrSource === "STATE_PATHWAY"
-                  ? "STATE PATHWAY (modelled)"
+                  ? `STATE LMR ${analysis.site.statePathwayFsr != null ? fsr(analysis.site.statePathwayFsr) : fsr(analysis.site.fsr)} · LEP ${analysis.site.lepFsr != null ? fsr(analysis.site.lepFsr) : "not mapped"} · ${analysis.site.lmrProximityLabel ?? "PASS — ESTIMATED"}`
                   : analysis.site.fsrSource === "OVERRIDE"
                     ? "USER ASSUMPTION"
                     : analysis.site.fsrSource === "OFFICIAL"

@@ -2,9 +2,11 @@ import type { PlanningControls } from "@/lib/types";
 import {
   LMR_SOURCE_LABEL,
   lmrBandFromDistanceM,
+  lmrProximityScreenFromDistanceM,
   lmrRfbStandardForZone,
   nearestLmrCentre,
   type LmrBand,
+  type LmrProximityScreen,
   type NominatedCentre,
 } from "@/lib/data-sources/housing-sepp-lmr";
 import { isHeritageItem } from "./assembly";
@@ -30,15 +32,20 @@ export interface EffectiveDevelopmentControls {
     band: LmrBand;
     distanceM: number | null;
     straightLineDistanceM: number | null;
+    /** Always null in MVP — no pedestrian routing. */
     walkingDistanceM: number | null;
-    distanceBasis: "PEDESTRIAN_ROUTE" | "STRAIGHT_LINE_APPROXIMATION" | "NONE";
-    walkingStatus: "OK" | "FAILED" | "NOT_CHECKED";
+    distanceBasis: "STRAIGHT_LINE_APPROXIMATION" | "NONE";
+    /** MVP proximity screen against 800 m straight-line. */
+    proximityScreen: LmrProximityScreen;
+    proximityLabel: string | null;
+    walkingStatus: "NOT_USED";
     developmentType: string | null;
     zoneEligible: boolean;
     exclusionNotes: string[];
   };
 }
 
+/** @deprecated Kept for call-site compatibility — MVP ignores walking routes. */
 export interface WalkingDistanceHint {
   walkingDistanceM: number | null;
   straightLineDistanceM: number;
@@ -53,9 +60,8 @@ function maxNum(a: number | null, b: number | null): number | null {
 }
 
 /**
- * Resolve LEP base controls vs potential Housing SEPP LMR standards.
- * Never blindly takes the larger number without zone + band checks.
- * Straight-line proximity is only an approximate screen — modelled control is labelled REQUIRES_PLANNING_CONFIRMATION when LMR is the driver.
+ * Resolve LEP base controls vs Housing SEPP LMR standards.
+ * MVP: 800 m straight-line proximity screen only — never claims walking distance confirmed.
  */
 export function resolveEffectiveControls(
   planning: PlanningControls | null,
@@ -63,6 +69,8 @@ export function resolveEffectiveControls(
   centres: NominatedCentre[],
   walking?: WalkingDistanceHint | null,
 ): EffectiveDevelopmentControls {
+  void walking; // MVP ignores pedestrian routes — keep arg for call-site compatibility.
+
   const lepFsr = planning?.fsr ?? null;
   const lepHeight = planning?.heightM ?? null;
   const lep: ControlSnapshot = {
@@ -79,13 +87,16 @@ export function resolveEffectiveControls(
     exclusionNotes.push("Heritage item mapped — LMR may be excluded or heavily constrained; confirm against Housing SEPP exclusion rules");
   }
 
-  const straightM = walking?.straightLineDistanceM ?? (prox ? Math.round(prox.distanceM) : null);
-  const walkingM = walking?.status === "OK" ? walking.walkingDistanceM : null;
-  const distanceBasis = walking?.status === "OK" && walkingM != null ? "PEDESTRIAN_ROUTE" : prox ? "STRAIGHT_LINE_APPROXIMATION" : "NONE";
-  const distanceForBand = distanceBasis === "PEDESTRIAN_ROUTE" && walkingM != null ? walkingM : straightM;
-  const band = distanceForBand != null ? lmrBandFromDistanceM(distanceForBand) : prox?.band ?? "OUTSIDE";
+  const straightM = prox ? prox.distanceM : null;
+  const proximityScreen = lmrProximityScreenFromDistanceM(straightM);
+  const band = straightM != null ? lmrBandFromDistanceM(straightM) : "OUTSIDE";
+  const proximityLabel =
+    proximityScreen === "PASS" ? "PASS — ESTIMATED" : proximityScreen === "FAIL" ? "FAIL — ESTIMATED" : null;
 
-  if (!prox || band === "OUTSIDE") {
+  if (!prox || proximityScreen !== "PASS" || band === "OUTSIDE") {
+    if (proximityScreen === "FAIL") {
+      exclusionNotes.push("LMR PROXIMITY SCREEN: FAIL — more than 800 m straight-line from nominated centre (estimate)");
+    }
     return {
       lep,
       statePolicy: null,
@@ -100,17 +111,16 @@ export function resolveEffectiveControls(
       lmr: {
         centreName: prox?.centre.label ?? null,
         band,
-        distanceM: distanceForBand,
+        distanceM: straightM,
         straightLineDistanceM: straightM,
-        walkingDistanceM: walkingM,
-        distanceBasis,
-        walkingStatus: walking?.status ?? (prox ? "NOT_CHECKED" : "NOT_CHECKED"),
+        walkingDistanceM: null,
+        distanceBasis: prox ? "STRAIGHT_LINE_APPROXIMATION" : "NONE",
+        proximityScreen,
+        proximityLabel,
+        walkingStatus: "NOT_USED",
         developmentType: null,
         zoneEligible: false,
-        exclusionNotes: [
-          ...exclusionNotes,
-          ...(walking && walking.status === "FAILED" ? ["WALKING DISTANCE NOT CONFIRMED — router failed; straight-line is screening only"] : []),
-        ],
+        exclusionNotes,
       },
     };
   }
@@ -122,25 +132,22 @@ export function resolveEffectiveControls(
         heightM: std.heightM,
         label: "STATE POLICY CONTROL",
         source: `${LMR_SOURCE_LABEL} — ${std.developmentType}`,
-        certainty: "STATE_POLICY_CANDIDATE",
+        certainty: "REQUIRES_PLANNING_CONFIRMATION",
       }
     : null;
 
-  // Prefer larger FSR only when LMR zone-eligible.
-  // Pedestrian route OK → still confirm exclusions; failed/missing walking → REQUIRES_PLANNING_CONFIRMATION.
   let modelled: ControlSnapshot;
-  const walkingConfirmed = distanceBasis === "PEDESTRIAN_ROUTE" && walkingM != null && walkingM <= 800;
   if (statePolicy && std.zoneEligible && (statePolicy.fsr ?? 0) > (lepFsr ?? 0)) {
     modelled = {
       fsr: statePolicy.fsr,
       heightM: maxNum(lepHeight, statePolicy.heightM),
       label: "MODELLED EFFECTIVE CONTROL",
       source: statePolicy.source,
-      certainty: walkingConfirmed ? "STATE_POLICY_CANDIDATE" : "REQUIRES_PLANNING_CONFIRMATION",
+      certainty: "REQUIRES_PLANNING_CONFIRMATION",
     };
-    if (!walkingConfirmed) {
-      exclusionNotes.push("WALKING DISTANCE NOT CONFIRMED — modelled FSR is provisional until pedestrian route ≤800 m is verified");
-    }
+    exclusionNotes.push(
+      "LMR PROXIMITY SCREEN: PASS — ESTIMATED (≤800 m straight-line). ESTIMATED ELIGIBILITY — VERIFY BEFORE ACQUISITION / DA.",
+    );
   } else if (lepFsr != null || lepHeight != null) {
     modelled = {
       fsr: lepFsr,
@@ -159,7 +166,12 @@ export function resolveEffectiveControls(
     };
   }
 
-  const fsrUplift = modelled.fsr != null && lepFsr != null ? Math.round((modelled.fsr - lepFsr) * 1000) / 1000 : modelled.fsr != null && lepFsr == null ? modelled.fsr : 0;
+  const fsrUplift =
+    modelled.fsr != null && lepFsr != null
+      ? Math.round((modelled.fsr - lepFsr) * 1000) / 1000
+      : modelled.fsr != null && lepFsr == null
+        ? modelled.fsr
+        : 0;
 
   return {
     lep,
@@ -169,11 +181,13 @@ export function resolveEffectiveControls(
     lmr: {
       centreName: prox.centre.label,
       band,
-      distanceM: distanceForBand,
+      distanceM: straightM,
       straightLineDistanceM: straightM,
-      walkingDistanceM: walkingM,
-      distanceBasis,
-      walkingStatus: walking?.status ?? "NOT_CHECKED",
+      walkingDistanceM: null,
+      distanceBasis: "STRAIGHT_LINE_APPROXIMATION",
+      proximityScreen,
+      proximityLabel,
+      walkingStatus: "NOT_USED",
       developmentType: std.developmentType,
       zoneEligible: std.zoneEligible,
       exclusionNotes,

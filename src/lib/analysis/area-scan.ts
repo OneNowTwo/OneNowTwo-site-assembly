@@ -355,7 +355,7 @@ export function runAreaScan(input: {
     if (feasibility.metrics.heritageLots) constraints.push(`${feasibility.metrics.heritageLots} heritage-affected lot(s)`);
     if (feasibility.metrics.fsrEstimated) constraints.push("Some lots lack official LEP FSR");
     if (feasibility.effectiveCertainty === "REQUIRES_PLANNING_CONFIRMATION") {
-      constraints.push("LMR walking distance not confirmed — modelled FSR requires planning confirmation");
+      constraints.push("LMR 800 m proximity screen PASS — ESTIMATED; requires planning confirmation");
     }
     if (feasibility.metrics.minLotSizeIssues.length) constraints.push(...feasibility.metrics.minLotSizeIssues);
 
@@ -430,7 +430,7 @@ export function runAreaScan(input: {
     messages.push("FINANCIAL RANKING PENDING PROPERTY VALUES — suburb $/sqm fallback is screening only and does not drive acquisition headroom. Rankings emphasise planning uplift, site size, geometry and constraints.");
   }
   messages.push("LMR is one pathway — ordinary LEP capacity also qualifies. Negative headroom sites are kept in the ranking.");
-  messages.push("LMR screening may use pedestrian routing when available; otherwise straight-line is screening only and modelled FSR stays REQUIRES PLANNING CONFIRMATION.");
+  messages.push("LMR MVP screen: ≤800 m straight-line from nominated centre (ESTIMATED). Not a statutory walking-distance confirmation.");
   messages.push(
     `Scan funnel: ${parcels.length} considered → ${eligibleParcels.length} eligible → ${raw.length} assemblies (by size ${JSON.stringify(generatedByLotCount)}) → ${candidates.length} ranked (min area ${minAreaSqmUsed} sqm).`,
   );

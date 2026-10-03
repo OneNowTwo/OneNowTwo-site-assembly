@@ -54,9 +54,10 @@ describe("effective controls", () => {
     expect(eff.modelled.fsr).toBe(0.5);
     expect(eff.statePolicy).toBeNull();
     expect(eff.modelled.certainty).toBe("OFFICIAL_LEP");
+    expect(eff.lmr.proximityScreen).toBe("FAIL");
   });
 
-  it("models LMR uplift for R1 near nominated centre without claiming confirmed walking eligibility", () => {
+  it("models LMR uplift with 800m straight-line screen — never claims walking confirmed", () => {
     const eff = resolveEffectiveControls(
       {
         zone: "R1",
@@ -79,10 +80,14 @@ describe("effective controls", () => {
     expect(eff.modelled.fsr).toBe(0.8);
     expect(eff.modelled.certainty).toBe("REQUIRES_PLANNING_CONFIRMATION");
     expect(eff.lmr.distanceBasis).toBe("STRAIGHT_LINE_APPROXIMATION");
+    expect(eff.lmr.proximityScreen).toBe("PASS");
+    expect(eff.lmr.proximityLabel).toBe("PASS — ESTIMATED");
+    expect(eff.lmr.walkingDistanceM).toBeNull();
+    expect(eff.lmr.walkingStatus).toBe("NOT_USED");
     expect(eff.fsrUplift).toBeCloseTo(0.3);
   });
 
-  it("uses pedestrian route distance when walking hint is OK and does not silently fall back on failure", () => {
+  it("ignores walking hints in MVP — still uses straight-line screen only", () => {
     const planning = {
       zone: "R1",
       zoneName: "General Residential",
@@ -96,24 +101,40 @@ describe("effective controls", () => {
       lga: "NORTHERN BEACHES",
       sources: {},
     };
-    const ok = resolveEffectiveControls(planning, [151.263, -33.7915], [centre], {
+    const withHint = resolveEffectiveControls(planning, [151.263, -33.7915], [centre], {
       status: "OK",
       straightLineDistanceM: 540,
       walkingDistanceM: 683,
       provider: "OSRM foot",
     });
-    expect(ok.lmr.distanceBasis).toBe("PEDESTRIAN_ROUTE");
-    expect(ok.lmr.walkingDistanceM).toBe(683);
-    expect(ok.modelled.certainty).toBe("STATE_POLICY_CANDIDATE");
+    expect(withHint.lmr.distanceBasis).toBe("STRAIGHT_LINE_APPROXIMATION");
+    expect(withHint.lmr.walkingDistanceM).toBeNull();
+    expect(withHint.modelled.certainty).toBe("REQUIRES_PLANNING_CONFIRMATION");
+    expect(withHint.lmr.proximityLabel).toBe("PASS — ESTIMATED");
+  });
 
-    const failed = resolveEffectiveControls(planning, [151.263, -33.7915], [centre], {
-      status: "FAILED",
-      straightLineDistanceM: 540,
-      walkingDistanceM: null,
-    });
-    expect(failed.lmr.distanceBasis).toBe("STRAIGHT_LINE_APPROXIMATION");
-    expect(failed.modelled.certainty).toBe("REQUIRES_PLANNING_CONFIRMATION");
-    expect(failed.lmr.exclusionNotes.some((n) => n.includes("WALKING DISTANCE NOT CONFIRMED"))).toBe(true);
+  it("applies LMR when LEP FSR is not mapped inside 800m screen", () => {
+    const eff = resolveEffectiveControls(
+      {
+        zone: "R2",
+        zoneName: "Low Density Residential",
+        fsr: null,
+        fsrStatus: "NO_MAPPED",
+        fsrControls: [],
+        heightM: 8.5,
+        minLotSizeSqm: 450,
+        heritage: null,
+        planningInstrument: "Warringah LEP",
+        lga: "NORTHERN BEACHES",
+        sources: {},
+      },
+      [151.263, -33.7915],
+      [centre],
+    );
+    expect(eff.lep.fsr).toBeNull();
+    expect(eff.statePolicy?.fsr).toBe(0.8);
+    expect(eff.modelled.fsr).toBe(0.8);
+    expect(eff.lmr.proximityScreen).toBe("PASS");
   });
 });
 
