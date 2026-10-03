@@ -5,11 +5,13 @@ import { propTrackValuationConfigured, propTrackValuationProvider } from "./prop
 import {
   nswComparableSalesProvider,
   nswCompsConfigured,
+  estimateFromNswComps,
   type NswCompValuationResult,
 } from "./nsw-comparable-valuation";
 import { manualValuationProvider } from "./providers";
 import { getCachedValuation, setCachedValuation } from "./valuation-cache";
 import { publicWebComparableProvider } from "./public-web-comparable";
+import { prefetchNswSalesForParcels, type NswRegisteredSale } from "./nsw-property-sales";
 
 export type ValuationProviderName = "nsw" | "domain" | "proptrack" | "auto";
 
@@ -48,6 +50,8 @@ export async function valueProperty(input: {
   preferUserOverride?: boolean;
   /** When true, skip live sources and honour user/comps only. */
   manualOnly?: boolean;
+  /** Shared sales pool from a scan-area prefetch (avoids per-parcel ArcGIS calls). */
+  prefetchedSales?: NswRegisteredSale[];
 }): Promise<NswCompValuationResult> {
   if (input.preferUserOverride && input.userValue != null && input.userValue > 0) {
     return manualValuationProvider.estimate(input);
@@ -61,7 +65,20 @@ export async function valueProperty(input: {
 
   const tryNsw = prefer === "auto" || prefer === "nsw";
   if (tryNsw && nswCompsConfigured() && input.lng != null && input.lat != null) {
-    const result = await nswComparableSalesProvider.estimate(input);
+    const result = input.prefetchedSales
+      ? await estimateFromNswComps({
+          externalParcelId: input.externalParcelId,
+          address: input.address,
+          suburb: input.suburb,
+          areaSqm: input.areaSqm,
+          lng: input.lng,
+          lat: input.lat,
+          isStrata: input.isStrata,
+          zone: input.zone,
+          excludedIds: input.excludedIds,
+          prefetchedSales: input.prefetchedSales,
+        })
+      : await nswComparableSalesProvider.estimate(input);
     if (result.status === "COMPARABLE_DERIVED" && result.mid != null) return result;
     last = result;
   }
@@ -175,9 +192,20 @@ function isTrustedAutoValue(result: PropertyValuationResult): boolean {
 /** Value unique parcels (concurrency-limited). Attaches `.valuation` on each parcel. */
 export async function valueParcels(
   parcels: ParcelData[],
-  opts?: { concurrency?: number; prefer?: ValuationProviderName },
-): Promise<{ parcels: ParcelData[]; valued: number; failed: number; messages: string[] }> {
-  const concurrency = opts?.concurrency ?? 2;
+  opts?: {
+    concurrency?: number;
+    prefer?: ValuationProviderName;
+    /** Prefetch NSW sales once for the batch (default true when NSW comps enabled and batch ≥ 3). */
+    shareNswSales?: boolean;
+  },
+): Promise<{
+  parcels: ParcelData[];
+  valued: number;
+  failed: number;
+  messages: string[];
+  timings?: { salesPrefetchMs: number; valuationMs: number; salesFetches: number; salesPoolSize: number };
+}> {
+  const concurrency = opts?.concurrency ?? 12;
   let valued = 0;
   let failed = 0;
   const messages: string[] = [];
@@ -190,6 +218,25 @@ export async function valueParcels(
   // Touch stub so the optional enrichment path stays imported/available.
   void publicWebComparableProvider.name;
 
+  let prefetchedSales: NswRegisteredSale[] | undefined;
+  let salesPrefetchMs = 0;
+  let salesFetches = 0;
+  let salesPoolSize = 0;
+  const share = opts?.shareNswSales ?? (nswCompsConfigured() && out.length >= 3 && (opts?.prefer ?? "auto") !== "domain");
+  if (share && nswCompsConfigured()) {
+    const t0 = performance.now();
+    const pref = await prefetchNswSalesForParcels(
+      out.map((p) => ({ lng: p.centroid[0], lat: p.centroid[1], suburb: p.suburb })),
+      1000,
+    );
+    prefetchedSales = pref.pool;
+    salesFetches = pref.fetchCount;
+    salesPoolSize = pref.pool.length;
+    salesPrefetchMs = performance.now() - t0;
+    messages.push(`NSW sales prefetch: ${salesFetches} request(s) · ${salesPoolSize} sales reused across ${out.length} parcels`);
+  }
+
+  const tVal0 = performance.now();
   for (let i = 0; i < out.length; i += concurrency) {
     const batch = out.slice(i, i + concurrency);
     const results = await Promise.all(
@@ -204,6 +251,7 @@ export async function valueParcels(
           isStrata: p.isStrata,
           zone: p.planning?.zone ?? null,
           prefer: opts?.prefer,
+          prefetchedSales,
         });
         return { id: p.externalParcelId, result };
       }),
@@ -217,11 +265,18 @@ export async function valueParcels(
       else failed++;
     }
   }
+  const valuationMs = performance.now() - tVal0;
 
   if (valued > 0) messages.push(`Automatic valuations: ${valued} comparable-derived/AVM · ${failed} without estimate`);
   else messages.push(`Automatic valuations: 0 of ${out.length} — check NSW sales coverage or Domain credentials`);
 
-  return { parcels: out, valued, failed, messages };
+  return {
+    parcels: out,
+    valued,
+    failed,
+    messages,
+    timings: { salesPrefetchMs, valuationMs, salesFetches, salesPoolSize },
+  };
 }
 
 export function valuationProviderStatus() {

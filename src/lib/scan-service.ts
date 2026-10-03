@@ -5,6 +5,7 @@ import { getParcelsForBBox } from "@/lib/parcel-service";
 import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
 import { valueParcels, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
+import { StageTimer } from "@/lib/perf/timing";
 
 /** Tile a bbox into cadastre-safe cells. */
 export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
@@ -27,6 +28,20 @@ export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
   return tiles.slice(0, 9); // hard cap for V1 performance
 }
 
+async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  }
+  const n = Math.min(concurrency, Math.max(1, items.length));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return out;
+}
+
 async function loadParcelsTiled(bbox: BBox): Promise<{
   parcels: ParcelData[];
   messages: string[];
@@ -39,8 +54,9 @@ async function loadParcelsTiled(bbox: BBox): Promise<{
   const messages: string[] = [];
   let cadastreStatus = "live";
   let planningStatus = "live";
-  for (const tile of tiles) {
-    const result = await getParcelsForBBox(tile);
+  // Independent tile fetches — controlled concurrency (do not hammer cadastre/planning).
+  const tileResults = await mapPool(tiles, 3, (tile) => getParcelsForBBox(tile));
+  for (const result of tileResults) {
     for (const p of result.parcels) byId.set(p.externalParcelId, p);
     messages.push(...result.messages);
     if (result.cadastreStatus !== "live") cadastreStatus = result.cadastreStatus;
@@ -67,6 +83,12 @@ async function loadParcelsTiled(bbox: BBox): Promise<{
   return { parcels, messages, cadastreStatus, planningStatus, loadedCount };
 }
 
+export type ScanTimings = {
+  totalMs: number;
+  stages: Record<string, number>;
+  valuation?: { salesPrefetchMs: number; valuationMs: number; salesFetches: number; salesPoolSize: number };
+};
+
 /**
  * Staged area scan:
  * 1) planning/geometry (800 m straight-line LMR screen)  2) assemblies  3) top candidates
@@ -87,9 +109,11 @@ export async function scanArea(input: {
     planningStatus: string;
     valuedParcels: ParcelData[];
     valuationStatus: ReturnType<typeof valuationProviderStatus> & { valued: number; attempted: number };
+    timings: ScanTimings;
   }
 > {
-  const assumptions = await getGlobalAssumptions();
+  const timer = new StageTimer();
+  const assumptions = await timer.time("assumptions_db", () => getGlobalAssumptions());
   let bbox = input.bbox;
   let centres: NominatedCentre[] = [];
   const progress: string[] = [];
@@ -97,7 +121,7 @@ export async function scanArea(input: {
   if (input.centreQuery || input.suburbHint) {
     const q = (input.centreQuery ?? input.suburbHint ?? "").toLowerCase();
     const broad: BBox = bbox ?? { west: 150.6, south: -34.2, east: 151.4, north: -33.5 };
-    const all = await fetchNominatedCentres(broad);
+    const all = await timer.time("lmr_centres", () => fetchNominatedCentres(broad));
     const matched = all.filter((c) => c.label.toLowerCase().includes(q) || q.split(/\s+/).every((w) => c.label.toLowerCase().includes(w)));
     if (matched.length) {
       centres = matched;
@@ -110,24 +134,28 @@ export async function scanArea(input: {
 
   if (!centres.length) {
     const pad = 0.01;
-    centres = await fetchNominatedCentres({
-      west: bbox.west - pad,
-      south: bbox.south - pad,
-      east: bbox.east + pad,
-      north: bbox.north + pad,
-    });
+    centres = await timer.time("lmr_centres", () =>
+      fetchNominatedCentres({
+        west: bbox!.west - pad,
+        south: bbox!.south - pad,
+        east: bbox!.east + pad,
+        north: bbox!.north + pad,
+      }),
+    );
   }
 
   progress.push("Planning scan");
-  const loaded = await loadParcelsTiled(bbox);
+  const loaded = await timer.time("load_parcels_planning", () => loadParcelsTiled(bbox));
 
   progress.push("Generating assemblies");
+  const tAsm = performance.now();
   let result = runAreaScan({
     parcels: loaded.parcels,
     centres,
     assumptions,
     maxResults: input.maxResults ?? 20,
   });
+  timer.add("generate_assemblies_rank", performance.now() - tAsm);
   const partial = loaded.loadedCount > loaded.parcels.length;
   result = {
     ...result,
@@ -162,20 +190,35 @@ export async function scanArea(input: {
   let valued = 0;
   const valMessages: string[] = [];
   const providerStatus = valuationProviderStatus();
+  let valuationTimings: ScanTimings["valuation"];
 
   if (!input.skipValuation && toValue.length) {
     progress.push("Valuing properties");
-    const batch = await valueParcels(toValue, { concurrency: 2 });
+    // Prefetch NSW sales once for the area; score each subject locally with concurrency.
+    const batch = await timer.time("valuations", () =>
+      valueParcels(toValue, { concurrency: 16, shareNswSales: true }),
+    );
     valued = batch.valued;
     valMessages.push(...batch.messages);
+    valuationTimings = batch.timings;
     const byId = new Map(batch.parcels.map((p) => [p.externalParcelId, p]));
     valuedParcels = loaded.parcels.map((p) => byId.get(p.externalParcelId) ?? p);
 
     progress.push("Running feasibility");
+    const tFeas = performance.now();
     result = applyValuationsToScanResult(result, valuedParcels, assumptions);
+    timer.add("feasibility_rerank", performance.now() - tFeas);
     progress.push("Ranking opportunities");
     result = { ...result, progress: [...new Set([...progress, ...result.progress])] };
   }
+
+  const snap = timer.snapshot();
+  const timings: ScanTimings = { ...snap, valuation: valuationTimings };
+  // Surface timing in messages for ops visibility without UI changes.
+  const stageLine = Object.entries(snap.stages)
+    .map(([k, v]) => `${k}=${v}ms`)
+    .join(" · ");
+  valMessages.push(`PERF timings total=${snap.totalMs}ms · ${stageLine}`);
 
   return {
     ...result,
@@ -185,6 +228,7 @@ export async function scanArea(input: {
     planningStatus: loaded.planningStatus,
     valuedParcels: valuedParcels.filter((p) => topIds.has(p.externalParcelId)),
     valuationStatus: { ...providerStatus, valued, attempted: toValue.length },
+    timings,
   };
 }
 

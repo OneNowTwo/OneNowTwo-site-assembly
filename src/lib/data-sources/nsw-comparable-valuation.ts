@@ -6,6 +6,7 @@ import {
 } from "@/lib/analysis/comparable-valuation";
 import type { PropertyValuationProvider, PropertyValuationResult } from "./providers";
 import {
+  filterSalesNearPoint,
   haversineM,
   parseAddressParts,
   queryNswSubjectSales,
@@ -75,6 +76,12 @@ export async function estimateFromNswComps(input: {
   excludedIds?: string[];
   radiusM?: number;
   lookbackMonths?: number;
+  /**
+   * Optional prefetched sales pool for the scan area.
+   * When provided, filters locally to radius — avoids per-parcel ArcGIS round-trips.
+   * Scoring/filtering uses the same buildComparableValuation path.
+   */
+  prefetchedSales?: NswRegisteredSale[];
 }): Promise<NswCompValuationResult> {
   const checkedAt = new Date().toISOString();
   const cacheKey = `nsw-comps:${input.lng.toFixed(5)},${input.lat.toFixed(5)}:${Math.round(input.areaSqm)}:${input.isStrata ? "S" : "H"}`;
@@ -85,14 +92,19 @@ export async function estimateFromNswComps(input: {
   }
 
   const { houseNo, street } = parseAddressParts(input.address);
+  const radiusM = input.radiusM ?? 1000;
   let sales: NswRegisteredSale[] = [];
   try {
-    sales = await queryNswUrbanSalesNear({
-      lng: input.lng,
-      lat: input.lat,
-      radiusM: input.radiusM ?? 1000,
-      suburb: input.suburb,
-    });
+    if (input.prefetchedSales) {
+      sales = filterSalesNearPoint(input.prefetchedSales, input.lng, input.lat, radiusM);
+    } else {
+      sales = await queryNswUrbanSalesNear({
+        lng: input.lng,
+        lat: input.lat,
+        radiusM,
+        suburb: input.suburb,
+      });
+    }
   } catch (err) {
     return {
       mid: null,
@@ -112,11 +124,13 @@ export async function estimateFromNswComps(input: {
     };
   }
 
-  // Subject historic sale (supporting info only).
+  // Subject historic sale (supporting info only — does not affect mid/low/high comps math).
   let subjectLastSale: SubjectLastSale | null = null;
   const subjectHits = sales.filter((s) => isSubjectSale(s, houseNo, street));
   let remoteSubject: NswRegisteredSale[] = [];
-  if (!subjectHits.length && houseNo && street) {
+  // When using a shared scan-area sales pool, skip per-parcel subject network lookups
+  // (they do not change valuation maths and re-introduce N+1 latency).
+  if (!subjectHits.length && houseNo && street && !input.prefetchedSales) {
     remoteSubject = await queryNswSubjectSales({
       houseNo,
       street,
@@ -195,6 +209,7 @@ export class NSWComparableSalesProvider implements PropertyValuationProvider {
     userLow?: number | null;
     userHigh?: number | null;
     comparableDerived?: number | null;
+    prefetchedSales?: NswRegisteredSale[];
   }): Promise<NswCompValuationResult> {
     if (input.lng == null || input.lat == null) {
       return {
@@ -223,6 +238,7 @@ export class NSWComparableSalesProvider implements PropertyValuationProvider {
       isStrata: input.isStrata,
       zone: input.zone,
       excludedIds: input.excludedIds,
+      prefetchedSales: input.prefetchedSales,
     });
   }
 }

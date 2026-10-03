@@ -137,22 +137,31 @@ export function haversineM(lng1: number, lat1: number, lng2: number, lat2: numbe
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+/** Filter a prefetched sales pool to those within radius of a subject (same cut as point query). */
+export function filterSalesNearPoint(
+  sales: NswRegisteredSale[],
+  lng: number,
+  lat: number,
+  radiusM = 1000,
+): NswRegisteredSale[] {
+  const max = radiusM * 1.05;
+  return sales.filter((s) => haversineM(lng, lat, s.lng, s.lat) <= max);
+}
+
 /**
- * Query recent urban registered sales near a point.
- * Spatial filter via envelope; attribute filters applied client-side for service quirks.
+ * Query urban registered sales intersecting an envelope (no per-point distance filter).
+ * Used to prefetch once per suburb/scan area then filter locally per subject.
  */
-export async function queryNswUrbanSalesNear(input: {
-  lng: number;
-  lat: number;
-  radiusM?: number;
+export async function queryNswUrbanSalesInEnvelope(input: {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
   suburb?: string | null;
-  maxRecords?: number;
 }): Promise<NswRegisteredSale[]> {
-  const radiusM = input.radiusM ?? 1000;
-  const { dLat, dLng } = metresToDeg(input.lat, radiusM);
-  const envelope = `${input.lng - dLng},${input.lat - dLat},${input.lng + dLng},${input.lat + dLat}`;
   const suburb = input.suburb?.trim().toUpperCase();
   const where = suburb ? `suburb = '${suburb.replace(/'/g, "''")}'` : "1=1";
+  const envelope = `${input.west},${input.south},${input.east},${input.north}`;
 
   const url = buildUrl(`${NSW_PROPERTY_SALES_BASE}/${NSW_URBAN_SALES_LAYER}/query`, {
     where,
@@ -175,12 +184,88 @@ export async function queryNswUrbanSalesNear(input: {
   const out: NswRegisteredSale[] = [];
   for (const f of res.features ?? []) {
     const mapped = mapFeature(f);
-    if (!mapped) continue;
-    const dist = haversineM(input.lng, input.lat, mapped.lng, mapped.lat);
-    if (dist > radiusM * 1.05) continue;
-    out.push(mapped);
+    if (mapped) out.push(mapped);
   }
   return out;
+}
+
+/**
+ * Query recent urban registered sales near a point.
+ * Spatial filter via envelope; attribute filters applied client-side for service quirks.
+ */
+export async function queryNswUrbanSalesNear(input: {
+  lng: number;
+  lat: number;
+  radiusM?: number;
+  suburb?: string | null;
+  maxRecords?: number;
+}): Promise<NswRegisteredSale[]> {
+  const radiusM = input.radiusM ?? 1000;
+  const { dLat, dLng } = metresToDeg(input.lat, radiusM);
+  const sales = await queryNswUrbanSalesInEnvelope({
+    west: input.lng - dLng,
+    south: input.lat - dLat,
+    east: input.lng + dLng,
+    north: input.lat + dLat,
+    suburb: input.suburb,
+  });
+  return filterSalesNearPoint(sales, input.lng, input.lat, radiusM);
+}
+
+/**
+ * Prefetch NSW urban sales once for a set of subject parcels (grouped by suburb).
+ * Returns a pool; callers must filterNear each subject for identical scoring inputs.
+ */
+export async function prefetchNswSalesForParcels(
+  parcels: { lng: number; lat: number; suburb?: string | null }[],
+  radiusM = 1000,
+): Promise<{ pool: NswRegisteredSale[]; fetchCount: number }> {
+  if (!parcels.length) return { pool: [], fetchCount: 0 };
+  const bySuburb = new Map<string, { lngs: number[]; lats: number[] }>();
+  for (const p of parcels) {
+    const key = (p.suburb ?? "").trim().toUpperCase() || "_ANY_";
+    const g = bySuburb.get(key) ?? { lngs: [], lats: [] };
+    g.lngs.push(p.lng);
+    g.lats.push(p.lat);
+    bySuburb.set(key, g);
+  }
+
+  const { dLat: padLat, dLng: padLng } = metresToDeg(
+    parcels.reduce((s, p) => s + p.lat, 0) / parcels.length,
+    radiusM,
+  );
+
+  const groups = [...bySuburb.entries()];
+  const CONCURRENCY = 4;
+  const pools: NswRegisteredSale[] = [];
+  let fetchCount = 0;
+  for (let i = 0; i < groups.length; i += CONCURRENCY) {
+    const slice = groups.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      slice.map(async ([key, g]) => {
+        fetchCount += 1;
+        return queryNswUrbanSalesInEnvelope({
+          west: Math.min(...g.lngs) - padLng,
+          south: Math.min(...g.lats) - padLat,
+          east: Math.max(...g.lngs) + padLng,
+          north: Math.max(...g.lats) + padLat,
+          suburb: key === "_ANY_" ? null : key,
+        });
+      }),
+    );
+    for (const rows of results) pools.push(...rows);
+  }
+
+  // Dedupe by dealing|propid|price|date
+  const seen = new Set<string>();
+  const pool: NswRegisteredSale[] = [];
+  for (const s of pools) {
+    const k = `${s.dealing ?? ""}|${s.propid ?? ""}|${s.salePrice}|${s.saleDate ?? ""}|${s.lng},${s.lat}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    pool.push(s);
+  }
+  return { pool, fetchCount };
 }
 
 /** Find historic sales for the subject address (any date). */
