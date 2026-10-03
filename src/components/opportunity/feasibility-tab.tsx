@@ -30,7 +30,7 @@ export function FeasibilityTab() {
       <div className="grid grid-cols-4 gap-4 rounded-[3px] border-2 border-brand/30 bg-white p-4">
         <Stat label="Maximum payable to owners" value={money(f.maxPayableToOwners, { compact: true })} tone={f.viable ? "brand" : "bad"} sub="Primary acquisition metric (P)" />
         <Stat label="Combined existing property value" value={money(analysis.combinedExistingValue, { compact: true })} sub={dto.demoFinancialData ? <DemoFinancialBadge /> : "Acquisition-side"} />
-        <Stat label="Acquisition headroom" value={money(analysis.acquisitionHeadroom, { compact: true })} tone={analysis.acquisitionHeadroom > 0 ? "good" : "bad"} sub={pct(analysis.acquisitionHeadroomPercent, 0, true)} />
+        <Stat label="Acquisition headroom" value={analysis.marketValueComplete ? money(analysis.acquisitionHeadroom, { compact: true }) : "—"} tone={analysis.marketValueComplete ? ((analysis.acquisitionHeadroom ?? 0) > 0 ? "good" : "bad") : undefined} sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : "VALUE REQUIRED"} />
         <Stat label="Acquisition headroom %" value={pct(analysis.acquisitionHeadroomPercent, 0)} sub="Headroom ÷ existing value" />
       </div>
       <div className="grid grid-cols-6 gap-4 rounded-[3px] border border-line bg-white p-4">

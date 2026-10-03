@@ -93,8 +93,14 @@ export interface LotDTO {
   planningSources: Partial<Record<string, FieldSource>>;
   included: boolean;
   marketValue: number | null;
-  marketValueSource: "USER_ESTIMATE" | "COMPARABLE_DERIVED" | "LIVE_PROVIDER" | "SYSTEM_ESTIMATE" | "DEMO" | null;
+  marketValueLow: number | null;
+  marketValueHigh: number | null;
+  marketValueSource: "USER_ESTIMATE" | "COMPARABLE_DERIVED" | "LIVE_PROVIDER" | "LIVE_AVM" | "SYSTEM_ESTIMATE" | "SUBURB_FALLBACK" | "DEMO" | "NO_VALUE" | null;
   marketValueConfidence: string | null;
+  marketValueProvider: string | null;
+  marketValueMethod: string | null;
+  marketValueCheckedAt: string | null;
+  marketValueNote: string | null;
   landValuePerSqm: number | null;
   comparableValue: number | null;
   maxAllocationOverride: number | null;
@@ -154,7 +160,14 @@ export function dtoToLots(dto: OpportunityDTO): OpportunityLot[] {
     heritage: l.heritage,
     isStrata: l.isStrata,
     planningKnown: l.planningCheckedAt != null,
-    marketValue: l.marketValue ?? (l.landValuePerSqm ? l.landValuePerSqm * l.areaSqm : null),
+    marketValue: l.marketValue,
+    marketValueLow: l.marketValueLow,
+    marketValueHigh: l.marketValueHigh,
+    marketValueSource: l.marketValueSource,
+    marketValueConfidence: l.marketValueConfidence,
+    marketValueProvider: l.marketValueProvider,
+    marketValueMethod: l.marketValueMethod,
+    marketValueCheckedAt: l.marketValueCheckedAt,
     geometry: l.geometry,
     included: l.included,
     maxAllocationOverride: l.maxAllocationOverride,

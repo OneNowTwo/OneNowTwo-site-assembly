@@ -321,25 +321,37 @@ export function runAreaScan(input: {
       effectiveCertainty: feasibility.effectiveCertainty,
       developmentType: feasibility.developmentType ?? "Residential redevelopment",
       indicativeUnits: feasibility.metrics.dwellings,
-      existingValue: feasibility.metrics.combinedValue,
-      existingValueEstimated: feasibility.metrics.combinedValueEstimated,
+      existingValue: feasibility.metrics.financialValuationAvailable ? feasibility.metrics.combinedValue : 0,
+      existingValueEstimated: !feasibility.metrics.financialValuationAvailable,
       maxPayable: feasibility.metrics.maxPayableToOwners,
       headroom: feasibility.metrics.acquisitionHeadroom,
       headroomPercent: feasibility.metrics.acquisitionHeadroomPercent,
-      financialRankingAvailable: !feasibility.metrics.combinedValueEstimated,
+      financialRankingAvailable: feasibility.metrics.financialValuationAvailable,
       planningPotentialScore: pps,
-      constraints,
+      constraints: feasibility.metrics.financialValuationAvailable
+        ? constraints
+        : [...constraints, "FINANCIAL RANKING PENDING PROPERTY VALUES"],
       scoreFactors: scored.factors.slice(0, 5),
       lmrCentre: feasibility.lmrCentre,
       lmrBand: feasibility.lmrBand,
       metrics: feasibility.metrics,
-      score: { ...scored, score: Math.round(scored.score * 0.55 + pps * 0.45) },
+      // Without trusted values, rank on planning potential only — no fake headroom precision.
+      score: {
+        ...scored,
+        score: feasibility.metrics.financialValuationAvailable
+          ? Math.round(scored.score * 0.55 + pps * 0.45)
+          : Math.round(pps * 0.85 + scored.components.planningCapacity * 0.1 + scored.components.geometry * 0.05),
+      },
       calculationSnapshot: snapshot,
     };
   });
 
-  // Prefer planning potential when values are estimates.
-  scanCandidates.sort((a, b) => b.score.score - a.score.score || b.planningPotentialScore - a.planningPotentialScore);
+  // Trusted valuations → financial+planning score; otherwise planning potential first.
+  scanCandidates.sort((a, b) => {
+    if (a.financialRankingAvailable !== b.financialRankingAvailable) return a.financialRankingAvailable ? -1 : 1;
+    if (a.financialRankingAvailable) return b.score.score - a.score.score || (b.headroom ?? -Infinity) - (a.headroom ?? -Infinity);
+    return b.planningPotentialScore - a.planningPotentialScore || b.score.score - a.score.score;
+  });
   scanCandidates.forEach((c, i) => {
     c.rank = i + 1;
   });
@@ -350,8 +362,8 @@ export function runAreaScan(input: {
   const families = groupAssemblyFamilies(top).slice(0, maxResults);
   const candidates = families.map((f, i) => ({ ...f.best, rank: i + 1 }));
 
-  if (candidates.every((c) => c.existingValueEstimated)) {
-    messages.push("FINANCIAL RANKING REQUIRES MARKET DATA — existing values use fallback $/sqm estimates. Rankings emphasise planning potential + indicative headroom.");
+  if (candidates.every((c) => !c.financialRankingAvailable)) {
+    messages.push("FINANCIAL RANKING PENDING PROPERTY VALUES — suburb $/sqm fallback is screening only and does not drive acquisition headroom. Rankings emphasise planning uplift, site size, geometry and constraints.");
   }
   messages.push("LMR screening may use pedestrian routing when available; otherwise straight-line is screening only and modelled FSR stays REQUIRES PLANNING CONFIRMATION.");
 

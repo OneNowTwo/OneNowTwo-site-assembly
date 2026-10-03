@@ -5,8 +5,9 @@ import { useOpportunity } from "./context";
 import { LotsMap } from "./lots-map";
 import { SCORE_WEIGHTS } from "@/lib/analysis/assembly";
 import { STAGE_LABELS } from "@/lib/constants";
+import { resolveValuationStatus, valuationSourceBadge, viabilityLabel } from "@/lib/analysis/valuation";
 import { fsr, lotDp, money, num, pct, sqm } from "@/lib/format";
-import { Badge, DemoFinancialBadge, Panel, Stat, TextArea, cx } from "@/components/ui";
+import { Badge, DemoFinancialBadge, NumberField, Panel, Stat, TextArea, cx } from "@/components/ui";
 
 const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
   acquisitionHeadroom: "Acquisition headroom",
@@ -20,15 +21,18 @@ const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
 export function OverviewTab() {
   const { dto, analysis, updateLot, updateOpportunity } = useOpportunity();
   const [selected, setSelected] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const f = analysis.base.feasibility;
   const y = analysis.base.yield;
   const mv = analysis.combinedExistingValue;
   const maxPay = analysis.maxPayableToOwners;
   const headroom = analysis.acquisitionHeadroom;
-  const maxBar = Math.max(mv, maxPay, 1);
+  const val = analysis.valuation;
+  const maxBar = Math.max(mv ?? 0, maxPay, 1);
   const crit = new Map(analysis.critical.map((c) => [c.id, c]));
   const alloc = new Map(analysis.allocation.lots.map((l) => [l.id, l]));
   const marginal = new Map(analysis.marginal.map((m) => [m.id, m]));
+  const detailLot = detailId ? dto.lots.find((l) => l.id === detailId) ?? null : null;
 
   return (
     <div className="grid grid-cols-12 gap-4">
@@ -48,15 +52,20 @@ export function OverviewTab() {
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Acquisition</div>
               <div className="mt-1 space-y-0.5 text-[13px]">
                 <div>
-                  Existing combined value: <span className="num font-semibold">{money(mv, { compact: true })}</span>
+                  Combined mid value: <span className="num font-semibold">{analysis.marketValueComplete ? money(mv, { compact: true }) : "—"}</span>
                 </div>
                 <div>
                   Max payable to owners: <span className="num font-semibold text-brand">{money(maxPay, { compact: true })}</span>
                 </div>
                 <div>
-                  Acquisition headroom: <span className="num font-semibold text-good">{money(headroom, { compact: true })}</span>
+                  Acquisition headroom:{" "}
+                  <span className={cx("num font-semibold", analysis.marketValueComplete ? (headroom != null && headroom > 0 ? "text-good" : "text-bad") : "text-muted")}>
+                    {analysis.marketValueComplete ? money(headroom, { compact: true }) : "VALUE REQUIRED"}
+                  </span>
                 </div>
-                <div className="text-muted">Indicative owner premium capacity: {pct(analysis.acquisitionHeadroomPercent, 0, true)}</div>
+                <div className="text-muted">
+                  {analysis.marketValueComplete ? `Indicative owner premium capacity: ${pct(analysis.acquisitionHeadroomPercent, 0, true)}` : "Enter Est. Current Value per lot"}
+                </div>
               </div>
             </div>
             <div>
@@ -84,22 +93,46 @@ export function OverviewTab() {
           </div>
         </Panel>
 
-        <Panel title="Why this assembly creates value" actions={dto.demoFinancialData ? <DemoFinancialBadge /> : null}>
-          <div className="grid grid-cols-4 gap-4">
-            <Stat label="Combined existing property value" value={money(mv, { compact: true })} sub={analysis.marketValueComplete ? `${analysis.includedIds.length} lots, as entered` : "Enter values on Acquisition / Comparables"} />
-            <Stat label="Maximum payable to owners" value={money(maxPay, { compact: true })} tone="brand" sub="Development-supported acquisition budget" />
-            <Stat label="Acquisition headroom" value={money(headroom, { compact: true })} tone={headroom > 0 ? "good" : "bad"} sub={mv > 0 ? `${pct(analysis.acquisitionHeadroomPercent, 0, true)} over existing value` : "—"} />
-            <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Value created by assembling (before negotiation)" />
-          </div>
-          <div className="mt-5 space-y-2">
-            <Bar label="Existing homes — combined market value" value={mv} max={maxBar} className="bg-stone-400" />
-            <Bar label="Maximum payable to owners" value={maxPay} max={maxBar} className="bg-brand" />
-          </div>
-          <p className="mt-4 text-[12px] leading-relaxed text-muted">
-            Individually these are {analysis.includedIds.length} properties worth about {money(mv, { compact: true })}. Assembled into a {sqm(analysis.site.siteAreaSqm)} site supporting ~
-            {y.dwellings} dwellings ({sqm(y.achievableGfa)} achievable GFA), the residual supports paying up to {money(maxPay, { compact: true })} while still achieving a{" "}
-            {pct(analysis.base.assumptions.targetMarginOnCost, 0)} margin on cost — headroom of {money(headroom, { compact: true })}.
-          </p>
+        <Panel
+          title="Why this assembly creates value"
+          actions={
+            <Badge tone={analysis.viability === "LIKELY_VIABLE" ? "good" : analysis.viability === "MARGINAL" ? "warn" : analysis.viability === "UNLIKELY" ? "bad" : "estimate"}>
+              {viabilityLabel(analysis.viability)}
+            </Badge>
+          }
+        >
+          {!analysis.marketValueComplete ? (
+            <div className="rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-950">
+              <div className="font-semibold">INSUFFICIENT VALUATION DATA</div>
+              <p className="mt-1">
+                Suburb $/sqm fallback is a <strong>ROUGH SCREENING ESTIMATE</strong> only — <strong>DO NOT USE FOR ACQUISITION DECISION</strong>. Enter Est. Current Value for each lot (e.g. 5 Reserve Street = $3.12m). Maximum payable ({money(maxPay, { compact: true })}) still comes from development feasibility.
+              </p>
+              {analysis.screeningExistingValue != null && (
+                <p className="mt-1 text-[11px] text-muted">Rough screening total (not trusted): {money(analysis.screeningExistingValue, { compact: true })}</p>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-4 gap-4">
+                <Stat label="Combined mid existing value" value={money(val.mid, { compact: true })} sub={`Low ${money(val.low, { compact: true })} · High ${money(val.high, { compact: true })}`} />
+                <Stat label="Maximum payable to owners" value={money(maxPay, { compact: true })} tone="brand" sub="Development-supported — independent of house values" />
+                <Stat
+                  label="Acquisition headroom (mid)"
+                  value={money(val.headroomMid, { compact: true })}
+                  tone={(val.headroomMid ?? 0) > 0 ? "good" : "bad"}
+                  sub={`Low case ${money(val.headroomLow, { compact: true })} · High case ${money(val.headroomHigh, { compact: true })}`}
+                />
+                <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Max payable − mid existing value" />
+              </div>
+              <div className="mt-5 space-y-2">
+                <Bar label="Existing homes — combined mid value" value={mv ?? 0} max={maxBar} className="bg-stone-400" />
+                <Bar label="Maximum payable to owners" value={maxPay} max={maxBar} className="bg-brand" />
+              </div>
+              <p className="mt-4 text-[12px] leading-relaxed text-muted">
+                Max payable ({money(maxPay, { compact: true })}) is what the development can support. Existing value ({money(mv, { compact: true })}) is what the owners&apos; properties are worth now. Headroom = max payable − existing value.
+              </p>
+            </>
+          )}
         </Panel>
 
         <Panel title="Lots in assembly" bodyClassName="p-0">
@@ -109,7 +142,8 @@ export function OverviewTab() {
                 <th className="px-3 py-2 text-left">Include</th>
                 <th className="px-3 py-2 text-left">Property</th>
                 <th className="px-3 py-2 text-right">Area</th>
-                <th className="px-3 py-2 text-right">Existing value</th>
+                <th className="px-3 py-2 text-right">Est. current value</th>
+                <th className="px-3 py-2 text-left">Source</th>
                 <th className="px-3 py-2 text-right">Max offer</th>
                 <th className="px-3 py-2 text-right">Neg. headroom</th>
                 <th className="px-3 py-2 text-left">Marginal</th>
@@ -122,6 +156,7 @@ export function OverviewTab() {
                 const c = crit.get(l.id);
                 const m = marginal.get(l.id);
                 const al = alloc.get(l.id);
+                const status = resolveValuationStatus(l.marketValueSource, l.marketValue);
                 return (
                   <tr key={l.id} className={cx("border-t border-line", selected === l.id && "bg-brand-soft/50", !l.included && "text-muted")} onClick={() => setSelected(l.id)}>
                     <td className="px-3 py-2">
@@ -132,9 +167,37 @@ export function OverviewTab() {
                       <div className="text-[11px] text-muted">{lotDp(l)}</div>
                     </td>
                     <td className="num px-3 py-2 text-right">{sqm(l.areaSqm)}</td>
-                    <td className="num px-3 py-2 text-right">{money(l.marketValue, { compact: true })}</td>
+                    <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                      <NumberField
+                        kind="money"
+                        value={l.marketValue}
+                        placeholder="VALUE REQUIRED"
+                        ariaLabel={`Est. current value ${l.label}`}
+                        className="h-7 w-[110px] text-right"
+                        onCommit={(v) =>
+                          updateLot(l.id, {
+                            marketValue: v,
+                            marketValueSource: v != null ? "USER_ESTIMATE" : "NO_VALUE",
+                            marketValueConfidence: l.marketValueConfidence ?? "UNKNOWN",
+                            marketValueNote: v != null ? "USER ENTERED EXTERNAL ESTIMATE" : null,
+                          })
+                        }
+                      />
+                      {(l.marketValueLow != null || l.marketValueHigh != null) && (
+                        <button type="button" className="mt-0.5 block w-full text-[10px] text-muted hover:underline" onClick={() => setDetailId(l.id)}>
+                          {money(l.marketValueLow, { compact: true })}–{money(l.marketValueHigh, { compact: true })}
+                        </button>
+                      )}
+                    </td>
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <button type="button" onClick={() => setDetailId(l.id)}>
+                        <Badge tone={status === "NO_VALUE" || status === "SUBURB_FALLBACK" ? "warn" : status === "LIVE_AVM" ? "live" : "neutral"}>
+                          {valuationSourceBadge(status, l.marketValueProvider)}
+                        </Badge>
+                      </button>
+                    </td>
                     <td className="num px-3 py-2 text-right">{l.included ? money(al?.maximumOffer, { compact: true }) : "—"}</td>
-                    <td className="num px-3 py-2 text-right">{l.included ? money(al?.negotiationHeadroom, { compact: true }) : "—"}</td>
+                    <td className="num px-3 py-2 text-right">{l.included && l.marketValue != null ? money(al?.negotiationHeadroom, { compact: true }) : "—"}</td>
                     <td className="px-3 py-2">
                       {!l.included ? (
                         <Badge>Excluded</Badge>
@@ -153,8 +216,53 @@ export function OverviewTab() {
               })}
             </tbody>
           </table>
-          <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Untick a lot to test the project without it — every figure recalculates. Marginal verdict compares what the lot adds to max payable vs its existing market value.</p>
+          <p className="border-t border-line px-3 py-2 text-[11px] text-muted">
+            Edit Est. Current Value inline — combined value, headroom, offers and score recalculate immediately. Missing values show VALUE REQUIRED (never a silent suburb fallback).
+          </p>
         </Panel>
+
+        {detailLot && (
+          <Panel title={`Valuation · ${detailLot.label}`} actions={<button className="text-[11px] text-muted hover:text-ink" onClick={() => setDetailId(null)}>Close</button>}>
+            <div className="grid grid-cols-2 gap-3 text-[12px]">
+              <div>
+                <div className="text-[10.5px] uppercase text-muted">Estimated value</div>
+                <div className="num font-semibold">{money(detailLot.marketValue, { compact: true })}</div>
+              </div>
+              <div>
+                <div className="text-[10.5px] uppercase text-muted">Range</div>
+                <div className="num">
+                  {money(detailLot.marketValueLow, { compact: true })}–{money(detailLot.marketValueHigh, { compact: true })}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10.5px] uppercase text-muted">Confidence</div>
+                <div>{detailLot.marketValueConfidence ?? "—"}</div>
+              </div>
+              <div>
+                <div className="text-[10.5px] uppercase text-muted">Source</div>
+                <div>{valuationSourceBadge(resolveValuationStatus(detailLot.marketValueSource, detailLot.marketValue), detailLot.marketValueProvider)}</div>
+              </div>
+              <div>
+                <div className="text-[10.5px] uppercase text-muted">Checked</div>
+                <div>{detailLot.marketValueCheckedAt ? new Date(detailLot.marketValueCheckedAt).toLocaleDateString("en-AU") : "—"}</div>
+              </div>
+              <div className="col-span-2">
+                <div className="text-[10.5px] uppercase text-muted">Note</div>
+                <div>{detailLot.marketValueNote ?? "—"}</div>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2" onClick={(e) => e.stopPropagation()}>
+              <div>
+                <div className="mb-1 text-[10.5px] uppercase text-muted">Low</div>
+                <NumberField kind="money" value={detailLot.marketValueLow} onCommit={(v) => updateLot(detailLot.id, { marketValueLow: v })} ariaLabel="Low estimate" />
+              </div>
+              <div>
+                <div className="mb-1 text-[10.5px] uppercase text-muted">High</div>
+                <NumberField kind="money" value={detailLot.marketValueHigh} onCommit={(v) => updateLot(detailLot.id, { marketValueHigh: v })} ariaLabel="High estimate" />
+              </div>
+            </div>
+          </Panel>
+        )}
 
         <Panel title="Notes">
           <TextArea rows={4} value={dto.notes ?? ""} onCommit={(notes) => updateOpportunity({ notes })} placeholder="Opportunity notes" />

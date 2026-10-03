@@ -90,10 +90,11 @@ describe("scan → analyse financial reconciliation", () => {
     expect(top.maxPayable).toBeGreaterThan(0);
     expect(top.calculationSnapshot.modelledEffectiveFsr).toBeGreaterThan(0);
     expect(top.calculationSnapshot.grv).toBeGreaterThan(0);
+    // Without trusted house values, scan must not invent acquisition headroom.
+    expect(top.financialRankingAvailable).toBe(false);
+    expect(top.headroom).toBeNull();
 
-    const X = top.existingValue;
     const Y = top.maxPayable!;
-    const H = top.headroom!;
 
     // Simulate Analyse payload: same parcels + fsrOverride from scan snapshot.
     const inputs = parseOpportunityInputs({
@@ -150,11 +151,11 @@ describe("scan → analyse financial reconciliation", () => {
     expect(detailed.base.yield.achievableGfa).toBeGreaterThan(0);
     expect(detailed.base.feasibility.grv).toBeGreaterThan(0);
     expect(detailed.maxPayableToOwners).toBeGreaterThan(0);
-
-    expect(detailed.combinedExistingValue).toBeCloseTo(X, -2);
     expect(detailed.maxPayableToOwners).toBeCloseTo(Y, -2);
-    expect(detailed.acquisitionHeadroom).toBeCloseTo(H, -2);
-    expect(Math.abs(detailed.maxPayableToOwners - detailed.combinedExistingValue - detailed.acquisitionHeadroom)).toBeLessThan(2);
+    // Max payable is development-driven; without lot values headroom stays unavailable (not fake-green).
+    expect(detailed.marketValueComplete).toBe(false);
+    expect(detailed.acquisitionHeadroom).toBeNull();
+    expect(detailed.viability).toBe("INSUFFICIENT_VALUATION_DATA");
   });
 
   it("shared calculateAssemblyFeasibility matches scan snapshot fields", () => {
@@ -190,8 +191,8 @@ describe("scan → analyse financial reconciliation", () => {
     const snap = buildScanCalculationSnapshot(result, parcels);
     expect(snap.modelledEffectiveFsr).toBe(0.8);
     expect(snap.maxPayable).toBe(result.metrics.maxPayableToOwners);
-    expect(snap.existingValue).toBe(result.metrics.combinedValue);
-    expect(snap.headroom).toBeCloseTo(snap.maxPayable - snap.existingValue, 0);
+    expect(result.metrics.financialValuationAvailable).toBe(false);
+    expect(snap.headroom).toBeNull();
     expect(snap.grv).toBeGreaterThan(0);
   });
 });

@@ -236,11 +236,11 @@ describe("assembly comparison — best ≠ largest", () => {
     const best = byHeadroom[0]!;
     const largest = [...candidates].sort((x, y) => y.metrics.lotCount - x.metrics.lotCount)[0]!;
     // Document the product thesis: sorting by headroom may prefer a non-largest set
-    expect(best.metrics.acquisitionHeadroom).toBeGreaterThanOrEqual(largest.metrics.acquisitionHeadroom - 1);
+    expect(best.metrics.acquisitionHeadroom ?? 0).toBeGreaterThanOrEqual((largest.metrics.acquisitionHeadroom ?? 0) - 1);
     const withE = candidates.find((c) => c.lotIds.includes("E") && c.lotIds.length === 5);
     const withoutE = candidates.find((c) => !c.lotIds.includes("E") && c.lotIds.length === 4);
     if (withE && withoutE) {
-      expect(withoutE.metrics.acquisitionHeadroom).toBeGreaterThan(withE.metrics.acquisitionHeadroom);
+      expect(withoutE.metrics.acquisitionHeadroom ?? 0).toBeGreaterThan(withE.metrics.acquisitionHeadroom ?? 0);
     }
   });
 });
@@ -257,7 +257,7 @@ describe("opportunity orchestration", () => {
     });
     const all = analyseOpportunity(lots, { ...DEFAULT_ASSUMPTIONS, minViableSiteAreaSqm: 2000 }, inputs);
     expect(all.maxPayableToOwners).toBe(all.base.feasibility.maxPayableToOwners);
-    expect(all.acquisitionHeadroom).toBeCloseTo(all.maxPayableToOwners - all.combinedExistingValue);
+    expect(all.acquisitionHeadroom).toBeCloseTo(all.maxPayableToOwners - (all.combinedExistingValue as number));
     expect(all.marginal).toHaveLength(5);
     expect(all.allocation.lots[0]!.negotiationHeadroom).toBeGreaterThanOrEqual(0);
 

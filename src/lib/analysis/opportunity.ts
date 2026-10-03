@@ -10,6 +10,7 @@ import { analyseMarginalLots, type MarginalLotResult, type MarginalLotEconomics 
 import { buildAcquisitionSequence, type StrategyStep } from "./strategy";
 import { buildAdjacency, type Adjacency } from "./geometry";
 import { autoGenerateUnitMix, computeUnitMix, type UnitMixRow } from "./unit-mix";
+import { summariseAssemblyValuation, type AssemblyValuationSummary, type AcquisitionViability } from "./valuation";
 
 export interface OpportunityLot extends AnalysisLot {
   geometry: Polygon | MultiPolygon;
@@ -17,6 +18,13 @@ export interface OpportunityLot extends AnalysisLot {
   maxAllocationOverride: number | null;
   openingOfferOverride: number | null;
   strategicWeight?: number | null;
+  marketValueLow?: number | null;
+  marketValueHigh?: number | null;
+  marketValueSource?: string | null;
+  marketValueConfidence?: string | null;
+  marketValueProvider?: string | null;
+  marketValueMethod?: string | null;
+  marketValueCheckedAt?: string | null;
 }
 
 export type ScenarioKey = "BASE" | "UPSIDE" | "DOWNSIDE";
@@ -53,14 +61,19 @@ export interface OpportunityAnalysis {
   scenarios: Record<ScenarioKey, ScenarioResult>;
   base: ScenarioResult;
   combinedMarketValue: number;
-  combinedExistingValue: number;
+  /** Trusted mid existing value only — null when any included lot lacks a trusted valuation. */
+  combinedExistingValue: number | null;
   marketValueComplete: boolean;
+  /** Rough screening total — labelled, not for acquisition decisions. */
+  screeningExistingValue: number | null;
+  valuation: AssemblyValuationSummary;
+  viability: AcquisitionViability;
   maxPayableToOwners: number;
-  acquisitionHeadroom: number;
+  acquisitionHeadroom: number | null;
   acquisitionHeadroomPercent: number | null;
   /** Alias of acquisition headroom. */
-  assemblyPremium: number;
-  assemblyUplift: number;
+  assemblyPremium: number | null;
+  assemblyUplift: number | null;
   unitMix: UnitMixRow[];
   priceTests: { atMarketValue: PriceTest; atOpeningOffers: PriceTest; atMaximum: PriceTest };
   allocation: AllocationResult;
@@ -185,20 +198,22 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   const adj = adjacency ?? buildAdjacency(allLots.map((l) => ({ id: l.id, geometry: l.geometry })));
   const site = siteBasis(lots, a, inputs);
   const combinedMarketValue = lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
-  const marketValueComplete = lots.every((l) => (l.marketValue ?? 0) > 0);
+  const marketValueComplete = lots.length > 0 && lots.every((l) => (l.marketValue ?? 0) > 0);
   const metricsProbe = computeAssemblyMetrics(lots, a, adj);
   const unitMix = resolveUnitMix(inputs, metricsProbe.saleableArea);
   const metrics = computeAssemblyMetrics(lots, a, adj, a.revenueMode === "UNIT_MIX" ? unitMix : undefined);
 
+  // Max payable comes from development feasibility — independent of existing property values.
   const scenarios = {
-    BASE: runScenario("BASE", site, lots.length, combinedMarketValue || metrics.combinedValue, a, inputs.scenarios.BASE, inputs),
-    UPSIDE: runScenario("UPSIDE", site, lots.length, combinedMarketValue || metrics.combinedValue, a, inputs.scenarios.UPSIDE, inputs),
-    DOWNSIDE: runScenario("DOWNSIDE", site, lots.length, combinedMarketValue || metrics.combinedValue, a, inputs.scenarios.DOWNSIDE, inputs),
+    BASE: runScenario("BASE", site, lots.length, marketValueComplete ? combinedMarketValue : 0, a, inputs.scenarios.BASE, inputs),
+    UPSIDE: runScenario("UPSIDE", site, lots.length, marketValueComplete ? combinedMarketValue : 0, a, inputs.scenarios.UPSIDE, inputs),
+    DOWNSIDE: runScenario("DOWNSIDE", site, lots.length, marketValueComplete ? combinedMarketValue : 0, a, inputs.scenarios.DOWNSIDE, inputs),
   };
   const base = scenarios.BASE;
   const budget = Math.max(0, base.feasibility.maxAcquisitionBudget);
-  const existingValue = marketValueComplete ? combinedMarketValue : metrics.combinedValue;
-  const head = acquisitionHeadroom(budget, existingValue);
+  const existingValue = marketValueComplete ? combinedMarketValue : null;
+  const head = existingValue != null ? acquisitionHeadroom(budget, existingValue) : null;
+  const valuation = summariseAssemblyValuation(lots, budget, a.existingValuePerSqm);
 
   // Critical first (for allocation weights), then allocate, then marginal.
   const baseEcon: Economics = {
@@ -206,7 +221,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     gfa: base.yield.achievableGfa,
     budget,
     grv: base.feasibility.grv,
-    headroom: head.acquisitionHeadroom,
+    headroom: head?.acquisitionHeadroom ?? 0,
   };
   const parcelArea = lots.reduce((s, l) => s + l.areaSqm, 0) || 1;
   const economicsFor = (ids: string[]): Economics => {
@@ -216,14 +231,15 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
       ...siteBasis(subset, a, { ...inputs, siteAreaOverride: null, fsrOverride: inputs.fsrOverride, heightOverrideM: inputs.heightOverrideM }),
       siteAreaSqm: (site.siteAreaSqm * subArea) / parcelArea,
     };
+    const subComplete = subset.every((l) => (l.marketValue ?? 0) > 0);
     const subMv = subset.reduce((s, l) => s + (l.marketValue ?? 0), 0);
-    const r = runScenario("BASE", scaledSite, subset.length, subMv || metrics.combinedValue * (subArea / parcelArea), a, inputs.scenarios.BASE, inputs);
+    const r = runScenario("BASE", scaledSite, subset.length, subComplete ? subMv : 0, a, inputs.scenarios.BASE, inputs);
     return {
       areaSqm: scaledSite.siteAreaSqm,
       gfa: r.yield.achievableGfa,
       budget: r.feasibility.maxAcquisitionBudget,
       grv: r.feasibility.grv,
-      headroom: r.acquisitionHeadroom,
+      headroom: subComplete ? r.acquisitionHeadroom : 0,
     };
   };
   const critical = analyseCriticalLots(
@@ -261,8 +277,8 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     achievableGfa: base.yield.achievableGfa,
     grv: base.feasibility.grv,
     maxPayable: budget,
-    combinedExistingValue: existingValue,
-    acquisitionHeadroom: head.acquisitionHeadroom,
+    combinedExistingValue: existingValue ?? 0,
+    acquisitionHeadroom: head?.acquisitionHeadroom ?? 0,
   };
   const marginal = analyseMarginalLots(
     lots.map((l) => ({ id: l.id, marketValue: l.marketValue ?? null, label: l.label })),
@@ -275,7 +291,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
         achievableGfa: e.gfa,
         grv: e.grv ?? 0,
         maxPayable: e.budget,
-        combinedExistingValue: existingValue - (lots.find((l) => l.id === id)?.marketValue ?? 0),
+        combinedExistingValue: Math.max(0, (existingValue ?? 0) - (lots.find((l) => l.id === id)?.marketValue ?? 0)),
         acquisitionHeadroom: e.headroom ?? 0,
       };
     },
@@ -283,10 +299,11 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   );
 
   metrics.criticalLotCount = critical.filter((c) => c.status === "CRITICAL").length;
-  // Refresh headroom fields on metrics from base analysis
-  metrics.acquisitionHeadroom = head.acquisitionHeadroom;
-  metrics.acquisitionHeadroomPercent = head.acquisitionHeadroomPercent;
-  metrics.assemblyUplift = head.assemblyUplift;
+  // Refresh headroom fields on metrics from base analysis — never from suburb fallback.
+  metrics.acquisitionHeadroom = head?.acquisitionHeadroom ?? null;
+  metrics.acquisitionHeadroomPercent = head?.acquisitionHeadroomPercent ?? null;
+  metrics.assemblyUplift = head?.assemblyUplift ?? null;
+  metrics.financialValuationAvailable = marketValueComplete;
   metrics.maxPayableToOwners = budget;
   metrics.indicativeBudget = budget;
   metrics.grv = base.feasibility.grv;
@@ -296,8 +313,9 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   metrics.achievableGfa = base.yield.achievableGfa;
   metrics.saleableArea = base.yield.saleableArea;
   metrics.dwellings = base.yield.dwellings;
-  metrics.combinedValue = existingValue;
-  metrics.upliftRatio = existingValue > 0 ? budget / existingValue : 0;
+  metrics.combinedValue = existingValue ?? 0;
+  metrics.combinedValueEstimated = !marketValueComplete;
+  metrics.upliftRatio = existingValue != null && existingValue > 0 ? budget / existingValue : 0;
 
   const score = scoreAssembly(metrics, a);
   const allocById = new Map(allocation.lots.map((l) => [l.id, l]));
@@ -317,14 +335,17 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     combinedMarketValue,
     combinedExistingValue: existingValue,
     marketValueComplete,
+    screeningExistingValue: valuation.screeningMid,
+    valuation,
+    viability: valuation.viability,
     maxPayableToOwners: budget,
-    acquisitionHeadroom: head.acquisitionHeadroom,
-    acquisitionHeadroomPercent: head.acquisitionHeadroomPercent,
-    assemblyPremium: head.acquisitionHeadroom,
-    assemblyUplift: head.assemblyUplift,
+    acquisitionHeadroom: head?.acquisitionHeadroom ?? null,
+    acquisitionHeadroomPercent: head?.acquisitionHeadroomPercent ?? null,
+    assemblyPremium: head?.acquisitionHeadroom ?? null,
+    assemblyUplift: head?.assemblyUplift ?? null,
     unitMix,
     priceTests: {
-      atMarketValue: testPurchasePrice(base.feasibility, existingValue),
+      atMarketValue: testPurchasePrice(base.feasibility, existingValue ?? 0),
       atOpeningOffers: testPurchasePrice(base.feasibility, allocation.totalOpening),
       atMaximum: testPurchasePrice(base.feasibility, allocation.totalMaximum),
     },

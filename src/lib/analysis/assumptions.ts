@@ -158,7 +158,12 @@ export const ASSUMPTION_META: Record<
   minViableSiteAreaSqm: { label: "Minimum viable site area", unit: "sqm", group: "Acquisition" },
   maxAssemblySize: { label: "Max lots in automatic assembly", unit: "count", group: "Acquisition" },
   fallbackFsr: { label: "Discovery-only FSR assumption where none mapped (never shown as official)", unit: "ratio", group: "Discovery", help: "Used only if allowAssumption is explicitly enabled for ranking. Official yield never silently uses this." },
-  existingValuePerSqm: { label: "Existing value estimate where none entered ($/sqm land)", unit: "moneyPerSqm", group: "Discovery" },
+  existingValuePerSqm: {
+    label: "Rough screening $/sqm (NOT for acquisition decisions)",
+    unit: "moneyPerSqm",
+    group: "Discovery",
+    help: "Suburb fallback only. Never drives trusted headroom — enter USER / AVM / comps values per lot.",
+  },
 };
 
 export function mergeAssumptions(global: unknown, overrides?: unknown): Assumptions {

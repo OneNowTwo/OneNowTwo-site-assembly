@@ -16,8 +16,17 @@ const dateStr = z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4
 const patchSchema = z.object({
   included: z.boolean().optional(),
   marketValue: money.optional(),
-  marketValueSource: z.enum(["USER_ESTIMATE", "COMPARABLE_DERIVED", "LIVE_PROVIDER", "SYSTEM_ESTIMATE", "DEMO"]).nullable().optional(),
+  marketValueLow: money.optional(),
+  marketValueHigh: money.optional(),
+  marketValueSource: z
+    .enum(["USER_ESTIMATE", "COMPARABLE_DERIVED", "LIVE_PROVIDER", "LIVE_AVM", "SYSTEM_ESTIMATE", "SUBURB_FALLBACK", "DEMO", "NO_VALUE"])
+    .nullable()
+    .optional(),
   marketValueConfidence: str(80).optional(),
+  marketValueProvider: str(40).optional(),
+  marketValueMethod: str(80).optional(),
+  marketValueCheckedAt: dateStr.optional(),
+  marketValueNote: str(500).optional(),
   landValuePerSqm: money.optional(),
   comparableValue: money.optional(),
   maxAllocationOverride: money.optional(),
@@ -47,12 +56,31 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (!parsed.success) return jsonError("Invalid update: " + parsed.error.issues[0]?.path.join(".") + " " + parsed.error.issues[0]?.message);
   const op = await prisma.opportunityParcel.findFirst({ where: { id: lotId, opportunityId: id }, include: { parcel: true } });
   if (!op) return jsonError("Lot not found", 404);
-  const { owner, planning, lastContactAt, nextActionDate, ...fields } = parsed.data;
+  const { owner, planning, lastContactAt, nextActionDate, marketValueCheckedAt, ...fields } = parsed.data;
+
+  // Manual edits on overview / acquisition are USER_ESTIMATE unless an AVM source is specified.
+  if (fields.marketValue !== undefined && fields.marketValue != null && fields.marketValueSource === undefined) {
+    fields.marketValueSource = "USER_ESTIMATE";
+  }
+  if (fields.marketValue !== undefined && fields.marketValue != null && fields.marketValueProvider === undefined) {
+    fields.marketValueProvider = "MANUAL";
+  }
+  if (fields.marketValue !== undefined && fields.marketValue != null && fields.marketValueMethod === undefined) {
+    fields.marketValueMethod = "manual_override";
+  }
+  if (fields.marketValue !== undefined && fields.marketValue != null && fields.marketValueNote === undefined) {
+    fields.marketValueNote = "USER ENTERED EXTERNAL ESTIMATE";
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.opportunityParcel.update({
       where: { id: lotId },
-      data: { ...fields, lastContactAt: toDate(lastContactAt), nextActionDate: toDate(nextActionDate) },
+      data: {
+        ...fields,
+        lastContactAt: toDate(lastContactAt),
+        nextActionDate: toDate(nextActionDate),
+        marketValueCheckedAt: toDate(marketValueCheckedAt) ?? (fields.marketValue != null ? new Date() : undefined),
+      },
     });
     if (fields.acquisitionStage && fields.acquisitionStage !== op.acquisitionStage) {
       await tx.acquisitionActivity.create({

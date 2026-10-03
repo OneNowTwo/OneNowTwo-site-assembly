@@ -789,8 +789,12 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                           ) : (
                             <Badge tone="good">Live planning data</Badge>
                           )}
-                          {c.existingValueEstimated ? <Badge tone="warn">Market value estimate</Badge> : <Badge tone="neutral">User / market value</Badge>}
-                          <Badge tone="neutral">Scan estimate</Badge>
+                          {c.financialRankingAvailable ? (
+                            <Badge tone="good">Trusted values</Badge>
+                          ) : (
+                            <Badge tone="warn">Financial ranking pending property values</Badge>
+                          )}
+                          <Badge tone="estimate">Planning-led scan</Badge>
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-1">
@@ -824,8 +828,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                       </div>
                       <div>
                         <div className="text-[10px] uppercase text-muted">Existing</div>
-                        {money(c.existingValue, { compact: true })}
-                        {c.existingValueEstimated ? "*" : ""}
+                        {c.financialRankingAvailable ? money(c.existingValue, { compact: true }) : "—"}
                       </div>
                       <div>
                         <div className="text-[10px] uppercase text-muted">Max payable</div>
@@ -833,7 +836,11 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                       </div>
                       <div>
                         <div className="text-[10px] uppercase text-muted">Headroom</div>
-                        <span className="font-semibold text-good">{money(c.headroom, { compact: true })}</span>
+                        {c.financialRankingAvailable ? (
+                          <span className="font-semibold text-good">{money(c.headroom, { compact: true })}</span>
+                        ) : (
+                          <span className="text-[10px] font-sans text-amber-800">Pending values</span>
+                        )}
                       </div>
                     </div>
                     {!!c.constraints.length && <div className="mt-2 text-[10.5px] text-muted">{c.constraints.join(" · ")}</div>}
@@ -965,22 +972,22 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                       .sort((x, y) => {
                         switch (compareSort) {
                           case "headroom":
-                            return y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+                            return (y.metrics.acquisitionHeadroom ?? -Infinity) - (x.metrics.acquisitionHeadroom ?? -Infinity);
                           case "profit":
                             return y.metrics.profit - x.metrics.profit;
                           case "moc":
                             return y.metrics.marginOnCost - x.metrics.marginOnCost;
                           case "owners":
-                            return x.metrics.owners - y.metrics.owners || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+                            return x.metrics.owners - y.metrics.owners || (y.metrics.acquisitionHeadroom ?? -Infinity) - (x.metrics.acquisitionHeadroom ?? -Infinity);
                           case "area":
                             return y.metrics.totalAreaSqm - x.metrics.totalAreaSqm;
                           default:
-                            return y.score.score - x.score.score || y.metrics.acquisitionHeadroom - x.metrics.acquisitionHeadroom;
+                            return y.score.score - x.score.score || (y.metrics.acquisitionHeadroom ?? -Infinity) - (x.metrics.acquisitionHeadroom ?? -Infinity);
                         }
                       })
                       .map((c, i, arr) => {
-                        const bestHeadroom = Math.max(...arr.map((x) => x.metrics.acquisitionHeadroom));
-                        const isBest = c.metrics.acquisitionHeadroom === bestHeadroom && bestHeadroom > 0;
+                        const bestHeadroom = Math.max(...arr.map((x) => x.metrics.acquisitionHeadroom ?? -Infinity));
+                        const isBest = (c.metrics.acquisitionHeadroom ?? -Infinity) === bestHeadroom && bestHeadroom > 0;
                         const isLargest = c.metrics.lotCount === Math.max(...arr.map((x) => x.metrics.lotCount));
                         return (
                           <tr

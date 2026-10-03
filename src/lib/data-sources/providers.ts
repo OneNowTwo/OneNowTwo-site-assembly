@@ -43,19 +43,40 @@ export interface GeocoderProvider {
 export interface ValuationEstimate {
   marketValue: number | null;
   landValuePerSqm: number | null;
-  source: "USER_ESTIMATE" | "COMPARABLE_DERIVED" | "LIVE_PROVIDER" | "SYSTEM_ESTIMATE" | "DEMO";
+  source: "USER_ESTIMATE" | "COMPARABLE_DERIVED" | "LIVE_PROVIDER" | "LIVE_AVM" | "SYSTEM_ESTIMATE" | "SUBURB_FALLBACK" | "DEMO" | "NO_VALUE";
   note?: string;
+}
+
+/** Full AVM / manual valuation result used by Domain, PropTrack, comps, and overrides. */
+export interface PropertyValuationResult {
+  mid: number | null;
+  low: number | null;
+  high: number | null;
+  status: "LIVE_AVM" | "COMPARABLE_DERIVED" | "USER_ESTIMATE" | "SUBURB_FALLBACK" | "NO_VALUE";
+  confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+  source: string;
+  provider: "DOMAIN" | "PROPTRACK" | "CORELOGIC" | "MANUAL" | "COMPS" | "SYSTEM" | null;
+  method: string | null;
+  checkedAt: string;
+  note?: string | null;
+  cacheKey?: string;
+  cacheable?: boolean;
 }
 
 export interface PropertyValuationProvider {
   readonly name: string;
   estimate(input: {
     externalParcelId: string;
+    address?: string | null;
+    suburb?: string | null;
     areaSqm: number;
+    domainPropertyId?: string | null;
     userValue?: number | null;
+    userLow?: number | null;
+    userHigh?: number | null;
     userLandRate?: number | null;
     comparableDerived?: number | null;
-  }): ValuationEstimate;
+  }): PropertyValuationResult | Promise<PropertyValuationResult>;
 }
 
 export interface OwnerRecord {
@@ -122,16 +143,65 @@ export interface AIAnalysisProvider {
   summarise(input: unknown): Promise<string | null>;
 }
 
-/** V1 valuation: whatever the developer entered, else comparable-derived, else labelled system estimate. */
+/** Manual / comps valuation — never invents a suburb $/sqm as a trusted market value. */
 export const manualValuationProvider: PropertyValuationProvider = {
   name: "Manual developer estimate",
-  estimate({ areaSqm, userValue, userLandRate, comparableDerived }) {
-    if (userValue != null && userValue > 0) return { marketValue: userValue, landValuePerSqm: null, source: "USER_ESTIMATE" };
-    if (comparableDerived != null && comparableDerived > 0)
-      return { marketValue: comparableDerived, landValuePerSqm: null, source: "COMPARABLE_DERIVED", note: "Median of included acquisition comps" };
-    if (userLandRate != null && userLandRate > 0)
-      return { marketValue: userLandRate * areaSqm, landValuePerSqm: userLandRate, source: "USER_ESTIMATE", note: "From entered $/sqm land rate" };
-    return { marketValue: null, landValuePerSqm: null, source: "SYSTEM_ESTIMATE", note: "No value entered" };
+  estimate({ areaSqm, userValue, userLow, userHigh, userLandRate, comparableDerived }) {
+    const checkedAt = new Date().toISOString();
+    if (userValue != null && userValue > 0) {
+      return {
+        mid: userValue,
+        low: userLow ?? null,
+        high: userHigh ?? null,
+        status: "USER_ESTIMATE",
+        confidence: "UNKNOWN",
+        source: "USER_ESTIMATE",
+        provider: "MANUAL",
+        method: "manual_override",
+        checkedAt,
+        note: "USER ENTERED EXTERNAL ESTIMATE",
+      };
+    }
+    if (comparableDerived != null && comparableDerived > 0) {
+      return {
+        mid: comparableDerived,
+        low: null,
+        high: null,
+        status: "COMPARABLE_DERIVED",
+        confidence: "MEDIUM",
+        source: "COMPARABLE_DERIVED",
+        provider: "COMPS",
+        method: "comparable_sales",
+        checkedAt,
+        note: "Median of included acquisition comps",
+      };
+    }
+    if (userLandRate != null && userLandRate > 0) {
+      return {
+        mid: userLandRate * areaSqm,
+        low: null,
+        high: null,
+        status: "USER_ESTIMATE",
+        confidence: "LOW",
+        source: "USER_ESTIMATE",
+        provider: "MANUAL",
+        method: "user_land_rate",
+        checkedAt,
+        note: "From entered $/sqm land rate",
+      };
+    }
+    return {
+      mid: null,
+      low: null,
+      high: null,
+      status: "NO_VALUE",
+      confidence: "UNKNOWN",
+      source: "NO_VALUE",
+      provider: "MANUAL",
+      method: null,
+      checkedAt,
+      note: "VALUE REQUIRED — enter a market estimate or connect an AVM",
+    };
   },
 };
 
