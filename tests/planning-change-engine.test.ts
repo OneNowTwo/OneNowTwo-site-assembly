@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { modelInfillAffordableHousing, affordableHousingScenarios } from "@/lib/analysis/affordable-housing";
 import { matchPlanningChanges, pointInBBox, CURATED_PLANNING_CHANGES } from "@/lib/planning/change-registry";
-import { getParcelPlanningContext } from "@/lib/planning/planning-rules-service";
+import { getParcelPlanningContext, resolvePendingPlanningChanges } from "@/lib/planning/planning-rules-service";
 import type { ParcelData } from "@/lib/types";
 import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
+import * as nswPp from "@/lib/data-sources/nsw-planning-proposals";
 
 describe("affordable housing pathway", () => {
   it("models 10% and 15% AH bonuses without inventing stacking certainty", () => {
@@ -65,8 +66,75 @@ describe("planning change registry", () => {
   });
 });
 
+describe("statewide pending merge", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("merges live NSW PP layers outside Edgecliff/Mosman and never marks CURRENT", async () => {
+    vi.spyOn(nswPp, "fetchPlanningProposalsNear").mockResolvedValue([
+      {
+        id: "nsw:pp-layer:PP-2024-2710",
+        title: "PP-2024-2710 — PARRAMATTA",
+        description: "test",
+        status: "PROPOSED",
+        instrumentName: "Parramatta LEP",
+        planningProposalNumber: "PP-2024-2710",
+        authority: "PARRAMATTA / NSW DPHI",
+        sourceUrl: "https://www.planningportal.nsw.gov.au/",
+        sourceAuthority: "NSW Planning Portal",
+        lastChecked: new Date().toISOString(),
+        lgas: ["PARRAMATTA"],
+        proposedControls: { machineReadable: true, fsr: 2.0, notes: "NOT CURRENT LAW" },
+      },
+    ]);
+    const hits = await resolvePendingPlanningChanges({ lng: 151.01, lat: -33.815, lga: "PARRAMATTA" });
+    expect(hits.some((h) => h.planningProposalNumber === "PP-2024-2710")).toBe(true);
+    expect(hits.every((h) => h.status !== "CURRENT")).toBe(true);
+  });
+
+  it("filters SUPERSEDED live rows and prefers curated on same PP number", async () => {
+    vi.spyOn(nswPp, "fetchPlanningProposalsNear").mockResolvedValue([
+      {
+        id: "nsw:pp-layer:PP-2026-1946",
+        title: "live duplicate",
+        description: "should lose to curated",
+        status: "PROPOSED",
+        instrumentName: "x",
+        planningProposalNumber: "PP-2026-1946",
+        authority: "x",
+        sourceUrl: "https://example.com",
+        sourceAuthority: "x",
+        lastChecked: new Date().toISOString(),
+      },
+      {
+        id: "nsw:pp-layer:OLD",
+        title: "superseded",
+        description: "skip",
+        status: "SUPERSEDED",
+        instrumentName: "x",
+        planningProposalNumber: "PP-OLD",
+        authority: "x",
+        sourceUrl: "https://example.com",
+        sourceAuthority: "x",
+        lastChecked: new Date().toISOString(),
+      },
+    ]);
+    const hits = await resolvePendingPlanningChanges({ lng: 151.24, lat: -33.84, lga: "MOSMAN" });
+    const mosman = hits.find((h) => h.planningProposalNumber === "PP-2026-1946");
+    expect(mosman?.status).toBe("GATEWAY");
+    expect(mosman?.title).toMatch(/Mosman Masterplan/i);
+    expect(hits.some((h) => h.status === "SUPERSEDED")).toBe(false);
+  });
+});
+
 describe("parcel planning context separation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("keeps proposed changes out of current statutory FSR", async () => {
+    vi.spyOn(nswPp, "fetchPlanningProposalsNear").mockResolvedValue([]);
     const parcel: ParcelData = {
       externalParcelId: "nsw-cadid:mosman-1",
       source: "LIVE_NSW",

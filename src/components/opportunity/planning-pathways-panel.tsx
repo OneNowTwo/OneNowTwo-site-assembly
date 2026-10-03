@@ -49,7 +49,9 @@ export function PlanningPathwaysPanel() {
       </Panel>
 
       <Panel title="A · Current statutory controls">
-        <p className="text-[12px] text-muted">From NSW EPI layers on each lot (see table below). LEP FSR may be unmapped — that is not a silent zero-yield site if a State pathway applies.</p>
+        <p className="text-[12px] text-muted">
+          From NSW EPI Primary Planning Layers statewide (zone / FSR / height / heritage) — see lot table below. Works for every NSW suburb, not only Edgecliff or Mosman. LEP FSR may be unmapped; that is not a silent zero-yield site if a State pathway applies.
+        </p>
       </Panel>
 
       <Panel title="B · Current alternative / bonus pathways">
@@ -104,7 +106,9 @@ export function PlanningPathwaysPanel() {
 
       <Panel title="C · Proposed / pending changes">
         {!pending.length && !loading && (
-          <p className="text-[12px] text-muted">No curated pending planning changes matched this assembly location.</p>
+          <p className="text-[12px] text-muted">
+            No active NSW planning-proposal layer features or watchlist items intersect this assembly. Statewide Housing SEPP pathways (above) still apply where eligible. Absence of a mapped proposal does not mean no future change — confirm on the Planning Portal for acquisition decisions.
+          </p>
         )}
         <div className="space-y-3">
           {pending.map((c) => (

@@ -2,6 +2,7 @@ import type { ParcelData } from "@/lib/types";
 import { resolveEffectiveControls, type WalkingDistanceHint } from "@/lib/analysis/effective-controls";
 import { affordableHousingScenarios } from "@/lib/analysis/affordable-housing";
 import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
+import { fetchPlanningProposalsNear } from "@/lib/data-sources/nsw-planning-proposals";
 import { matchPlanningChanges } from "./change-registry";
 import type { CurrentPathway, CurrentStatutoryControls, ParcelPlanningContext, PlanningChangeRecord, PlanningRuleProvider } from "./types";
 
@@ -29,8 +30,29 @@ const AH_META = {
   clauseRef: "In-fill affordable housing",
 };
 
-export class CuratedPlanningRuleProvider implements PlanningRuleProvider {
-  readonly name = "Curated official planning-change registry";
+/** Merge curated high-signal watchlist with statewide NSW PP spatial layers. Curated wins on id clash. */
+export async function resolvePendingPlanningChanges(input: {
+  lng: number;
+  lat: number;
+  lga?: string | null;
+  suburb?: string | null;
+}): Promise<PlanningChangeRecord[]> {
+  const curated = matchPlanningChanges(input);
+  const live = await fetchPlanningProposalsNear({ lng: input.lng, lat: input.lat }).catch(() => []);
+  const byKey = new Map<string, PlanningChangeRecord>();
+  for (const c of live) {
+    const key = (c.planningProposalNumber ?? c.id).toUpperCase();
+    byKey.set(key, c);
+  }
+  for (const c of curated) {
+    const key = (c.planningProposalNumber ?? c.id).toUpperCase();
+    byKey.set(key, c);
+  }
+  return [...byKey.values()].filter((c) => c.status !== "CURRENT" && c.status !== "SUPERSEDED" && c.status !== "WITHDRAWN");
+}
+
+export class StatewidePlanningRuleProvider implements PlanningRuleProvider {
+  readonly name = "NSW statewide planning proposals + curated watchlist";
 
   async getPendingPlanningChanges(input: {
     lng: number;
@@ -38,24 +60,35 @@ export class CuratedPlanningRuleProvider implements PlanningRuleProvider {
     lga?: string | null;
     suburb?: string | null;
   }): Promise<PlanningChangeRecord[]> {
-    return matchPlanningChanges(input);
+    return resolvePendingPlanningChanges(input);
   }
 
   async refreshFromOfficialSources(): Promise<{ upserted: number; messages: string[] }> {
-    // MVP: curated registry with lastChecked bump. Cron re-validates URLs later.
     for (const c of matchPlanningChanges({ lng: 151.24, lat: -33.84 })) {
       c.lastChecked = new Date().toISOString();
     }
+    // Probe a few metro points to confirm Agency layers respond.
+    const probes = await Promise.all([
+      fetchPlanningProposalsNear({ lng: 151.218, lat: -33.833 }).catch(() => []),
+      fetchPlanningProposalsNear({ lng: 151.01, lat: -33.815 }).catch(() => []),
+      fetchPlanningProposalsNear({ lng: 151.236, lat: -33.879 }).catch(() => []),
+    ]);
+    const liveCount = probes.reduce((n, rows) => n + rows.length, 0);
     return {
-      upserted: 0,
+      upserted: liveCount,
       messages: [
-        "Curated registry refreshed (lastChecked). Full Planning Proposal Register scrape not enabled — use official portal for statutory confirmation.",
+        "Curated watchlist lastChecked bumped.",
+        `Statewide NSW Planning Proposal Agency probe matched ${liveCount} active proposal(s) across sample points.`,
+        "Proposed layers never rewrite CURRENT LEP/EPI controls.",
       ],
     };
   }
 }
 
-export const planningRuleProvider = new CuratedPlanningRuleProvider();
+/** @deprecated Use StatewidePlanningRuleProvider — kept for import compatibility. */
+export const CuratedPlanningRuleProvider = StatewidePlanningRuleProvider;
+
+export const planningRuleProvider = new StatewidePlanningRuleProvider();
 
 function statutoryFromParcel(p: ParcelData): CurrentStatutoryControls {
   const pl = p.planning;
