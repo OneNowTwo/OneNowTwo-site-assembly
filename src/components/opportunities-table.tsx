@@ -53,9 +53,10 @@ export function OpportunitiesTable() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "updatedAt", dir: -1 });
 
   useEffect(() => {
-    fetch("/api/opportunities")
-      .then((r) => r.json())
-      .then(setRows);
+    import("@/lib/api-json")
+      .then(({ fetchApiJson }) => fetchApiJson<Row[]>("/api/opportunities"))
+      .then(setRows)
+      .catch(() => setRows([]));
   }, []);
 
   const shown = useMemo(() => {

@@ -6,6 +6,8 @@ import type { ComparableSaleDTO } from "@/lib/opportunity-dto";
 import { summariseExitCompsByType, suggestedMarketValueFromComps } from "@/lib/analysis/unit-mix";
 import { date, money, num, sqm } from "@/lib/format";
 import { Badge, Button, DemoFinancialBadge, NumberField, Panel, Select, Stat, TextInput, cx } from "@/components/ui";
+import { fetchApiJson } from "@/lib/api-json";
+import type { OpportunityDTO } from "@/lib/opportunity-dto";
 
 type CompSub = "ACQUISITION" | "EXIT";
 
@@ -25,9 +27,7 @@ export function MarketTab() {
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Request failed");
+      const body = await fetchApiJson<OpportunityDTO>(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
       setDto(body);
     } catch (e) {
       setErr((e as Error).message);

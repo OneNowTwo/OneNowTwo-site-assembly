@@ -15,8 +15,12 @@ export function PlanningPathwaysPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/opportunities/${dto.id}/planning-context`)
-      .then((r) => r.json())
+    import("@/lib/api-json")
+      .then(({ fetchApiJson }) =>
+        fetchApiJson<{ pendingChanges?: PlanningChangeRecord[]; pathwaySummary?: CurrentPathway[]; safetyNote?: string }>(
+          `/api/opportunities/${dto.id}/planning-context`,
+        ),
+      )
       .then((body) => {
         if (cancelled) return;
         setPending(body.pendingChanges ?? []);

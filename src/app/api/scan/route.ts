@@ -4,7 +4,7 @@ import { scanArea } from "@/lib/scan-service";
 import { jsonError } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const bodySchema = z.object({
   west: z.number().min(140).max(154.5).optional(),

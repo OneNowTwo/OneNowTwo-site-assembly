@@ -17,15 +17,13 @@ import { YieldTab } from "./yield-tab";
 import { FeasibilityTab } from "./feasibility-tab";
 import { MarketTab } from "./market-tab";
 import { AcquisitionTab } from "./acquisition-tab";
+import { fetchApiJson } from "@/lib/api-json";
 
 const TABS = ["overview", "planning", "yield", "feasibility", "market", "acquisition"] as const;
 type Tab = (typeof TABS)[number];
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
-  return body as T;
+  return fetchApiJson<T>(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
 }
 
 export function OpportunityView({ id, initialTab }: { id: string; initialTab?: string }) {

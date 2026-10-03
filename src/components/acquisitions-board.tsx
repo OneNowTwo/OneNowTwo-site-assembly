@@ -34,9 +34,10 @@ export function AcquisitionsBoard() {
   const [stage, setStage] = useState<"ALL" | AcquisitionStageValue>("ALL");
 
   const load = () =>
-    fetch("/api/acquisitions")
-      .then((r) => r.json())
-      .then(setRows);
+    import("@/lib/api-json")
+      .then(({ fetchApiJson }) => fetchApiJson<Row[]>("/api/acquisitions"))
+      .then(setRows)
+      .catch(() => setRows([]));
   useEffect(() => {
     void load();
   }, []);

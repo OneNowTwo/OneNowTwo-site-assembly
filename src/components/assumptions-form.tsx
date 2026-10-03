@@ -26,10 +26,15 @@ export function AssumptionsForm({ initial, defaults }: { initial: Assumptions; d
   async function save() {
     setSaving(true);
     setStatus(null);
-    const res = await fetch("/api/assumptions", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
-    const body = await res.json();
-    setSaving(false);
-    setStatus(res.ok ? "Saved. Opportunities without overrides have been recalculated." : body.error);
+    try {
+      const { fetchApiJson } = await import("@/lib/api-json");
+      await fetchApiJson("/api/assumptions", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
+      setStatus("Saved. Opportunities without overrides have been recalculated.");
+    } catch (err) {
+      setStatus((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
