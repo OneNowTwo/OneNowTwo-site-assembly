@@ -6,6 +6,8 @@ import { analyseOpportunity, type OpportunityLot } from "@/lib/analysis/opportun
 import { lotDp } from "@/lib/format";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ComparableSaleDTO, LotDTO, OpportunityDTO, UnitTypeDTO } from "@/lib/opportunity-dto";
+import { toParcelValuation, valueParcels } from "@/lib/data-sources/valuation-service";
+import type { MarketValueSource } from "@/generated/prisma/client";
 
 export const opportunityInclude = {
   parcels: {
@@ -423,14 +425,31 @@ function marketValueFieldsFromParcel(p: ParcelData): {
   };
 }
 
+/** Auto-value any parcels missing a trusted mid via NSW comps waterfall. */
+export async function ensureParcelValuations(parcels: ParcelData[]): Promise<{ parcels: ParcelData[]; valued: number; messages: string[] }> {
+  const need = parcels.filter((p) => !(p.valuation?.mid != null && p.valuation.mid > 0));
+  if (!need.length) return { parcels, valued: 0, messages: [] };
+  const batch = await valueParcels(need, { concurrency: 2, prefer: "auto" });
+  const byId = new Map(batch.parcels.map((p) => [p.externalParcelId, p]));
+  return {
+    parcels: parcels.map((p) => byId.get(p.externalParcelId) ?? p),
+    valued: batch.valued,
+    messages: batch.messages,
+  };
+}
+
 export async function createOpportunity(input: { name: string; parcels: ParcelData[]; userId?: string | null; demoFinancialData?: boolean; notes?: string; inputs?: unknown }) {
-  const suburbs = input.parcels.map((p) => p.suburb).filter(Boolean) as string[];
+  // Always attempt automatic NSW comps when Analyse is created without values.
+  const ensured = await ensureParcelValuations(input.parcels);
+  const parcels = ensured.parcels;
+
+  const suburbs = parcels.map((p) => p.suburb).filter(Boolean) as string[];
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
   const parsedInputs = parseOpportunityInputs(input.inputs ?? {});
   // Ensure parcel valuations (NSW comps) are stored for Analyse transparency.
   const lotValuationDetails = { ...parsedInputs.lotValuationDetails };
-  for (const p of input.parcels) {
-    if (!p.valuation || lotValuationDetails[p.externalParcelId]) continue;
+  for (const p of parcels) {
+    if (!p.valuation) continue;
     lotValuationDetails[p.externalParcelId] = {
       mid: p.valuation.mid,
       low: p.valuation.low,
@@ -460,7 +479,7 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
         },
       });
       let i = 0;
-      for (const p of input.parcels) {
+      for (const p of parcels) {
         const parcelId = await upsertParcel(tx, p);
         const mv = marketValueFieldsFromParcel(p);
         await tx.opportunityParcel.create({
@@ -474,8 +493,103 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
       }
       return created;
     },
-    { timeout: 20000 },
+    { timeout: 60000 },
   );
   await recomputeOpportunity(opp.id);
   return opp;
+}
+
+/**
+ * Re-run NSW comps (or other waterfall) for lots missing market values on a saved opportunity.
+ * Used when Analyse was opened before comps landed, or user clicks Auto-value.
+ */
+export async function autoValueOpportunity(id: string): Promise<{ valued: number; messages: string[] }> {
+  const opp = await loadOpportunity(id);
+  if (!opp) throw new Error("Opportunity not found");
+  const missing = opp.parcels.filter((op) => !(op.marketValue != null && op.marketValue > 0) && op.included);
+  if (!missing.length) return { valued: 0, messages: ["All included lots already have values"] };
+
+  const asParcels: ParcelData[] = missing.map((op) => {
+    const p = op.parcel;
+    const snap = p.snapshots[0]?.data as { fsrStatus?: FsrMappedStatus; fsrControls?: FsrControl[] } | undefined;
+    return {
+      externalParcelId: p.externalParcelId,
+      source: p.source,
+      lot: p.lot,
+      section: p.section,
+      dp: p.dp,
+      lotIdString: p.lotIdString,
+      address: p.address,
+      suburb: p.suburb,
+      geometry: p.geometry as unknown as ParcelData["geometry"],
+      centroid: [p.centroidLng, p.centroidLat],
+      areaSqm: p.areaSqm,
+      isStrata: p.isStrata,
+      planning: p.zone
+        ? {
+            zone: p.zone,
+            zoneName: p.zoneName,
+            fsr: p.fsr,
+            fsrStatus: snap?.fsrStatus ?? (p.fsr != null ? "MAPPED" : "NO_MAPPED"),
+            fsrControls: snap?.fsrControls ?? [],
+            heightM: p.heightM,
+            minLotSizeSqm: p.minLotSizeSqm,
+            heritage: p.heritage,
+            planningInstrument: p.planningInstrument,
+            lga: p.lga,
+            sources: {},
+          }
+        : null,
+      planningStatus: p.zone ? "ok" : "unavailable",
+      retrievedAt: (p.planningCheckedAt ?? p.updatedAt).toISOString(),
+    };
+  });
+
+  const batch = await valueParcels(asParcels, { concurrency: 2 });
+  const inputs = parseOpportunityInputs(opp.inputs);
+  const lotValuationDetails = { ...inputs.lotValuationDetails };
+
+  for (const valued of batch.parcels) {
+    const op = missing.find((m) => m.parcel.externalParcelId === valued.externalParcelId);
+    if (!op || !valued.valuation?.mid) continue;
+    const v = toParcelValuation(valued.valuation as never);
+    const source = (v.source === "COMPARABLE_DERIVED" || v.status === "COMPARABLE_DERIVED"
+      ? "COMPARABLE_DERIVED"
+      : v.source === "LIVE_AVM" || v.status === "LIVE_AVM"
+        ? "LIVE_AVM"
+        : "USER_ESTIMATE") as MarketValueSource;
+    await prisma.opportunityParcel.update({
+      where: { id: op.id },
+      data: {
+        marketValue: v.mid,
+        marketValueLow: v.low,
+        marketValueHigh: v.high,
+        marketValueSource: source,
+        marketValueConfidence: v.confidence,
+        marketValueProvider: v.provider,
+        marketValueMethod: v.method,
+        marketValueCheckedAt: v.checkedAt ? new Date(v.checkedAt) : new Date(),
+        marketValueNote: v.note,
+      },
+    });
+    lotValuationDetails[valued.externalParcelId] = {
+      mid: v.mid,
+      low: v.low,
+      high: v.high,
+      confidence: v.confidence,
+      source: v.source,
+      provider: v.provider,
+      numberOfComps: v.numberOfComps ?? null,
+      valuationLabel: v.valuationLabel ?? null,
+      subjectLastSale: v.subjectLastSale ?? null,
+      comps: v.comps ?? undefined,
+    };
+  }
+
+  await prisma.opportunity.update({
+    where: { id },
+    data: { inputs: { ...inputs, lotValuationDetails } as unknown as Prisma.InputJsonValue },
+  });
+  await recomputeOpportunity(id);
+  return { valued: batch.valued, messages: batch.messages };
 }

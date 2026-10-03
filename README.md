@@ -140,6 +140,16 @@ Interfaces in `src/lib/data-sources/providers.ts`: `CadastreProvider`, `Planning
 
 The MVP queries the public SIX Maps Valuation property-sales layers for research/testing. NSW states PSI requires an appropriate commercial licence if used in a commercial product. Confirm/obtain that licence before selling the product; the valuation engine is provider-agnostic so the data source can be swapped without changing scoring.
 
+### Planning Change Engine / Policy Watch
+
+Opportunities show three separate planning states:
+
+1. **CURRENT LAW** — mapped LEP/EPI controls  
+2. **CURRENT PATHWAYS** — LMR, in-fill affordable housing (Housing SEPP) — labelled subject to eligibility  
+3. **PROPOSED / PENDING** — Gateway / exhibition / draft masterplans (e.g. Mosman PP-2026-1946, Edgecliff–Woollahra draft rezoning)
+
+Proposed controls never rewrite current max payable. Cron: `POST /api/cron/planning-watch` (optional `CRON_SECRET`).
+
 ## MVP limitations
 
 - Feasibility is **indicative only** — not a valuation, QS estimate, or tax/legal model.

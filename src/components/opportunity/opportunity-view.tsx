@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { OpportunityDTO } from "@/lib/opportunity-dto";
 import { dtoToLots } from "@/lib/opportunity-dto";
@@ -37,9 +37,38 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
   const [editingName, setEditingName] = useState(false);
   const [pendingInputs, setPendingInputs] = useState<OpportunityInputs | null>(null);
 
+  const [autoValuing, setAutoValuing] = useState(false);
+  const autoValueTriedRef = useRef(false);
+
   useEffect(() => {
+    autoValueTriedRef.current = false;
     api<OpportunityDTO>(`/api/opportunities/${id}`).then(setDto, (e) => setLoadError(e.message));
   }, [id]);
+
+  // If Analyse opens without lot values, automatically run NSW comps valuation once.
+  useEffect(() => {
+    if (!dto || autoValueTriedRef.current) return;
+    const missing = dto.lots.some((l) => l.included && !(l.marketValue != null && l.marketValue > 0));
+    if (!missing) return;
+    autoValueTriedRef.current = true;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setAutoValuing(true);
+    });
+    api<OpportunityDTO>(`/api/opportunities/${id}/valuate`, { method: "POST" })
+      .then((next) => {
+        if (!cancelled) setDto(next);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setAutoValuing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dto, id]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -233,7 +262,7 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                 <span>·</span>
                 <span>{dto.lga ?? ""}</span>
                 <Select ariaLabel="Opportunity status" value={dto.status} onChange={(status) => ctx.updateOpportunity({ status })} options={OPPORTUNITY_STATUSES.map((s) => ({ value: s, label: s[0] + s.slice(1).toLowerCase() }))} className="h-7 text-[11.5px]" />
-                {saving && <span className="text-[11px]">Saving…</span>}
+                {(saving || autoValuing) && <span className="text-[11px]">{autoValuing ? "Valuing properties from NSW sales…" : "Saving…"}</span>}
                 {error && <Badge tone="bad">{error}</Badge>}
               </div>
             </div>
@@ -246,15 +275,15 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
               </div>
               <HeaderStat
                 label="Existing value"
-                value={analysis.marketValueComplete ? money(analysis.combinedExistingValue, { compact: true }) : "—"}
-                sub={analysis.marketValueComplete ? undefined : "VALUE REQUIRED"}
+                value={analysis.marketValueComplete ? money(analysis.combinedExistingValue, { compact: true }) : autoValuing ? "…" : "—"}
+                sub={analysis.marketValueComplete ? undefined : autoValuing ? "Fetching NSW comps" : "VALUE REQUIRED"}
               />
               <HeaderStat label="Max payable to owners" value={money(analysis.maxPayableToOwners, { compact: true })} tone={analysis.maxPayableToOwners > 0 ? "brand" : "bad"} large />
               <HeaderStat
                 label="Acquisition headroom"
                 value={analysis.marketValueComplete ? money(analysis.acquisitionHeadroom, { compact: true }) : "—"}
                 tone={analysis.marketValueComplete ? ((analysis.acquisitionHeadroom ?? 0) > 0 ? "good" : "bad") : undefined}
-                sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : "Enter lot values"}
+                sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : autoValuing ? "Waiting for values" : "Auto-value pending"}
                 large
               />
               <HeaderStat label="GRV" value={money(f.grv, { compact: true })} />

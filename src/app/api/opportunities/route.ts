@@ -7,6 +7,7 @@ import { jsonError, requireSession } from "@/lib/session";
 import type { ParcelData } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function GET() {
   const rows = await prisma.opportunity.findMany({

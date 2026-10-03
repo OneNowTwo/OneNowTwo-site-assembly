@@ -20,10 +20,11 @@ const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
 };
 
 export function OverviewTab() {
-  const { dto, analysis, updateLot, updateOpportunity, updateInputs } = useOpportunity();
+  const { dto, analysis, updateLot, updateOpportunity, updateInputs, refresh, saving } = useOpportunity();
   const [selected, setSelected] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [revaluing, setRevaluing] = useState(false);
+  const [autoValuing, setAutoValuing] = useState(false);
   const f = analysis.base.feasibility;
   const y = analysis.base.yield;
   const mv = analysis.combinedExistingValue;
@@ -180,8 +181,28 @@ export function OverviewTab() {
             <div className="rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-950">
               <div className="font-semibold">INSUFFICIENT VALUATION DATA</div>
               <p className="mt-1">
-                Automatic Domain / PropTrack valuation did not return a complete set for every lot. Manual Est. Current Value is a last-resort override only — not the normal workflow. Maximum payable ({money(maxPay, { compact: true })}) still comes from development feasibility.
+                Automatic NSW registered comparable sales have not populated every lot yet. Click Auto-value to fetch them now. Manual entry is a last-resort override only. Maximum payable ({money(maxPay, { compact: true })}) still comes from development feasibility.
               </p>
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  disabled={autoValuing || saving}
+                  onClick={async () => {
+                    setAutoValuing(true);
+                    try {
+                      const res = await fetch(`/api/opportunities/${dto.id}/valuate`, { method: "POST" });
+                      if (!res.ok) throw new Error("Auto-value failed");
+                      await refresh();
+                    } catch {
+                      // soft fail
+                    } finally {
+                      setAutoValuing(false);
+                    }
+                  }}
+                >
+                  {autoValuing ? "Valuing from NSW sales…" : "Auto-value from NSW registered sales"}
+                </Button>
+              </div>
               {analysis.screeningExistingValue != null && (
                 <p className="mt-1 text-[11px] text-muted">Rough screening total (not trusted): {money(analysis.screeningExistingValue, { compact: true })}</p>
               )}
