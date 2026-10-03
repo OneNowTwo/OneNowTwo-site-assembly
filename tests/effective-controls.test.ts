@@ -81,6 +81,40 @@ describe("effective controls", () => {
     expect(eff.lmr.distanceBasis).toBe("STRAIGHT_LINE_APPROXIMATION");
     expect(eff.fsrUplift).toBeCloseTo(0.3);
   });
+
+  it("uses pedestrian route distance when walking hint is OK and does not silently fall back on failure", () => {
+    const planning = {
+      zone: "R1",
+      zoneName: "General Residential",
+      fsr: 0.5,
+      fsrStatus: "MAPPED" as const,
+      fsrControls: [],
+      heightM: 8.5,
+      minLotSizeSqm: 300,
+      heritage: "None mapped",
+      planningInstrument: "Manly LEP 2013",
+      lga: "NORTHERN BEACHES",
+      sources: {},
+    };
+    const ok = resolveEffectiveControls(planning, [151.263, -33.7915], [centre], {
+      status: "OK",
+      straightLineDistanceM: 540,
+      walkingDistanceM: 683,
+      provider: "OSRM foot",
+    });
+    expect(ok.lmr.distanceBasis).toBe("PEDESTRIAN_ROUTE");
+    expect(ok.lmr.walkingDistanceM).toBe(683);
+    expect(ok.modelled.certainty).toBe("STATE_POLICY_CANDIDATE");
+
+    const failed = resolveEffectiveControls(planning, [151.263, -33.7915], [centre], {
+      status: "FAILED",
+      straightLineDistanceM: 540,
+      walkingDistanceM: null,
+    });
+    expect(failed.lmr.distanceBasis).toBe("STRAIGHT_LINE_APPROXIMATION");
+    expect(failed.modelled.certainty).toBe("REQUIRES_PLANNING_CONFIRMATION");
+    expect(failed.lmr.exclusionNotes.some((n) => n.includes("WALKING DISTANCE NOT CONFIRMED"))).toBe(true);
+  });
 });
 
 describe("area scan generation", () => {
@@ -120,6 +154,7 @@ describe("area scan generation", () => {
         lmrBand: "OUTER_400_800",
         metrics: { lotIds: ["a", "b", "c"] } as never,
         score: { score: 80, factors: [], components: {} as never, weights: {} as never },
+        calculationSnapshot: { modelledEffectiveFsr: 0.8, maxPayable: 1, existingValue: 1, headroom: 1 } as never,
       },
       {
         key: "a|b|c|d",
@@ -147,6 +182,7 @@ describe("area scan generation", () => {
         lmrBand: "OUTER_400_800",
         metrics: { lotIds: ["a", "b", "c", "d"] } as never,
         score: { score: 70, factors: [], components: {} as never, weights: {} as never },
+        calculationSnapshot: { modelledEffectiveFsr: 0.8, maxPayable: 1, existingValue: 1, headroom: 0.5 } as never,
       },
     ]);
     expect(families).toHaveLength(1);

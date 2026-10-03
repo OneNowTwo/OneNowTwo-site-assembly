@@ -60,13 +60,23 @@ const parcelSchema = z.object({
   planningStatus: z.enum(["ok", "partial", "unavailable"]),
   retrievedAt: z.string(),
 });
-const createSchema = z.object({ name: z.string().trim().min(1).max(160), parcels: z.array(parcelSchema).min(1).max(12) });
+const createSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  parcels: z.array(parcelSchema).min(1).max(12),
+  /** Opportunity inputs — must include fsrOverride + scanProvenance when created from Area Scan. */
+  inputs: z.record(z.string(), z.unknown()).optional(),
+});
 
 export async function POST(req: Request) {
   const session = await requireSession();
   if (session instanceof NextResponse) return session;
   const parsed = createSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError("Invalid opportunity: " + parsed.error.issues[0]?.message);
-  const opp = await createOpportunity({ name: parsed.data.name, parcels: parsed.data.parcels as ParcelData[], userId: session.userId });
+  const opp = await createOpportunity({
+    name: parsed.data.name,
+    parcels: parsed.data.parcels as ParcelData[],
+    userId: session.userId,
+    inputs: parsed.data.inputs,
+  });
   return NextResponse.json({ id: opp.id }, { status: 201 });
 }

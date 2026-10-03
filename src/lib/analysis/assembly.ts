@@ -1,5 +1,5 @@
-import type { Assumptions } from "./assumptions";
-import type { UnitMixRow } from "./unit-mix";
+import { defaultUnitMix, type Assumptions } from "./assumptions";
+import { autoGenerateUnitMix, computeUnitMix, type UnitMixRow } from "./unit-mix";
 import { computeYield } from "./yield";
 import { acquisitionHeadroom, computeFeasibility } from "./feasibility";
 import { type Adjacency, isConnected } from "./geometry";
@@ -139,6 +139,24 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
   if (maxMinLot != null && totalAreaSqm < maxMinLot) minLotSizeIssues.push(`Combined area below ${maxMinLot.toLocaleString("en-AU")} sqm minimum lot size`);
   const valueEstimated = lots.some((l) => !(l.marketValue && l.marketValue > 0));
   const combinedValue = lots.reduce((s, l) => s + (l.marketValue && l.marketValue > 0 ? l.marketValue : l.areaSqm * a.existingValuePerSqm), 0);
+  const heightLimitM = heights.length ? Math.min(...heights) : null;
+  const yProbe = computeYield({
+    siteAreaSqm: totalAreaSqm,
+    fsr: weightedFsr,
+    efficiency: a.efficiency,
+    siteCoverage: a.siteCoverage,
+    floorToFloorM: a.floorToFloorM,
+    avgDwellingSizeSqm: a.avgDwellingSizeSqm,
+    carSpacesPerDwelling: a.carSpacesPerDwelling,
+    heightLimitM,
+    planningAdjustment: a.planningAdjustment,
+  });
+  // Same UNIT_MIX path as Opportunity analyseOpportunity/runScenario — one financial engine.
+  let resolvedMix = unitMix;
+  if (!resolvedMix && a.revenueMode === "UNIT_MIX") {
+    resolvedMix = autoGenerateUnitMix(yProbe.saleableArea, defaultUnitMix());
+  }
+  const mixTotals = resolvedMix && a.revenueMode === "UNIT_MIX" ? computeUnitMix(resolvedMix) : null;
   const y = computeYield({
     siteAreaSqm: totalAreaSqm,
     fsr: weightedFsr,
@@ -147,15 +165,17 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
     floorToFloorM: a.floorToFloorM,
     avgDwellingSizeSqm: a.avgDwellingSizeSqm,
     carSpacesPerDwelling: a.carSpacesPerDwelling,
-    heightLimitM: heights.length ? Math.min(...heights) : null,
+    heightLimitM,
     planningAdjustment: a.planningAdjustment,
+    unitCountOverride: mixTotals && mixTotals.totalUnits > 0 ? mixTotals.totalUnits : null,
+    saleableAreaOverride: mixTotals && mixTotals.totalSaleableArea > 0 ? mixTotals.totalSaleableArea : null,
   });
   const f = computeFeasibility({
     gfa: y.achievableGfa,
     saleableArea: y.saleableArea,
     dwellings: y.dwellings,
     lotCount: lots.length,
-    unitMix,
+    unitMix: a.revenueMode === "UNIT_MIX" ? resolvedMix : unitMix,
     a,
   });
   const headroom = acquisitionHeadroom(f.maxAcquisitionBudget, combinedValue);

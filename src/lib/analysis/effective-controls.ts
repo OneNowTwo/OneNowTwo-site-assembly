@@ -1,6 +1,7 @@
 import type { PlanningControls } from "@/lib/types";
 import {
   LMR_SOURCE_LABEL,
+  lmrBandFromDistanceM,
   lmrRfbStandardForZone,
   nearestLmrCentre,
   type LmrBand,
@@ -28,11 +29,21 @@ export interface EffectiveDevelopmentControls {
     centreName: string | null;
     band: LmrBand;
     distanceM: number | null;
-    distanceBasis: "STRAIGHT_LINE_APPROXIMATION" | "NONE";
+    straightLineDistanceM: number | null;
+    walkingDistanceM: number | null;
+    distanceBasis: "PEDESTRIAN_ROUTE" | "STRAIGHT_LINE_APPROXIMATION" | "NONE";
+    walkingStatus: "OK" | "FAILED" | "NOT_CHECKED";
     developmentType: string | null;
     zoneEligible: boolean;
     exclusionNotes: string[];
   };
+}
+
+export interface WalkingDistanceHint {
+  walkingDistanceM: number | null;
+  straightLineDistanceM: number;
+  status: "OK" | "FAILED";
+  provider?: string;
 }
 
 function maxNum(a: number | null, b: number | null): number | null {
@@ -50,6 +61,7 @@ export function resolveEffectiveControls(
   planning: PlanningControls | null,
   centroid: [number, number],
   centres: NominatedCentre[],
+  walking?: WalkingDistanceHint | null,
 ): EffectiveDevelopmentControls {
   const lepFsr = planning?.fsr ?? null;
   const lepHeight = planning?.heightM ?? null;
@@ -67,7 +79,13 @@ export function resolveEffectiveControls(
     exclusionNotes.push("Heritage item mapped — LMR may be excluded or heavily constrained; confirm against Housing SEPP exclusion rules");
   }
 
-  if (!prox || prox.band === "OUTSIDE") {
+  const straightM = walking?.straightLineDistanceM ?? (prox ? Math.round(prox.distanceM) : null);
+  const walkingM = walking?.status === "OK" ? walking.walkingDistanceM : null;
+  const distanceBasis = walking?.status === "OK" && walkingM != null ? "PEDESTRIAN_ROUTE" : prox ? "STRAIGHT_LINE_APPROXIMATION" : "NONE";
+  const distanceForBand = distanceBasis === "PEDESTRIAN_ROUTE" && walkingM != null ? walkingM : straightM;
+  const band = distanceForBand != null ? lmrBandFromDistanceM(distanceForBand) : prox?.band ?? "OUTSIDE";
+
+  if (!prox || band === "OUTSIDE") {
     return {
       lep,
       statePolicy: null,
@@ -81,17 +99,23 @@ export function resolveEffectiveControls(
       fsrUplift: 0,
       lmr: {
         centreName: prox?.centre.label ?? null,
-        band: prox?.band ?? "OUTSIDE",
-        distanceM: prox ? Math.round(prox.distanceM) : null,
-        distanceBasis: prox ? "STRAIGHT_LINE_APPROXIMATION" : "NONE",
+        band,
+        distanceM: distanceForBand,
+        straightLineDistanceM: straightM,
+        walkingDistanceM: walkingM,
+        distanceBasis,
+        walkingStatus: walking?.status ?? (prox ? "NOT_CHECKED" : "NOT_CHECKED"),
         developmentType: null,
         zoneEligible: false,
-        exclusionNotes,
+        exclusionNotes: [
+          ...exclusionNotes,
+          ...(walking && walking.status === "FAILED" ? ["WALKING DISTANCE NOT CONFIRMED — router failed; straight-line is screening only"] : []),
+        ],
       },
     };
   }
 
-  const std = lmrRfbStandardForZone(planning?.zone ?? null, prox.band);
+  const std = lmrRfbStandardForZone(planning?.zone ?? null, band);
   const statePolicy: ControlSnapshot | null = std.applicable
     ? {
         fsr: std.fsr,
@@ -102,16 +126,21 @@ export function resolveEffectiveControls(
       }
     : null;
 
-  // Prefer larger FSR only when LMR zone-eligible; still REQUIRE confirmation (walking + exclusions).
+  // Prefer larger FSR only when LMR zone-eligible.
+  // Pedestrian route OK → still confirm exclusions; failed/missing walking → REQUIRES_PLANNING_CONFIRMATION.
   let modelled: ControlSnapshot;
+  const walkingConfirmed = distanceBasis === "PEDESTRIAN_ROUTE" && walkingM != null && walkingM <= 800;
   if (statePolicy && std.zoneEligible && (statePolicy.fsr ?? 0) > (lepFsr ?? 0)) {
     modelled = {
       fsr: statePolicy.fsr,
       heightM: maxNum(lepHeight, statePolicy.heightM),
       label: "MODELLED EFFECTIVE CONTROL",
       source: statePolicy.source,
-      certainty: "REQUIRES_PLANNING_CONFIRMATION",
+      certainty: walkingConfirmed ? "STATE_POLICY_CANDIDATE" : "REQUIRES_PLANNING_CONFIRMATION",
     };
+    if (!walkingConfirmed) {
+      exclusionNotes.push("WALKING DISTANCE NOT CONFIRMED — modelled FSR is provisional until pedestrian route ≤800 m is verified");
+    }
   } else if (lepFsr != null || lepHeight != null) {
     modelled = {
       fsr: lepFsr,
@@ -139,9 +168,12 @@ export function resolveEffectiveControls(
     fsrUplift: Math.max(0, fsrUplift),
     lmr: {
       centreName: prox.centre.label,
-      band: prox.band,
-      distanceM: Math.round(prox.distanceM),
-      distanceBasis: "STRAIGHT_LINE_APPROXIMATION",
+      band,
+      distanceM: distanceForBand,
+      straightLineDistanceM: straightM,
+      walkingDistanceM: walkingM,
+      distanceBasis,
+      walkingStatus: walking?.status ?? "NOT_CHECKED",
       developmentType: std.developmentType,
       zoneEligible: std.zoneEligible,
       exclusionNotes,

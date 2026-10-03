@@ -155,6 +155,32 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
 
   const f = analysis.base.feasibility;
   const cached = dto.lots.some((l) => l.source === "CACHED_NSW");
+  const scanProv = dto.inputs.scanProvenance;
+  const scanSnap = (scanProv?.scanCalculationSnapshot ?? null) as
+    | {
+        existingValue?: number;
+        maxPayable?: number;
+        headroom?: number;
+        modelledEffectiveFsr?: number | null;
+        grv?: number;
+        achievableGfa?: number;
+      }
+    | null;
+  const backToScanHref = (() => {
+    if (!scanProv?.mapRestore) return "/map";
+    const m = scanProv.mapRestore;
+    const params = new URLSearchParams();
+    params.set("lat", String(m.lat));
+    params.set("lng", String(m.lng));
+    params.set("zoom", String(m.zoom));
+    const q = m.scanQuery || m.query;
+    if (q) params.set("scan", q);
+    return `/map?${params.toString()}`;
+  })();
+  const showScanDelta =
+    !!scanSnap &&
+    typeof scanSnap.maxPayable === "number" &&
+    Math.abs((scanSnap.maxPayable ?? 0) - analysis.maxPayableToOwners) > 1;
 
   return (
     <Ctx.Provider value={ctx}>
@@ -163,14 +189,22 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-[11px] text-muted">
-                <Link href="/opportunities" className="hover:underline">
-                  Opportunities
-                </Link>
+                {scanProv?.originType === "AREA_SCAN" ? (
+                  <Link href={backToScanHref} className="font-semibold text-brand hover:underline">
+                    ← Back to scan results
+                  </Link>
+                ) : (
+                  <Link href="/opportunities" className="hover:underline">
+                    Opportunities
+                  </Link>
+                )}
                 <span>/</span>
                 <span>{dto.suburb ?? "NSW"}</span>
                 <span className="ml-2 flex gap-1.5">
                   <LiveDataBadge cached={cached} />
                   {dto.demoFinancialData && <DemoFinancialBadge />}
+                  {dto.inputs.fsrOverrideKind === "SCAN_MODELLED" && <Badge tone="warn">Modelled FSR from scan</Badge>}
+                  {scanProv?.originType === "AREA_SCAN" && <Badge tone="estimate">From area scan</Badge>}
                 </span>
               </div>
               {editingName ? (
@@ -222,6 +256,41 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
               <HeaderStat label="GRV" value={money(f.grv, { compact: true })} />
             </div>
           </div>
+          {scanSnap && (
+            <div className="mt-3 rounded-[3px] border border-line bg-canvas px-3 py-2 text-[12px]">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Scan estimate vs detailed analysis</div>
+              <div className="mt-1 grid grid-cols-2 gap-x-6 gap-y-1 num sm:grid-cols-4">
+                <div>
+                  <span className="text-muted">Scan max payable </span>
+                  {money(scanSnap.maxPayable, { compact: true })}
+                </div>
+                <div>
+                  <span className="text-muted">Detailed max payable </span>
+                  {money(analysis.maxPayableToOwners, { compact: true })}
+                </div>
+                <div>
+                  <span className="text-muted">Scan headroom </span>
+                  {money(scanSnap.headroom, { compact: true })}
+                </div>
+                <div>
+                  <span className="text-muted">Detailed headroom </span>
+                  {money(analysis.acquisitionHeadroom, { compact: true })}
+                </div>
+              </div>
+              {dto.inputs.fsrOverride != null && (
+                <div className="mt-1 text-[11px] text-muted">
+                  Persisted scan FSR {dto.inputs.fsrOverride.toFixed(2)}:1
+                  {dto.inputs.fsrOverrideCertainty ? ` · ${dto.inputs.fsrOverrideCertainty.replaceAll("_", " ")}` : ""}
+                  {typeof scanSnap.modelledEffectiveFsr === "number" ? ` · scan modelled ${scanSnap.modelledEffectiveFsr.toFixed(2)}:1` : ""}
+                </div>
+              )}
+              {showScanDelta && (
+                <div className="mt-1 text-[11px] text-amber-900">
+                  Detailed analysis differs from the scan estimate — changes are shown explicitly above (not silently zeroed).
+                </div>
+              )}
+            </div>
+          )}
           <nav className="mt-3 flex gap-1">
             {TABS.map((t) => (
               <button

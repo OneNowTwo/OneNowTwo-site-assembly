@@ -18,6 +18,8 @@ export interface MapProps {
   flyTo: { lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null;
   initial: { lat: number; lng: number; zoom: number };
   onParcelClick: (id: string, shift: boolean) => void;
+  /** Click on empty map space (not a parcel) — clear detail selection. */
+  onBlankClick?: () => void;
   onViewportChange: (bbox: BBox, zoom: number) => void;
   /** Polygons outlined without interaction (e.g. a saved opportunity). */
   fitToParcels?: boolean;
@@ -28,10 +30,26 @@ const ZONING_WMS =
   process.env.NEXT_PUBLIC_NSW_PLANNING_WMS_URL ??
   "https://mapprod3.environment.nsw.gov.au/arcgis/services/Planning/EPI_Primary_Planning_Layers/MapServer/WMSServer";
 
-function ViewportEvents({ onViewportChange }: { onViewportChange: MapProps["onViewportChange"] }) {
+function ViewportEvents({
+  onViewportChange,
+  onBlankClick,
+}: {
+  onViewportChange: MapProps["onViewportChange"];
+  onBlankClick?: MapProps["onBlankClick"];
+}) {
+  const blankRef = useRef(onBlankClick);
+  useEffect(() => {
+    blankRef.current = onBlankClick;
+  }, [onBlankClick]);
   const map = useMapEvents({
     moveend: () => emit(),
     zoomend: () => emit(),
+    click: (e) => {
+      // Parcel layers stopPropagation; bare map clicks clear selection.
+      const t = e.originalEvent.target as HTMLElement | null;
+      if (t && (t.classList.contains("leaflet-interactive") || t.closest?.(".leaflet-interactive"))) return;
+      blankRef.current?.();
+    },
   });
   const emit = () => {
     const b = map.getBounds();
@@ -76,7 +94,10 @@ function ParcelLayer(props: Pick<MapProps, "parcels" | "selectedId" | "assemblyI
         const id = feature.properties.id as string;
         byId.current.set(id, l as L.Path);
         if (props.interactive !== false) {
-          l.on("click", (e: L.LeafletMouseEvent) => clickRef.current(id, e.originalEvent.shiftKey || e.originalEvent.metaKey));
+          l.on("click", (e: L.LeafletMouseEvent) => {
+            L.DomEvent.stopPropagation(e);
+            clickRef.current(id, e.originalEvent.shiftKey || e.originalEvent.metaKey);
+          });
           (l as L.Path).bindTooltip(feature.properties.label as string, { sticky: true, className: "parcel-tooltip", direction: "top", opacity: 0.9 });
         }
       },
@@ -148,7 +169,7 @@ export default function LeafletMap(props: MapProps) {
       />
       {props.zoningWms && <WMSTileLayer url={ZONING_WMS} params={{ layers: "2", format: "image/png", transparent: true }} opacity={0.45} maxZoom={20} />}
       <ScaleControl position="bottomleft" imperial={false} />
-      <ViewportEvents onViewportChange={props.onViewportChange} />
+      <ViewportEvents onViewportChange={props.onViewportChange} onBlankClick={props.onBlankClick} />
       <FlyTo target={props.flyTo} />
       <ParcelLayer {...props} />
     </MapContainer>

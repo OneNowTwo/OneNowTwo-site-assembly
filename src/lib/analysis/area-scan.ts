@@ -1,18 +1,22 @@
 import type { ParcelData } from "@/lib/types";
 import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
-import { resolveEffectiveControls, type EffectiveDevelopmentControls } from "./effective-controls";
+import { resolveEffectiveControls, type EffectiveDevelopmentControls, type WalkingDistanceHint } from "./effective-controls";
 import {
   APARTMENT_ZONES,
   NON_DEVELOPABLE_ZONES,
   generateAssemblies,
   isHeritageItem,
-  scoreAssembly,
   type AnalysisLot,
   type AssemblyCandidate,
 } from "./assembly";
 import type { Assumptions } from "./assumptions";
 import { buildAdjacency, type Adjacency } from "./geometry";
 import { parcelLabel } from "@/lib/parcel-analysis";
+import {
+  buildScanCalculationSnapshot,
+  calculateAssemblyFeasibility,
+  type ScanCalculationSnapshot,
+} from "./assembly-feasibility";
 
 export type RejectionReason =
   | "NON_RESIDENTIAL_ZONE"
@@ -64,6 +68,8 @@ export interface ScanCandidate {
   lmrBand: string;
   metrics: AssemblyCandidate["metrics"];
   score: AssemblyCandidate["score"];
+  /** Exact snapshot used for Analyse — Opportunity must reproduce these figures. */
+  calculationSnapshot: ScanCalculationSnapshot;
 }
 
 export interface AreaScanResult {
@@ -86,8 +92,12 @@ function streetKey(address: string | null): string {
   return address.replace(/^[\d\-/A-Za-z]+\s+/, "").replace(/,.*$/, "").trim() || "Site";
 }
 
-export function assessParcelEligibility(p: ParcelData, centres: NominatedCentre[]): ParcelEligibility {
-  const effective = resolveEffectiveControls(p.planning, p.centroid, centres);
+export function assessParcelEligibility(
+  p: ParcelData,
+  centres: NominatedCentre[],
+  walking?: WalkingDistanceHint | null,
+): ParcelEligibility {
+  const effective = resolveEffectiveControls(p.planning, p.centroid, centres, walking);
   const reasons: RejectionReason[] = [];
   const zone = p.planning?.zone ?? null;
 
@@ -236,6 +246,8 @@ export function runAreaScan(input: {
   centres: NominatedCentre[];
   assumptions: Assumptions;
   maxResults?: number;
+  /** Optional pedestrian-route hints keyed by externalParcelId. */
+  walkingByParcelId?: Map<string, WalkingDistanceHint>;
 }): AreaScanResult {
   const progress: string[] = [];
   const messages: string[] = [];
@@ -243,7 +255,9 @@ export function runAreaScan(input: {
   const parcels = input.parcels;
   progress.push("Applying planning controls");
 
-  const eligibility = parcels.map((p) => assessParcelEligibility(p, input.centres));
+  const eligibility = parcels.map((p) =>
+    assessParcelEligibility(p, input.centres, input.walkingByParcelId?.get(p.externalParcelId) ?? null),
+  );
   const rejections = {} as Record<RejectionReason, number>;
   const rejectionSamples: AreaScanResult["rejectionSamples"] = [];
   for (const e of eligibility) {
@@ -264,53 +278,63 @@ export function runAreaScan(input: {
 
   const byParcel = new Map(parcels.map((p) => [p.externalParcelId, p]));
   const scanCandidates: ScanCandidate[] = raw.map((c) => {
-    const effs = c.lotIds.map((id) => effectiveById.get(id)!).filter(Boolean);
-    const lepFsrs = effs.map((e) => e.lep.fsr).filter((x): x is number => x != null);
-    const modFsrs = effs.map((e) => e.modelled.fsr).filter((x): x is number => x != null);
-    const lepFsr = lepFsrs.length ? lepFsrs.reduce((s, x) => s + x, 0) / lepFsrs.length : null;
-    const effectiveFsr = c.metrics.weightedFsr || (modFsrs.length ? modFsrs.reduce((s, x) => s + x, 0) / modFsrs.length : null);
-    const certainty = effs.some((e) => e.modelled.certainty === "REQUIRES_PLANNING_CONFIRMATION")
-      ? "REQUIRES_PLANNING_CONFIRMATION"
-      : effs[0]?.modelled.certainty ?? "OFFICIAL_LEP";
+    const memberParcels = c.lotIds.map((id) => byParcel.get(id)!).filter(Boolean);
+    const feasibility = calculateAssemblyFeasibility({
+      parcels: memberParcels,
+      assumptions: input.assumptions,
+      centres: input.centres,
+      effectiveByParcelId: effectiveById,
+      adjacency: adj,
+    });
+    const snapshot = buildScanCalculationSnapshot(feasibility, memberParcels);
     const streets = c.lotIds.map((id) => streetKey(byParcel.get(id)?.address ?? null));
     const street = streets.sort((a, b) => streets.filter((s) => s === b).length - streets.filter((s) => s === a).length)[0] ?? "Site";
     const suburb = c.lotIds.map((id) => byParcel.get(id)?.suburb).find(Boolean) ?? "NSW";
     const constraints: string[] = [];
-    if (c.metrics.heritageItems) constraints.push(`${c.metrics.heritageItems} heritage item(s)`);
-    if (c.metrics.heritageLots) constraints.push(`${c.metrics.heritageLots} heritage-affected lot(s)`);
-    if (c.metrics.fsrEstimated) constraints.push("Some lots lack official LEP FSR");
-    if (certainty === "REQUIRES_PLANNING_CONFIRMATION") constraints.push("LMR walking catchment not confirmed (straight-line screen)");
-    if (c.metrics.minLotSizeIssues.length) constraints.push(...c.metrics.minLotSizeIssues);
+    if (feasibility.metrics.heritageItems) constraints.push(`${feasibility.metrics.heritageItems} heritage item(s)`);
+    if (feasibility.metrics.heritageLots) constraints.push(`${feasibility.metrics.heritageLots} heritage-affected lot(s)`);
+    if (feasibility.metrics.fsrEstimated) constraints.push("Some lots lack official LEP FSR");
+    if (feasibility.effectiveCertainty === "REQUIRES_PLANNING_CONFIRMATION") {
+      constraints.push("LMR walking distance not confirmed — modelled FSR requires planning confirmation");
+    }
+    if (feasibility.metrics.minLotSizeIssues.length) constraints.push(...feasibility.metrics.minLotSizeIssues);
 
-    const pps = planningPotentialScore(c, effectiveById);
-    const scored = scoreAssembly(c.metrics, input.assumptions);
+    const candidateForScore: AssemblyCandidate = {
+      key: c.key,
+      lotIds: feasibility.lotIds,
+      metrics: feasibility.metrics,
+      score: feasibility.score,
+    };
+    const pps = planningPotentialScore(candidateForScore, effectiveById);
+    const scored = feasibility.score;
 
     return {
       key: c.key,
       rank: 0,
-      lotIds: c.lotIds,
+      lotIds: feasibility.lotIds,
       locationLabel: `${street}, ${suburb}`,
-      lotCount: c.metrics.lotCount,
-      owners: c.metrics.owners,
-      siteAreaSqm: c.metrics.totalAreaSqm,
-      lepFsr: lepFsr != null ? Math.round(lepFsr * 1000) / 1000 : null,
-      effectiveFsr: effectiveFsr != null ? Math.round(effectiveFsr * 1000) / 1000 : null,
-      effectiveCertainty: certainty,
-      developmentType: effs.find((e) => e.lmr.developmentType)?.lmr.developmentType ?? "Residential redevelopment",
-      indicativeUnits: c.metrics.dwellings,
-      existingValue: c.metrics.combinedValue,
-      existingValueEstimated: c.metrics.combinedValueEstimated,
-      maxPayable: c.metrics.maxPayableToOwners,
-      headroom: c.metrics.acquisitionHeadroom,
-      headroomPercent: c.metrics.acquisitionHeadroomPercent,
-      financialRankingAvailable: !c.metrics.combinedValueEstimated,
+      lotCount: feasibility.metrics.lotCount,
+      owners: feasibility.metrics.owners,
+      siteAreaSqm: feasibility.metrics.totalAreaSqm,
+      lepFsr: feasibility.lepFsr,
+      effectiveFsr: feasibility.effectiveFsr,
+      effectiveCertainty: feasibility.effectiveCertainty,
+      developmentType: feasibility.developmentType ?? "Residential redevelopment",
+      indicativeUnits: feasibility.metrics.dwellings,
+      existingValue: feasibility.metrics.combinedValue,
+      existingValueEstimated: feasibility.metrics.combinedValueEstimated,
+      maxPayable: feasibility.metrics.maxPayableToOwners,
+      headroom: feasibility.metrics.acquisitionHeadroom,
+      headroomPercent: feasibility.metrics.acquisitionHeadroomPercent,
+      financialRankingAvailable: !feasibility.metrics.combinedValueEstimated,
       planningPotentialScore: pps,
       constraints,
       scoreFactors: scored.factors.slice(0, 5),
-      lmrCentre: effs.find((e) => e.lmr.centreName)?.lmr.centreName ?? null,
-      lmrBand: effs.find((e) => e.lmr.band !== "OUTSIDE")?.lmr.band ?? "OUTSIDE",
-      metrics: c.metrics,
+      lmrCentre: feasibility.lmrCentre,
+      lmrBand: feasibility.lmrBand,
+      metrics: feasibility.metrics,
       score: { ...scored, score: Math.round(scored.score * 0.55 + pps * 0.45) },
+      calculationSnapshot: snapshot,
     };
   });
 
@@ -329,7 +353,7 @@ export function runAreaScan(input: {
   if (candidates.every((c) => c.existingValueEstimated)) {
     messages.push("FINANCIAL RANKING REQUIRES MARKET DATA — existing values use fallback $/sqm estimates. Rankings emphasise planning potential + indicative headroom.");
   }
-  messages.push("LMR bands use straight-line distance from official Town Centres Map centroids — walking catchment requires planning confirmation.");
+  messages.push("LMR screening may use pedestrian routing when available; otherwise straight-line is screening only and modelled FSR stays REQUIRES PLANNING CONFIRMATION.");
 
   return {
     progress,

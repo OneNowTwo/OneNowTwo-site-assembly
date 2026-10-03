@@ -8,18 +8,33 @@ import type { GeocodeResult } from "@/lib/data-sources/providers";
 import type { AssemblyCandidate } from "@/lib/analysis/assembly";
 import { computeAssemblyMetrics, scoreAssembly } from "@/lib/analysis/assembly";
 import { buildAdjacency } from "@/lib/analysis/geometry";
-import type { Assumptions } from "@/lib/analysis/assumptions";
+import type { Assumptions, OpportunityInputs } from "@/lib/analysis/assumptions";
 import type { ScanCandidate } from "@/lib/analysis/area-scan";
 import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { parcelLabel, parcelToAnalysisLot } from "@/lib/parcel-analysis";
 import { money, num, pct, sqm, fsr } from "@/lib/format";
 import { Badge, Button, LiveDataBadge, ScoreBadge, Select, cx } from "@/components/ui";
 import { ParcelPanel } from "./parcel-panel";
+import {
+  clearScanSession,
+  loadMapState,
+  loadScanSession,
+  newScanSessionId,
+  saveMapState,
+  saveScanSession,
+} from "@/lib/map-state";
+import { SCAN_CALCULATION_VERSION } from "@/lib/analysis/assembly-feasibility";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
 const MIN_PARCEL_ZOOM = 17;
-const START = { lat: -33.8362, lng: 151.2176, zoom: 18 };
+const DEFAULT_START = { lat: -33.8362, lng: 151.2176, zoom: 18 };
+
+function initialMapStart() {
+  const saved = typeof window !== "undefined" ? loadMapState() : null;
+  if (saved) return { lat: saved.lat, lng: saved.lng, zoom: saved.zoom };
+  return DEFAULT_START;
+}
 
 type CompareSort = "score" | "headroom" | "profit" | "owners" | "area" | "moc";
 
@@ -42,6 +57,7 @@ interface ScanState {
   scanning: boolean;
   stage: string;
   error: string | null;
+  sessionId: string | null;
   candidates: ScanCandidate[];
   families: { familyId: string; best: ScanCandidate; alternatives: ScanCandidate[] }[];
   messages: string[];
@@ -49,33 +65,17 @@ interface ScanState {
   parcelsConsidered: number;
   parcelsEligible: number;
   assembliesGenerated: number;
+  hiddenKeys: string[];
+  showAllAssemblies: boolean;
+  bbox: BBox | null;
 }
 
-export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumptions: Assumptions; initialScanQuery?: string | null }) {
-  const router = useRouter();
-  const [parcels, setParcels] = useState<Map<string, ParcelData>>(new Map());
-  const [load, setLoad] = useState<LoadState>({ loading: false, messages: [], zoom: START.zoom });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [assembly, setAssembly] = useState<string[]>([]);
-  const [find, setFind] = useState<FindResult | null>(null);
-  const [finding, setFinding] = useState(false);
-  const [findError, setFindError] = useState<string | null>(null);
-  const [hoverKey, setHoverKey] = useState<string | null>(null);
-  const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [zoneFill, setZoneFill] = useState(true);
-  const [zoningWms, setZoningWms] = useState(false);
-  const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<GeocodeResult[] | null>(null);
-  const [geoMessage, setGeoMessage] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveName, setSaveName] = useState("");
-  const [compareSort, setCompareSort] = useState<CompareSort>("headroom");
-  const [centres, setCentres] = useState<NominatedCentre[]>([]);
-  const [scan, setScan] = useState<ScanState>({
+function emptyScan(): ScanState {
+  return {
     scanning: false,
     stage: "",
     error: null,
+    sessionId: null,
     candidates: [],
     families: [],
     messages: [],
@@ -83,15 +83,114 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     parcelsConsidered: 0,
     parcelsEligible: 0,
     assembliesGenerated: 0,
-  });
+    hiddenKeys: [],
+    showAllAssemblies: true,
+    bbox: null,
+  };
+}
+
+export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumptions: Assumptions; initialScanQuery?: string | null }) {
+  const router = useRouter();
+  const start = useMemo(() => initialMapStart(), []);
+  const restoredScan = useMemo(() => (typeof window !== "undefined" ? loadScanSession() : null), []);
+  const [parcels, setParcels] = useState<Map<string, ParcelData>>(new Map());
+  const [load, setLoad] = useState<LoadState>({ loading: false, messages: [], zoom: start.zoom });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [assembly, setAssembly] = useState<string[]>([]);
+  const [find, setFind] = useState<FindResult | null>(null);
+  const [finding, setFinding] = useState(false);
+  const [findError, setFindError] = useState<string | null>(null);
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(restoredScan?.activeKey ?? null);
+  const [zoneFill, setZoneFill] = useState(() => loadMapState()?.zoneFill ?? true);
+  const [zoningWms, setZoningWms] = useState(() => loadMapState()?.zoningWms ?? false);
+  const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
+  const [query, setQuery] = useState(() => loadMapState()?.query ?? restoredScan?.query ?? "");
+  const [results, setResults] = useState<GeocodeResult[] | null>(null);
+  const [geoMessage, setGeoMessage] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [compareSort, setCompareSort] = useState<CompareSort>("headroom");
+  const [centres, setCentres] = useState<NominatedCentre[]>((restoredScan?.centres as NominatedCentre[]) ?? []);
+  const [scan, setScan] = useState<ScanState>(() =>
+    restoredScan
+      ? {
+          scanning: false,
+          stage: "Restored",
+          error: null,
+          sessionId: restoredScan.sessionId,
+          candidates: (restoredScan.candidates as ScanCandidate[]) ?? [],
+          families: (restoredScan.families as ScanState["families"]) ?? [],
+          messages: restoredScan.messages ?? [],
+          progress: restoredScan.progress ?? [],
+          parcelsConsidered: restoredScan.parcelsConsidered ?? 0,
+          parcelsEligible: restoredScan.parcelsEligible ?? 0,
+          assembliesGenerated: restoredScan.assembliesGenerated ?? 0,
+          hiddenKeys: restoredScan.hiddenKeys ?? [],
+          showAllAssemblies: restoredScan.showAllAssemblies ?? true,
+          bbox: restoredScan.bbox,
+        }
+      : emptyScan(),
+  );
   const [scanExpanded, setScanExpanded] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastBBox = useRef<BBox | null>(null);
+  const lastBBox = useRef<BBox | null>(restoredScan?.bbox ?? null);
+  const mapViewRef = useRef({ lat: start.lat, lng: start.lng, zoom: start.zoom });
   const candidatesRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     if (find || scan.candidates.length) candidatesRef.current?.scrollIntoView({ block: "start" });
   }, [find, scan.candidates.length]);
+
+  const persistClientState = useCallback(
+    (opts?: { activeKey?: string | null; scanOverride?: ScanState }) => {
+      const s = opts?.scanOverride ?? scan;
+      const view = mapViewRef.current;
+      saveMapState({
+        lat: view.lat,
+        lng: view.lng,
+        zoom: view.zoom,
+        query,
+        zoneFill,
+        zoningWms,
+        updatedAt: new Date().toISOString(),
+      });
+      if (s.candidates.length && s.sessionId) {
+        saveScanSession({
+          sessionId: s.sessionId,
+          query,
+          bbox: s.bbox,
+          lat: view.lat,
+          lng: view.lng,
+          zoom: view.zoom,
+          candidates: s.candidates,
+          families: s.families,
+          messages: s.messages,
+          progress: s.progress,
+          parcelsConsidered: s.parcelsConsidered,
+          parcelsEligible: s.parcelsEligible,
+          assembliesGenerated: s.assembliesGenerated,
+          centres,
+          activeKey: opts?.activeKey !== undefined ? opts.activeKey : activeKey,
+          hiddenKeys: s.hiddenKeys,
+          showAllAssemblies: s.showAllAssemblies,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      try {
+        const params = new URLSearchParams();
+        params.set("lat", view.lat.toFixed(5));
+        params.set("lng", view.lng.toFixed(5));
+        params.set("zoom", String(Math.round(view.zoom * 10) / 10));
+        if (query.trim()) params.set("scan", query.trim());
+        window.history.replaceState(null, "", `/map?${params.toString()}`);
+      } catch {
+        // ignore
+      }
+    },
+    [scan, query, zoneFill, zoningWms, centres, activeKey],
+  );
 
   const fetchParcels = useCallback(async (bbox: BBox) => {
     abortRef.current?.abort();
@@ -117,6 +216,11 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
   const onViewportChange = useCallback(
     (bbox: BBox, zoom: number) => {
       lastBBox.current = bbox;
+      mapViewRef.current = {
+        lat: (bbox.south + bbox.north) / 2,
+        lng: (bbox.west + bbox.east) / 2,
+        zoom,
+      };
       setLoad((s) => ({ ...s, zoom }));
       if (zoom < MIN_PARCEL_ZOOM) return;
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -129,18 +233,107 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
             if (Array.isArray(body.centres)) setCentres(body.centres);
           })
           .catch(() => null);
+        persistClientState();
       }, 350);
     },
-    [fetchParcels],
+    [fetchParcels, persistClientState],
   );
 
   const parcelList = useMemo(() => [...parcels.values()], [parcels]);
   const selected = selectedId ? parcels.get(selectedId) ?? null : null;
 
   const onParcelClick = useCallback((id: string, shift: boolean) => {
-    if (shift) setAssembly((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
-    setSelectedId(id);
+    if (shift) {
+      setAssembly((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
+      setSelectedId(id);
+      return;
+    }
+    // Toggle: second click on the same parcel deselects.
+    setSelectedId((cur) => (cur === id ? null : id));
+    setAssembly((a) => {
+      if (!a.length) return a;
+      if (a.includes(id) && a.length === 1) return [];
+      if (a.includes(id)) return a.filter((x) => x !== id);
+      return a;
+    });
   }, []);
+
+  const onBlankMapClick = useCallback(() => {
+    setSelectedId(null);
+  }, []);
+
+  function clearSelection() {
+    setSelectedId(null);
+    setAssembly([]);
+    setFind(null);
+    setActiveKey(null);
+    setHoverKey(null);
+  }
+
+  function clearScanResults() {
+    const cleared = emptyScan();
+    setScan(cleared);
+    setActiveKey(null);
+    setHoverKey(null);
+    setScanExpanded(null);
+    clearScanSession();
+    persistClientState({ scanOverride: cleared, activeKey: null });
+  }
+
+  function clearAssembliesFromMap() {
+    setScan((s) => {
+      const next = { ...s, hiddenKeys: s.candidates.map((c) => c.key), showAllAssemblies: false };
+      persistClientState({ scanOverride: next });
+      return next;
+    });
+    setActiveKey(null);
+  }
+
+  function showAllAssemblies() {
+    setScan((s) => {
+      const next = { ...s, hiddenKeys: [], showAllAssemblies: true };
+      persistClientState({ scanOverride: next });
+      return next;
+    });
+  }
+
+  function hideAssembly(key: string) {
+    setScan((s) => {
+      const hidden = s.hiddenKeys.includes(key) ? s.hiddenKeys : [...s.hiddenKeys, key];
+      const next = { ...s, hiddenKeys: hidden };
+      persistClientState({ scanOverride: next, activeKey: activeKey === key ? null : activeKey });
+      return next;
+    });
+    if (activeKey === key) setActiveKey(null);
+  }
+
+  function resetMap() {
+    clearScanSession();
+    setScan(emptyScan());
+    setSelectedId(null);
+    setAssembly([]);
+    setFind(null);
+    setActiveKey(null);
+    setHoverKey(null);
+    setQuery("");
+    setResults(null);
+    setZoneFill(true);
+    setZoningWms(false);
+    mapViewRef.current = { ...DEFAULT_START };
+    setFlyTo({ ...DEFAULT_START, nonce: Date.now() });
+    saveMapState({
+      ...DEFAULT_START,
+      query: "",
+      zoneFill: true,
+      zoningWms: false,
+      updatedAt: new Date().toISOString(),
+    });
+    try {
+      window.history.replaceState(null, "", "/map");
+    } catch {
+      // ignore
+    }
+  }
 
   async function search(e?: React.FormEvent) {
     e?.preventDefault();
@@ -184,7 +377,8 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
   async function scanThisArea(forceQuery?: string) {
     const bbox = lastBBox.current;
     const q = (forceQuery ?? query).trim();
-    setScan((s) => ({ ...s, scanning: true, stage: "Loading parcels…", error: null, candidates: [], families: [] }));
+    const sessionId = newScanSessionId();
+    setScan((s) => ({ ...s, scanning: true, stage: "Loading parcels…", error: null, candidates: [], families: [], sessionId, hiddenKeys: [], showAllAssemblies: true }));
     setFind(null);
     setActiveKey(null);
     try {
@@ -213,10 +407,11 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         fetchParcels(body.bbox);
       }
       if (Array.isArray(body.centres)) setCentres(body.centres);
-      setScan({
+      const next: ScanState = {
         scanning: false,
         stage: "Done",
         error: null,
+        sessionId,
         candidates: body.candidates ?? [],
         families: body.families ?? [],
         messages: body.messages ?? [],
@@ -224,7 +419,12 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         parcelsConsidered: body.parcelsConsidered ?? 0,
         parcelsEligible: body.parcelsEligible ?? 0,
         assembliesGenerated: body.assembliesGenerated ?? 0,
-      });
+        hiddenKeys: [],
+        showAllAssemblies: true,
+        bbox: body.bbox ?? bbox,
+      };
+      setScan(next);
+      persistClientState({ scanOverride: next, activeKey: null });
     } catch (err) {
       setScan((s) => ({ ...s, scanning: false, stage: "", error: (err as Error).message }));
     }
@@ -239,12 +439,27 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assembly.join("|"), assumptions, parcels]);
 
+  const visibleScanCandidates = useMemo(() => {
+    const hidden = new Set(scan.hiddenKeys);
+    return scan.candidates.filter((c) => !hidden.has(c.key));
+  }, [scan.candidates, scan.hiddenKeys]);
+
   const highlightIds = useMemo(() => {
     const key = hoverKey ?? activeKey;
     const fromFind = find?.candidates.find((c) => c.key === key)?.lotIds;
     if (fromFind) return fromFind;
     return scan.candidates.find((c) => c.key === key)?.lotIds ?? scan.families.find((f) => f.familyId === key)?.best.lotIds ?? [];
   }, [hoverKey, activeKey, find, scan.candidates, scan.families]);
+
+  /** Soft outline of all visible scan assemblies when none is focused. */
+  const scanAssemblyIds = useMemo(() => {
+    if (assembly.length) return assembly;
+    if (activeKey || hoverKey) return [];
+    if (!scan.showAllAssemblies) return [];
+    const ids = new Set<string>();
+    for (const c of visibleScanCandidates) for (const id of c.lotIds) ids.add(id);
+    return [...ids];
+  }, [assembly, activeKey, hoverKey, scan.showAllAssemblies, visibleScanCandidates]);
 
   function defaultName(ids: string[]) {
     const ps = ids.map((id) => parcels.get(id)).filter(Boolean) as ParcelData[];
@@ -254,10 +469,51 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     return `${suburb} – ${street ?? "Site"} Assembly`;
   }
 
-  async function save(ids: string[], name?: string) {
+  async function save(ids: string[], name?: string, scanCandidate?: ScanCandidate, familyId?: string | null) {
     setSaving(true);
-    const ps = ids.map((id) => parcels.get(id)).filter(Boolean);
-    const res = await fetch("/api/opportunities", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name?.trim() || defaultName(ids), parcels: ps }) });
+    setFindError(null);
+    const ps = ids.map((id) => parcels.get(id)).filter(Boolean) as ParcelData[];
+    if (!ps.length) {
+      setSaving(false);
+      return setFindError("Parcels for this assembly are not loaded — zoom to the site and retry Analyse");
+    }
+
+    let inputs: Partial<OpportunityInputs> | undefined;
+    if (scanCandidate?.calculationSnapshot) {
+      const snap = scanCandidate.calculationSnapshot;
+      const view = mapViewRef.current;
+      inputs = {
+        fsrOverride: snap.modelledEffectiveFsr,
+        fsrOverrideKind: snap.modelledEffectiveFsr != null ? "SCAN_MODELLED" : "NONE",
+        fsrOverrideCertainty: snap.effectiveCertainty,
+        heightOverrideM: snap.effectiveHeightM,
+        scanProvenance: {
+          originType: "AREA_SCAN",
+          scanSessionId: scan.sessionId ?? newScanSessionId(),
+          assemblyFamilyId: familyId ?? null,
+          assemblyKey: scanCandidate.key,
+          scanRank: scanCandidate.rank,
+          scanCalculatedAt: snap.calculatedAt,
+          calculationVersion: snap.version || SCAN_CALCULATION_VERSION,
+          scanCalculationSnapshot: snap as unknown as Record<string, unknown>,
+          mapRestore: {
+            lat: view.lat,
+            lng: view.lng,
+            zoom: view.zoom,
+            query,
+            scanQuery: query,
+          },
+        },
+      };
+    }
+
+    persistClientState({ activeKey: scanCandidate?.key ?? activeKey });
+
+    const res = await fetch("/api/opportunities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name?.trim() || defaultName(ids), parcels: ps, inputs }),
+    });
     const body = await res.json();
     setSaving(false);
     if (!res.ok) return setFindError(body.error ?? "Could not save opportunity");
@@ -271,6 +527,11 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
 
   useEffect(() => {
     if (!initialScanQuery || initialScanQuery.length < 2) return;
+    // Don't re-scan if we already restored a matching session.
+    if (restoredScan?.query && restoredScan.candidates.length && restoredScan.query.toLowerCase() === initialScanQuery.toLowerCase()) {
+      setQuery(initialScanQuery);
+      return;
+    }
     setQuery(initialScanQuery);
     void scanThisArea(initialScanQuery);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -278,6 +539,10 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
 
   const letters = "ABCDEFGH";
   const showZoomHint = load.zoom < MIN_PARCEL_ZOOM;
+  const visibleFamilies = useMemo(() => {
+    const hidden = new Set(scan.hiddenKeys);
+    return scan.families.filter((f) => !hidden.has(f.best.key));
+  }, [scan.families, scan.hiddenKeys]);
 
   return (
     <div className="flex h-full">
@@ -285,14 +550,15 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         <LeafletMap
           parcels={parcelList}
           selectedId={selectedId}
-          assemblyIds={assembly}
+          assemblyIds={scanAssemblyIds}
           highlightIds={highlightIds}
           neighbourIds={find && selectedId === find.startId && !highlightIds.length ? find.neighbours : []}
           zoneFill={zoneFill}
           zoningWms={zoningWms}
           flyTo={flyTo}
-          initial={START}
+          initial={start}
           onParcelClick={onParcelClick}
+          onBlankClick={onBlankMapClick}
           onViewportChange={onViewportChange}
         />
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[1000] flex items-start gap-3 p-3">
@@ -319,9 +585,25 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
               </div>
             )}
           </form>
-          <div className="pointer-events-auto flex items-center gap-1 rounded-[3px] border border-line bg-white p-1 shadow-sm">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-[3px] border border-line bg-white p-1 shadow-sm">
             <Button size="sm" variant="accent" className="h-8" disabled={scan.scanning} onClick={() => scanThisArea()}>
               {scan.scanning ? scan.stage || "Scanning…" : "Scan this area"}
+            </Button>
+            {!!scan.candidates.length && (
+              <>
+                <Button size="sm" className="h-8" onClick={clearScanResults}>
+                  Clear results
+                </Button>
+                <Button size="sm" className="h-8" onClick={clearAssembliesFromMap}>
+                  Clear assemblies
+                </Button>
+                <Button size="sm" className="h-8" onClick={showAllAssemblies}>
+                  Show all
+                </Button>
+              </>
+            )}
+            <Button size="sm" variant="ghost" className="h-8" onClick={resetMap}>
+              Reset map
             </Button>
             <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
               <input type="checkbox" checked={zoneFill} onChange={(e) => setZoneFill(e.target.checked)} /> Zone fill
@@ -349,7 +631,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
             </button>
           </div>
         )}
-        <div className="absolute bottom-8 right-14 z-[1000] rounded-[3px] bg-white/90 px-2 py-1 text-[10.5px] text-muted shadow-sm">Click a parcel · Shift-click to add to assembly</div>
+        <div className="absolute bottom-8 right-14 z-[1000] rounded-[3px] bg-white/90 px-2 py-1 text-[10.5px] text-muted shadow-sm">Click parcel to select · click again to deselect · Shift-click for assembly</div>
       </div>
 
       <aside className="flex w-[400px] shrink-0 flex-col overflow-y-auto border-l border-line bg-white">
@@ -357,8 +639,8 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
           <div className="border-b border-line bg-brand-soft/60 p-4">
             <div className="flex items-center justify-between">
               <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Current assembly · {assembly.length} lots</h3>
-              <button className="text-[11px] text-muted hover:text-ink" onClick={() => setAssembly([])}>
-                Clear
+              <button className="text-[11px] font-semibold uppercase tracking-wide text-muted hover:text-ink" onClick={clearSelection}>
+                Clear selection
               </button>
             </div>
             <ul className="mt-2 space-y-1">
@@ -395,6 +677,14 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                 {saving ? "Saving…" : "Save opportunity"}
               </Button>
             </div>
+          </div>
+        )}
+
+        {(selectedId || assembly.length > 0) && !(assembly.length > 0 && manualMetrics) && (
+          <div className="border-b border-line px-4 py-2">
+            <button className="text-[11px] font-semibold uppercase tracking-wide text-muted hover:text-ink" onClick={clearSelection}>
+              Clear selection
+            </button>
           </div>
         )}
 
@@ -440,9 +730,23 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
           <div className="border-t border-line p-4" ref={candidatesRef}>
             <div className="flex items-baseline justify-between gap-2">
               <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Top opportunities in scan</h3>
-              <span className="text-[10.5px] text-muted">
-                {scan.parcelsEligible}/{scan.parcelsConsidered} eligible · {scan.assembliesGenerated} combos
-              </span>
+              <div className="flex items-center gap-2">
+                <button className="text-[10.5px] font-semibold uppercase text-muted hover:text-ink" onClick={clearScanResults}>
+                  Clear results
+                </button>
+                <span className="text-[10.5px] text-muted">
+                  {scan.parcelsEligible}/{scan.parcelsConsidered} eligible · {scan.assembliesGenerated} combos
+                </span>
+              </div>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-2 text-[10.5px]">
+              <Badge tone="neutral">Scan-level financial estimate</Badge>
+              <button className="underline text-muted" onClick={showAllAssemblies}>
+                Show all
+              </button>
+              <button className="underline text-muted" onClick={clearAssembliesFromMap}>
+                Hide all
+              </button>
             </div>
             {scan.messages.map((m) => (
               <p key={m} className="mt-1 text-[11px] text-amber-900">
@@ -453,13 +757,22 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
               {scan.families.map((fam) => {
                 const c = fam.best;
                 const open = scanExpanded === fam.familyId;
+                const hidden = scan.hiddenKeys.includes(c.key);
                 return (
                   <div
                     key={fam.familyId}
                     onMouseEnter={() => setHoverKey(c.key)}
                     onMouseLeave={() => setHoverKey(null)}
-                    onClick={() => setActiveKey(c.key)}
-                    className={cx("cursor-pointer rounded-[3px] border p-3 transition-colors", activeKey === c.key ? "border-accent bg-orange-50/40" : "border-line hover:border-accent/60")}
+                    onClick={() => {
+                      const next = activeKey === c.key ? null : c.key;
+                      setActiveKey(next);
+                      persistClientState({ activeKey: next });
+                    }}
+                    className={cx(
+                      "cursor-pointer rounded-[3px] border p-3 transition-colors",
+                      hidden && "opacity-45",
+                      activeKey === c.key ? "border-accent bg-orange-50/40" : "border-line hover:border-accent/60",
+                    )}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
@@ -470,8 +783,30 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                           {c.lotCount} lots · {c.owners} owners · {sqm(c.siteAreaSqm)}
                           {c.lmrCentre ? ` · near ${c.lmrCentre}` : ""}
                         </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {c.effectiveCertainty === "REQUIRES_PLANNING_CONFIRMATION" ? (
+                            <Badge tone="warn">Modelled planning control</Badge>
+                          ) : (
+                            <Badge tone="good">Live planning data</Badge>
+                          )}
+                          {c.existingValueEstimated ? <Badge tone="warn">Market value estimate</Badge> : <Badge tone="neutral">User / market value</Badge>}
+                          <Badge tone="neutral">Scan estimate</Badge>
+                        </div>
                       </div>
-                      <ScoreBadge score={c.score.score} />
+                      <div className="flex flex-col items-end gap-1">
+                        <ScoreBadge score={c.score.score} />
+                        <button
+                          type="button"
+                          aria-label="Hide from map"
+                          className="text-[14px] leading-none text-muted hover:text-ink"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            hideAssembly(c.key);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
                     </div>
                     <div className="num mt-2 grid grid-cols-3 gap-1 text-[11.5px]">
                       <div>
@@ -516,7 +851,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                         disabled={saving}
                         onClick={(e) => {
                           e.stopPropagation();
-                          save(c.lotIds);
+                          void save(c.lotIds, undefined, c, fam.familyId);
                         }}
                       >
                         Analyse
@@ -527,9 +862,20 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                           e.stopPropagation();
                           setAssembly(c.lotIds);
                           setSelectedId(c.lotIds[0] ?? null);
+                          setActiveKey(c.key);
                         }}
                       >
                         View on map
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          hideAssembly(c.key);
+                        }}
+                      >
+                        Hide from map
                       </Button>
                       {!!fam.alternatives.length && (
                         <Button
@@ -570,6 +916,9 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                 );
               })}
             </div>
+            {!visibleFamilies.length && (
+              <p className="mt-2 text-[12px] text-muted">All assemblies hidden from map. Use Show all to restore highlights.</p>
+            )}
           </div>
         )}
 
@@ -638,7 +987,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                             key={c.key}
                             onMouseEnter={() => setHoverKey(c.key)}
                             onMouseLeave={() => setHoverKey(null)}
-                            onClick={() => setActiveKey(c.key)}
+                            onClick={() => setActiveKey((k) => (k === c.key ? null : c.key))}
                             className={cx("cursor-pointer border-t border-line", activeKey === c.key && "bg-orange-50/50", isBest && "bg-emerald-50/40")}
                           >
                             <td className="px-2 py-1.5">
@@ -667,7 +1016,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                                 disabled={saving}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  save(c.lotIds);
+                                  void save(c.lotIds);
                                 }}
                               >
                                 Analyse
@@ -686,7 +1035,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                   key={c.key}
                   onMouseEnter={() => setHoverKey(c.key)}
                   onMouseLeave={() => setHoverKey(null)}
-                  onClick={() => setActiveKey(c.key)}
+                  onClick={() => setActiveKey((k) => (k === c.key ? null : c.key))}
                   className={cx("cursor-pointer rounded-[3px] border p-3 transition-colors", activeKey === c.key ? "border-accent bg-orange-50/40" : "border-line hover:border-accent/60")}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -730,7 +1079,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
                       disabled={saving}
                       onClick={(e) => {
                         e.stopPropagation();
-                        save(c.lotIds);
+                        void save(c.lotIds);
                       }}
                     >
                       Analyse
