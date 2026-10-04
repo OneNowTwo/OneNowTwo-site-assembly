@@ -14,6 +14,8 @@ import { summariseAssemblyValuation, type AssemblyValuationSummary, type Acquisi
 import { resolvePlanning } from "@/lib/planning/resolve-planning";
 import type { PlanningSnapshot } from "@/lib/planning/planning-snapshot";
 import { calculationFromBase, type CalculationSnapshot } from "./calculation-snapshot";
+import { acquisitionPropertyTotal, groupAcquisitionProperties } from "./acquisition-property";
+import { assessEconomicConfidence, type EconomicConfidence } from "./economic-confidence";
 
 export interface OpportunityLot extends AnalysisLot {
   geometry: Polygon | MultiPolygon;
@@ -32,6 +34,8 @@ export interface OpportunityLot extends AnalysisLot {
   ownerName?: string | null;
   planningInstrument?: string | null;
   planningCheckedAt?: string | null;
+  /** Street address for acquisition-property grouping (shared address → one property). */
+  address?: string | null;
 }
 
 export type ScenarioKey = "BASE" | "UPSIDE" | "DOWNSIDE";
@@ -123,6 +127,8 @@ export interface OpportunityAnalysis {
   planningSnapshot: PlanningSnapshot;
   /** Canonical financial result from calculateOpportunity(PlanningSnapshot, …). */
   calculation: CalculationSnapshot;
+  /** Data-quality confidence — distinct from opportunity score. */
+  economicConfidence: EconomicConfidence;
 }
 
 export function applyScenario(a: Assumptions, adj: ScenarioAdjustment): Assumptions {
@@ -292,8 +298,25 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     inputs,
   });
   const site = siteBasisFromPlanningSnapshot(planningSnapshot, inputs);
-  const combinedMarketValue = lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
-  const marketValueComplete = lots.length > 0 && lots.every((l) => (l.marketValue ?? 0) > 0);
+  const cadastralLotSumMid = lots.every((l) => (l.marketValue ?? 0) > 0)
+    ? lots.reduce((s, l) => s + (l.marketValue as number), 0)
+    : null;
+  const acquisitionProperties = groupAcquisitionProperties(
+    lots.map((l) => ({
+      id: l.id,
+      address: l.address ?? null,
+      areaSqm: l.areaSqm,
+      marketValue: l.marketValue ?? null,
+      marketValueLow: l.marketValueLow ?? null,
+      marketValueHigh: l.marketValueHigh ?? null,
+      marketValueSource: l.marketValueSource ?? null,
+      marketValueConfidence: l.marketValueConfidence ?? null,
+    })),
+  );
+  // Prefer property-level acquisition value (shared address → one property, not sum of lot AVMs).
+  const acqTotal = acquisitionPropertyTotal(acquisitionProperties);
+  const combinedMarketValue = acqTotal.mid ?? cadastralLotSumMid ?? lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
+  const marketValueComplete = acqTotal.complete || (lots.length > 0 && lots.every((l) => (l.marketValue ?? 0) > 0));
   // Probe saleable area from the SAME effective FSR used by yield/feasibility (not stale LEP-only metrics).
   const mixProbe = computeYield({
     siteAreaSqm: site.siteAreaSqm,
@@ -513,6 +536,17 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     score: score.score,
   });
 
+  const economicConfidence = assessEconomicConfidence({
+    planning: planningSnapshot,
+    assumptions: a,
+    feasibility: base.feasibility,
+    yield: base.yield,
+    unitMix,
+    acquisitionProperties,
+    cadastralLotSumMid,
+    overrides: inputs.overrides ?? {},
+  });
+
   return {
     includedIds: lots.map((l) => l.id),
     excludedIds: allLots.filter((l) => !l.included).map((l) => l.id),
@@ -550,5 +584,6 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     },
     planningSnapshot,
     calculation,
+    economicConfidence,
   };
 }

@@ -74,6 +74,17 @@ export interface ScanCandidate {
   score: AssemblyCandidate["score"];
   /** Exact snapshot used for Analyse — Opportunity must reproduce these figures. */
   calculationSnapshot: ScanCalculationSnapshot;
+  /**
+   * Historical scan-era figures retained after canonical Analyse sync.
+   * Display only — never used as current ranking values once set.
+   */
+  originalScanFsr?: number | null;
+  originalScanMaxPayable?: number | null;
+  originalScanHeadroom?: number | null;
+  originalScanScore?: number | null;
+  /** Linked analysed opportunity when CalculationSnapshot has superseded the scan card. */
+  canonicalOpportunityId?: string | null;
+  canonicalAnalysedAt?: string | null;
   /** Per-lot automatic valuations when Stage 4 completed. */
   lotValuations?: Record<
     string,

@@ -202,8 +202,23 @@ export const scanProvenanceSchema = z.object({
   scanRank: z.number().int().positive().nullable().optional(),
   scanCalculatedAt: z.string(),
   calculationVersion: z.string(),
-  /** Exact financial/planning snapshot from the scan card at Analyse time. */
+  /** Exact financial/planning snapshot from the scan card at Analyse time (history). */
   scanCalculationSnapshot: z.record(z.string(), z.unknown()),
+  /** Latest analysed CalculationSnapshot fields for map/list sync — not a second calculator. */
+  canonicalCalculation: z
+    .object({
+      effectiveFsr: z.number().nullable(),
+      effectiveHeightM: z.number().nullable(),
+      maxPayable: z.number().nullable(),
+      headroom: z.number().nullable(),
+      score: z.number().nullable(),
+      grv: z.number().nullable(),
+      theoreticalGfa: z.number().nullable(),
+      achievableGfa: z.number().nullable(),
+      analysedAt: z.string(),
+    })
+    .nullable()
+    .optional(),
   mapRestore: z
     .object({
       lat: z.number(),

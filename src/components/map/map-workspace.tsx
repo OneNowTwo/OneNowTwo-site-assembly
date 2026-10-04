@@ -24,6 +24,7 @@ import {
   saveScanSession,
 } from "@/lib/map-state";
 import { SCAN_CALCULATION_VERSION } from "@/lib/analysis/assembly-feasibility";
+import { syncCandidatesWithCanonical, type CanonicalScanOverlay } from "@/lib/analysis/sync-scan-canonical";
 import { ApiJsonError, fetchApiJson, fetchApiJsonWithRetry, isTransientHttpError } from "@/lib/api-json";
 import {
   POST_SCAN_PARCEL_COOLDOWN_MS,
@@ -228,6 +229,75 @@ export function MapWorkspace({
     },
     [scan, query, zoneFill, zoningWms, centres, activeKey],
   );
+
+  /** Overlay canonical CalculationSnapshot from analysed opportunities onto scan cards (no suburb rescan). */
+  const syncCanonicalFromOpportunities = useCallback(async () => {
+    if (!scan.candidates.length) return;
+    try {
+      const keys = scan.candidates.map((c) => c.key).join(",");
+      const qs = new URLSearchParams({ keys });
+      if (scan.sessionId) qs.set("sessionId", scan.sessionId);
+      const body = await fetchApiJson<{ overlays?: CanonicalScanOverlay[] }>(`/api/opportunities/scan-sync?${qs}`);
+      const overlays = body.overlays ?? [];
+      if (!overlays.length) return;
+      const nextCandidates = syncCandidatesWithCanonical(scan.candidates, overlays);
+      const changed = nextCandidates.some((c) => {
+        const prev = scan.candidates.find((p) => p.key === c.key);
+        return (
+          !prev ||
+          c.effectiveFsr !== prev.effectiveFsr ||
+          c.maxPayable !== prev.maxPayable ||
+          c.headroom !== prev.headroom ||
+          c.score.score !== prev.score.score ||
+          c.rank !== prev.rank
+        );
+      });
+      if (!changed) return;
+      const byKey = new Map(nextCandidates.map((c) => [c.key, c]));
+      const nextFamilies = scan.families
+        .map((f) => {
+          const best = byKey.get(f.best.key) ?? f.best;
+          const alternatives = f.alternatives.map((a) => byKey.get(a.key) ?? a);
+          return { ...f, best, alternatives };
+        })
+        .sort(
+          (a, b) =>
+            b.best.score.score - a.best.score.score ||
+            (b.best.headroom ?? -Infinity) - (a.best.headroom ?? -Infinity),
+        );
+      const orderedFamilies = nextCandidates
+        .map((c) => nextFamilies.find((f) => f.best.key === c.key || f.alternatives.some((a) => a.key === c.key)))
+        .filter((f): f is NonNullable<typeof f> => !!f)
+        .filter((f, i, arr) => arr.findIndex((x) => x.familyId === f.familyId) === i);
+      const next: ScanState = {
+        ...scan,
+        candidates: nextCandidates,
+        families: orderedFamilies.length ? orderedFamilies : nextFamilies,
+        messages: [
+          ...scan.messages.filter((m) => !m.startsWith("Canonical analysis synced")),
+          `Canonical analysis synced for ${overlays.length} assembly card(s) — original scan kept as history.`,
+        ],
+      };
+      setScan(next);
+      persistClientState({ scanOverride: next });
+    } catch {
+      // Non-blocking — map keeps scan-era values until sync succeeds.
+    }
+  }, [scan, persistClientState]);
+
+  useEffect(() => {
+    if (!scan.candidates.length || scan.scanning) return;
+    void syncCanonicalFromOpportunities();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan.candidates.length, scan.sessionId, scan.scanning]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void syncCanonicalFromOpportunities();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [syncCanonicalFromOpportunities]);
 
   const fetchParcels = useCallback(async (bbox: BBox, opts?: { soft?: boolean }) => {
     // soft !== false means automatic refresh; soft === false is an explicit Retry (bypass cooldown).
@@ -1075,7 +1145,9 @@ export function MapWorkspace({
                         {c.lepFsr != null ? fsr(c.lepFsr) : "—"}
                       </div>
                       <div>
-                        <div className="text-[10px] uppercase text-muted">Effective FSR</div>
+                        <div className="text-[10px] uppercase text-muted">
+                          {c.canonicalOpportunityId ? "Current FSR" : "Effective FSR"}
+                        </div>
                         <span className="font-semibold">{c.effectiveFsr != null ? fsr(c.effectiveFsr) : "—"}</span>
                         {c.effectiveCertainty === "REQUIRES_PLANNING_CONFIRMATION" && <div className="text-[9.5px] font-sans text-amber-800">Confirm</div>}
                       </div>
@@ -1110,6 +1182,26 @@ export function MapWorkspace({
                         )}
                       </div>
                     </div>
+                    {c.canonicalOpportunityId && (
+                      <div className="mt-2 rounded-[3px] border border-line bg-canvas/60 px-2 py-1.5 text-[10.5px]">
+                        <div className="font-semibold uppercase tracking-wide text-ink">Current analysis</div>
+                        <div className="num mt-0.5 text-ink">
+                          FSR {c.effectiveFsr != null ? fsr(c.effectiveFsr) : "—"} · Max {money(c.maxPayable, { compact: true })} · Headroom{" "}
+                          {money(c.headroom, { compact: true })} · Score {c.score.score}
+                        </div>
+                        {(c.originalScanFsr != null || c.originalScanMaxPayable != null) &&
+                          (c.originalScanFsr !== c.effectiveFsr || c.originalScanMaxPayable !== c.maxPayable) && (
+                            <div className="mt-1 border-t border-line pt-1 text-muted">
+                              <span className="font-semibold uppercase tracking-wide">Original scan estimate</span>
+                              <div className="num mt-0.5">
+                                FSR {c.originalScanFsr != null ? fsr(c.originalScanFsr) : "—"} · Max{" "}
+                                {money(c.originalScanMaxPayable, { compact: true })} · Headroom{" "}
+                                {money(c.originalScanHeadroom, { compact: true })} · Score {c.originalScanScore ?? "—"}
+                              </div>
+                            </div>
+                          )}
+                      </div>
+                    )}
                     {!!c.constraints.length && <div className="mt-2 text-[10.5px] text-muted">{c.constraints.join(" · ")}</div>}
                     <ul className="mt-2 space-y-0.5 text-[11.5px]">
                       {c.scoreFactors.slice(0, 3).map((f) => (
