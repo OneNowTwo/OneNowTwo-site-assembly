@@ -61,6 +61,8 @@ export function toOpportunityLots(opp: OpportunityWithRelations): OpportunityLot
       openingOfferOverride: op.openingOfferOverride,
       strategicWeight: op.strategicWeight,
       ownerName: op.owner?.name ?? null,
+      planningInstrument: op.parcel.planningInstrument,
+      planningCheckedAt: op.parcel.planningCheckedAt?.toISOString() ?? null,
     };
   });
 }
@@ -672,8 +674,10 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
               statePathwayFsr: modelled.statePathwayFsr,
               statePathwayName: modelled.statePathwayName,
               modelledFsr: modelled.modelledFsr,
+              modelledHeightM: modelled.modelledHeightM,
               certainty: modelled.certainty,
               lmrCentre: modelled.lmrCentre,
+              lmrBand: modelled.lmrBand,
               nearestDistanceM: modelled.nearestDistanceM,
               furthestDistanceM: modelled.furthestDistanceM,
               proximityScreen: modelled.proximityScreen,
@@ -758,8 +762,10 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
       statePathwayFsr: modelled.statePathwayFsr,
       statePathwayName: modelled.statePathwayName,
       modelledFsr: modelled.modelledFsr,
+      modelledHeightM: modelled.modelledHeightM,
       certainty: modelled.certainty,
       lmrCentre: modelled.lmrCentre,
+      lmrBand: modelled.lmrBand,
       nearestDistanceM: modelled.nearestDistanceM,
       furthestDistanceM: modelled.furthestDistanceM,
       proximityScreen: modelled.proximityScreen,

@@ -3,7 +3,7 @@ import type { Assumptions, OpportunityInputs, ScenarioAdjustment } from "./assum
 import { defaultUnitMix } from "./assumptions";
 import { computeYield, type YieldResult } from "./yield";
 import { acquisitionHeadroom, computeFeasibility, testPurchasePrice, type FeasibilityResult, type PriceTest } from "./feasibility";
-import { computeAssemblyMetrics, officialParcelTheoreticalGfa, scoreAssembly, type AnalysisLot, type AssemblyMetrics, type OpportunityScore } from "./assembly";
+import { computeAssemblyMetrics, scoreAssembly, type AnalysisLot, type AssemblyMetrics, type OpportunityScore } from "./assembly";
 import { allocateOffers, type AllocationResult } from "./allocation";
 import { analyseCriticalLots, type CriticalLotResult, type Economics } from "./critical";
 import { analyseMarginalLots, type MarginalLotResult, type MarginalLotEconomics } from "./marginal";
@@ -11,6 +11,9 @@ import { buildAcquisitionSequence, type StrategyStep } from "./strategy";
 import { buildAdjacency, type Adjacency } from "./geometry";
 import { autoGenerateUnitMix, computeUnitMix, type UnitMixRow } from "./unit-mix";
 import { summariseAssemblyValuation, type AssemblyValuationSummary, type AcquisitionViability } from "./valuation";
+import { resolvePlanning } from "@/lib/planning/resolve-planning";
+import type { PlanningSnapshot } from "@/lib/planning/planning-snapshot";
+import { calculationFromBase, type CalculationSnapshot } from "./calculation-snapshot";
 
 export interface OpportunityLot extends AnalysisLot {
   geometry: Polygon | MultiPolygon;
@@ -27,6 +30,8 @@ export interface OpportunityLot extends AnalysisLot {
   marketValueCheckedAt?: string | null;
   /** Manual / researched owner name when known — never inferred from lot count. */
   ownerName?: string | null;
+  planningInstrument?: string | null;
+  planningCheckedAt?: string | null;
 }
 
 export type ScenarioKey = "BASE" | "UPSIDE" | "DOWNSIDE";
@@ -110,6 +115,14 @@ export interface OpportunityAnalysis {
     economics: "NOT_CALCULABLE" | "UNECONOMIC" | "MARGINAL" | "VIABLE";
     summary: string;
   };
+  /**
+   * Canonical planning position — Planning tab A/B/C, lot table, basis,
+   * and the same effective FSR/height that drove Yield / Feasibility / score.
+   * Only source of planning truth for the opportunity UI.
+   */
+  planningSnapshot: PlanningSnapshot;
+  /** Canonical financial result from calculateOpportunity(PlanningSnapshot, …). */
+  calculation: CalculationSnapshot;
 }
 
 export function applyScenario(a: Assumptions, adj: ScenarioAdjustment): Assumptions {
@@ -125,83 +138,61 @@ export function applyScenario(a: Assumptions, adj: ScenarioAdjustment): Assumpti
   };
 }
 
-function siteBasis(lots: OpportunityLot[], _a: Assumptions, inputs: OpportunityInputs): SiteBasis {
-  const parcelArea = lots.reduce((s, l) => s + l.areaSqm, 0);
-  // Per-parcel official mapped FSR only — no silent height/fallback assumption.
-  const gfaAtControls = lots.reduce((s, l) => s + officialParcelTheoreticalGfa(l), 0);
-  const heights = lots.map((l) => l.heightM).filter((h): h is number => h != null);
-  const anyUnmapped = lots.some((l) => l.fsr == null && !(l.fsrControls && l.fsrControls.length));
-  const officialFsr = parcelArea > 0 ? gfaAtControls / parcelArea : 0;
-  const heightLimitM = inputs.heightOverrideM ?? (heights.length ? Math.min(...heights) : null);
-  const heightSource: SiteBasis["heightSource"] = inputs.heightOverrideM ? "OVERRIDE" : heights.length ? "OFFICIAL" : "NONE";
-  const siteAreaSqm = inputs.siteAreaOverride ?? parcelArea;
-  const siteAreaSource: SiteBasis["siteAreaSource"] = inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS";
+/** @deprecated Independent siteBasis is de-authorised — use resolvePlanning → PlanningSnapshot. */
+function siteBasisFromLots(lots: OpportunityLot[], inputs: OpportunityInputs): SiteBasis {
+  const planning = resolvePlanning({
+    lots: lots.map((l) => ({
+      id: l.id,
+      label: l.label,
+      included: true,
+      areaSqm: l.areaSqm,
+      zone: l.zone,
+      zoneName: l.zoneName,
+      fsr: l.fsr,
+      heightM: l.heightM,
+      minLotSizeSqm: l.minLotSizeSqm,
+      heritage: l.heritage,
+      planningInstrument: l.planningInstrument ?? null,
+      planningCheckedAt: l.planningCheckedAt ?? null,
+    })),
+    inputs,
+  });
+  return siteBasisFromPlanningSnapshot(planning, inputs);
+}
 
-  const snap = inputs.pathwaySnapshot;
-  const lepFsr = snap?.lepFsr ?? (anyUnmapped && officialFsr <= 0 ? null : officialFsr > 0 ? officialFsr : null);
-
-  if (inputs.fsrOverride != null) {
-    const fromScan = inputs.fsrOverrideKind === "SCAN_MODELLED";
-    return {
-      siteAreaSqm,
-      siteAreaSource,
-      fsr: inputs.fsrOverride,
-      // Persisted scan/State pathway — not a silent invent, and not “user typed a number”.
-      fsrSource: fromScan ? "STATE_PATHWAY" : "OVERRIDE",
-      yieldStatus: "CALCULABLE",
-      fsrCertainty: inputs.fsrOverrideCertainty ?? (fromScan ? "REQUIRES_PLANNING_CONFIRMATION" : null),
-      lepFsr,
-      statePathwayFsr: snap?.statePathwayFsr ?? (fromScan ? inputs.fsrOverride : null),
-      statePathwayName: snap?.statePathwayName ?? (fromScan ? "Low & Mid-Rise Housing (Housing SEPP)" : null),
-      lmrCentreName: snap?.lmrCentre ?? null,
-      lmrNearestDistanceM: snap?.nearestDistanceM ?? null,
-      lmrFurthestDistanceM: snap?.furthestDistanceM ?? null,
-      lmrProximityScreen: snap?.proximityScreen ?? (fromScan ? "PASS" : null),
-      lmrProximityLabel: snap?.proximityLabel ?? (fromScan ? "PASS — ESTIMATED" : null),
-      heightLimitM,
-      heightSource,
-    };
-  }
-
-  // Missing LEP FSR must NOT become a fake 0:1 development control.
-  if (anyUnmapped && officialFsr <= 0) {
-    return {
-      siteAreaSqm,
-      siteAreaSource,
-      fsr: 0,
-      fsrSource: "NO_MAPPED",
-      yieldStatus: "REQUIRES_PLANNING_INPUT",
-      fsrCertainty: null,
-      lepFsr: null,
-      statePathwayFsr: null,
-      statePathwayName: null,
-      lmrCentreName: snap?.lmrCentre ?? null,
-      lmrNearestDistanceM: snap?.nearestDistanceM ?? null,
-      lmrFurthestDistanceM: snap?.furthestDistanceM ?? null,
-      lmrProximityScreen: snap?.proximityScreen ?? null,
-      lmrProximityLabel: snap?.proximityLabel ?? null,
-      heightLimitM,
-      heightSource,
-    };
-  }
-
+/** Derive legacy SiteBasis view from the canonical PlanningSnapshot (not a second authority). */
+export function siteBasisFromPlanningSnapshot(planning: PlanningSnapshot, inputs: OpportunityInputs): SiteBasis {
+  const ec = planning.effectiveControls;
+  const parcelArea = planning.lots.filter((l) => l.included).reduce((s, l) => s + l.areaSqm, 0);
+  const calculable = ec.yieldStatus === "CALCULABLE" && (ec.effectiveFsr ?? 0) > 0;
+  const lmr = planning.currentStatePathways.find((p) => p.kind === "LMR");
   return {
-    siteAreaSqm,
-    siteAreaSource,
-    fsr: officialFsr,
-    fsrSource: "OFFICIAL",
-    yieldStatus: "CALCULABLE",
-    fsrCertainty: "OFFICIAL_LEP",
-    lepFsr: officialFsr,
-    statePathwayFsr: null,
-    statePathwayName: null,
-    lmrCentreName: null,
-    lmrNearestDistanceM: null,
-    lmrFurthestDistanceM: null,
-    lmrProximityScreen: null,
-    lmrProximityLabel: null,
-    heightLimitM,
-    heightSource,
+    siteAreaSqm: inputs.siteAreaOverride ?? parcelArea,
+    siteAreaSource: inputs.siteAreaOverride ? "OVERRIDE" : "PARCELS",
+    fsr: calculable ? (ec.effectiveFsr as number) : 0,
+    fsrSource: ec.fsrSource,
+    yieldStatus: ec.yieldStatus,
+    fsrCertainty:
+      ec.fsrSource === "STATE_PATHWAY"
+        ? "REQUIRES_PLANNING_CONFIRMATION"
+        : ec.fsrSource === "OFFICIAL"
+          ? "OFFICIAL_LEP"
+          : null,
+    lepFsr: ec.baseFsr,
+    statePathwayFsr: ec.stateFsr,
+    statePathwayName: ec.statePathway,
+    lmrCentreName: lmr?.centre ?? null,
+    lmrNearestDistanceM: ec.proximityDistanceM,
+    lmrFurthestDistanceM: ec.proximityDistanceMaxM,
+    lmrProximityScreen:
+      ec.fsrSource === "STATE_PATHWAY"
+        ? "PASS"
+        : ec.proximityBand === "OUTSIDE"
+          ? "FAIL"
+          : null,
+    lmrProximityLabel: lmr ? (inputs.pathwaySnapshot?.proximityLabel ?? "PASS — ESTIMATED") : null,
+    heightLimitM: ec.effectiveHeightM,
+    heightSource: inputs.heightOverrideM != null ? "OVERRIDE" : ec.effectiveHeightM != null ? "OFFICIAL" : "NONE",
   };
 }
 
@@ -273,11 +264,34 @@ function runScenario(
   };
 }
 
-/** Full opportunity analysis — pure, shared by API (persisted summary) and UI (live recalculation). */
+/**
+ * Full opportunity analysis — thin orchestrator over the canonical pipeline:
+ *   resolvePlanning → PlanningSnapshot
+ *   calculateOpportunity(PlanningSnapshot, …) → CalculationSnapshot
+ * Screens must consume planningSnapshot + calculation; site/metrics are derived views.
+ */
 export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, inputs: OpportunityInputs, adjacency?: Adjacency): OpportunityAnalysis {
   const lots = allLots.filter((l) => l.included);
   const adj = adjacency ?? buildAdjacency(allLots.map((l) => ({ id: l.id, geometry: l.geometry })));
-  const site = siteBasis(lots, a, inputs);
+
+  const planningSnapshot = resolvePlanning({
+    lots: allLots.map((l) => ({
+      id: l.id,
+      label: l.label,
+      included: l.included,
+      areaSqm: l.areaSqm,
+      zone: l.zone,
+      zoneName: l.zoneName,
+      fsr: l.fsr,
+      heightM: l.heightM,
+      minLotSizeSqm: l.minLotSizeSqm,
+      heritage: l.heritage,
+      planningInstrument: l.planningInstrument ?? null,
+      planningCheckedAt: l.planningCheckedAt ?? null,
+    })),
+    inputs,
+  });
+  const site = siteBasisFromPlanningSnapshot(planningSnapshot, inputs);
   const combinedMarketValue = lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
   const marketValueComplete = lots.length > 0 && lots.every((l) => (l.marketValue ?? 0) > 0);
   // Probe saleable area from the SAME effective FSR used by yield/feasibility (not stale LEP-only metrics).
@@ -332,7 +346,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     const subset = lots.filter((l) => ids.includes(l.id));
     const subArea = subset.reduce((s, l) => s + l.areaSqm, 0);
     const scaledSite: SiteBasis = {
-      ...siteBasis(subset, a, { ...inputs, siteAreaOverride: null, fsrOverride: inputs.fsrOverride, heightOverrideM: inputs.heightOverrideM }),
+      ...siteBasisFromLots(subset, { ...inputs, siteAreaOverride: null, fsrOverride: inputs.fsrOverride, heightOverrideM: inputs.heightOverrideM }),
       siteAreaSqm: (site.siteAreaSqm * subArea) / parcelArea,
     };
     const subComplete = subset.every((l) => (l.marketValue ?? 0) > 0);
@@ -420,14 +434,18 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   metrics.combinedValue = existingValue ?? 0;
   metrics.combinedValueEstimated = !marketValueComplete;
   metrics.upliftRatio = existingValue != null && existingValue > 0 ? budget / existingValue : 0;
-  // One effective FSR for scoring / capacity — never leave stale LEP-only 0:1 after pathway apply.
-  if (feasibilityCalculable) {
-    metrics.weightedFsr = site.fsr;
+  // Metrics must reflect PlanningSnapshot effective controls — never LEP-unmapped → 0 as capacity.
+  if (feasibilityCalculable && planningSnapshot.effectiveControls.effectiveFsr != null) {
+    metrics.weightedFsr = planningSnapshot.effectiveControls.effectiveFsr;
     metrics.theoreticalGfa = base.yield.theoreticalGfa;
+    metrics.fsrEstimated = false;
+  } else if (planningSnapshot.effectiveControls.baseFsr == null) {
+    // Unmapped ≠ 0 — leave weightedFsr unused for display; UI reads planningSnapshot.
+    metrics.fsrEstimated = true;
   }
-  if (site.heightLimitM != null) {
-    metrics.heightMinM = site.heightLimitM;
-    metrics.heightMaxM = site.heightLimitM;
+  if (planningSnapshot.effectiveControls.effectiveHeightM != null) {
+    metrics.heightMinM = planningSnapshot.effectiveControls.effectiveHeightM;
+    metrics.heightMaxM = planningSnapshot.effectiveControls.effectiveHeightM;
   }
 
   const ownerNames = lots
@@ -480,6 +498,21 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
           ? "Modelled pathway is marginal under current assumptions."
           : "Review planning confirmation and assumptions before acquisition.";
 
+  const calculation = calculationFromBase({
+    planning: planningSnapshot,
+    siteAreaSqm: site.siteAreaSqm,
+    theoreticalGfa: base.yield.theoreticalGfa,
+    achievableGfa: base.yield.achievableGfa,
+    saleableArea: base.yield.saleableArea,
+    dwellings: base.yield.dwellings,
+    grv: base.feasibility.grv,
+    totalCost: base.feasibility.totalCost,
+    maxPayable: budget,
+    headroom: head?.acquisitionHeadroom ?? null,
+    headroomPercent: head?.acquisitionHeadroomPercent ?? null,
+    score: score.score,
+  });
+
   return {
     includedIds: lots.map((l) => l.id),
     excludedIds: allLots.filter((l) => !l.included).map((l) => l.id),
@@ -515,5 +548,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
       economics: economicsConclusion,
       summary: conclusionSummary,
     },
+    planningSnapshot,
+    calculation,
   };
 }

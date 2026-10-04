@@ -49,55 +49,96 @@ export function YieldTab() {
                   />
                 }
                 hint={
-                  site.fsrSource === "STATE_PATHWAY"
-                    ? `Modelled from State pathway — not a user assumption. Clear only to remove pathway modelling.`
-                    : site.fsrSource === "NO_MAPPED"
-                      ? "USER FSR REQUIRED — no mapped LEP FSR and no applicable State pathway."
-                      : `Official equivalent: ${fsr(analysis.metrics.weightedFsr)}${analysis.metrics.fsrEstimated ? " (some lots unmapped)" : ""}. Clear to use official controls.`
+                  analysis.planningSnapshot.effectiveControls.fsrSource === "STATE_PATHWAY"
+                    ? `From PlanningSnapshot — same effective FSR as Feasibility / score.`
+                    : analysis.planningSnapshot.effectiveControls.fsrSource === "NO_MAPPED"
+                      ? "USER FSR REQUIRED — no mapped LEP FSR and no applicable State pathway. Unmapped ≠ 0:1."
+                      : `Official LEP FSR from PlanningSnapshot. Clear override to use official controls.`
                 }
               >
-                {site.fsrSource === "STATE_PATHWAY" ? (
+                {analysis.planningSnapshot.effectiveControls.fsrSource === "STATE_PATHWAY" ? (
                   <div className="space-y-2 text-[12px]">
                     <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
                       <dt className="text-muted">BASE LEP FSR</dt>
-                      <dd className="num font-semibold">{site.lepFsr != null ? fsr(site.lepFsr) : "Not mapped"}</dd>
+                      <dd className="num font-semibold">
+                        {analysis.planningSnapshot.effectiveControls.baseFsr != null
+                          ? fsr(analysis.planningSnapshot.effectiveControls.baseFsr)
+                          : "Not mapped"}
+                      </dd>
                       <dt className="text-muted">State pathway</dt>
-                      <dd>{site.statePathwayName ?? "Low & Mid-Rise Housing"}</dd>
+                      <dd>{analysis.planningSnapshot.effectiveControls.statePathway ?? "Low & Mid-Rise Housing"}</dd>
                       <dt className="text-muted">STATE LMR FSR</dt>
-                      <dd className="num font-semibold">{site.statePathwayFsr != null ? fsr(site.statePathwayFsr) : fsr(site.fsr)}</dd>
+                      <dd className="num font-semibold">
+                        {analysis.planningSnapshot.effectiveControls.stateFsr != null
+                          ? fsr(analysis.planningSnapshot.effectiveControls.stateFsr)
+                          : "—"}
+                      </dd>
                       <dt className="text-muted">Modelled effective FSR</dt>
-                      <dd className="num font-semibold">{fsr(site.fsr)}</dd>
-                      <dt className="text-muted">800 m proximity</dt>
-                      <dd>{site.lmrProximityLabel ?? "PASS — ESTIMATED"}</dd>
+                      <dd className="num font-semibold">
+                        {analysis.calculation.effectiveFsr != null ? fsr(analysis.calculation.effectiveFsr) : "—"}
+                      </dd>
+                      <dt className="text-muted">Proximity band</dt>
+                      <dd>{analysis.planningSnapshot.effectiveControls.proximityBandLabel}</dd>
                       <dt className="text-muted">Distance (straight-line)</dt>
                       <dd className="num">
-                        {site.lmrNearestDistanceM != null
-                          ? site.lmrFurthestDistanceM != null && site.lmrFurthestDistanceM !== site.lmrNearestDistanceM
-                            ? `${site.lmrNearestDistanceM}–${site.lmrFurthestDistanceM} m`
-                            : `${site.lmrNearestDistanceM} m`
+                        {analysis.planningSnapshot.effectiveControls.proximityDistanceM != null
+                          ? analysis.planningSnapshot.effectiveControls.proximityDistanceMaxM != null &&
+                            analysis.planningSnapshot.effectiveControls.proximityDistanceMaxM !==
+                              analysis.planningSnapshot.effectiveControls.proximityDistanceM
+                            ? `${analysis.planningSnapshot.effectiveControls.proximityDistanceM}–${analysis.planningSnapshot.effectiveControls.proximityDistanceMaxM} m`
+                            : `${analysis.planningSnapshot.effectiveControls.proximityDistanceM} m`
                           : "—"}
-                        {site.lmrCentreName ? ` to ${site.lmrCentreName}` : ""}
+                      </dd>
+                      <dt className="text-muted">Height</dt>
+                      <dd className="num">
+                        {analysis.calculation.effectiveHeightM != null
+                          ? `${analysis.calculation.effectiveHeightM} m`
+                          : "—"}
                       </dd>
                       <dt className="text-muted">Status</dt>
-                      <dd>REQUIRES PLANNING CONFIRMATION</dd>
+                      <dd>{analysis.planningSnapshot.effectiveControls.status}</dd>
                     </dl>
                     <p className="text-[11px] text-amber-900">ESTIMATED ELIGIBILITY — VERIFY BEFORE ACQUISITION / DA. Not a walking-distance confirmation.</p>
                   </div>
                 ) : (
                   <NumberField
-                    value={dto.inputs.fsrOverride ?? (site.fsrSource === "NO_MAPPED" ? null : site.fsr)}
+                    value={
+                      dto.inputs.fsrOverride ??
+                      (analysis.planningSnapshot.effectiveControls.fsrSource === "NO_MAPPED"
+                        ? null
+                        : analysis.calculation.effectiveFsr)
+                    }
                     dp={2}
                     onCommit={(v) =>
                       updateInputs({
-                        fsrOverride: v && Math.abs(v - analysis.metrics.weightedFsr) > 0.001 ? v : null,
+                        fsrOverride:
+                          v &&
+                          analysis.calculation.effectiveFsr != null &&
+                          Math.abs(v - analysis.calculation.effectiveFsr) > 0.001
+                            ? v
+                            : v && analysis.calculation.effectiveFsr == null
+                              ? v
+                              : null,
                         fsrOverrideKind: v ? "USER" : "NONE",
                       })
                     }
                   />
                 )}
               </Field>
-              <Field label="Height limit (m)" tag={<SourceTag kind={site.heightSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />} hint={`Mapped: ${analysis.metrics.heightMinM ?? "—"} m`}>
-                <NumberField value={dto.inputs.heightOverrideM ?? site.heightLimitM} onCommit={(v) => updateInputs({ heightOverrideM: v && v !== analysis.metrics.heightMinM ? v : null })} />
+              <Field
+                label="Height limit (m)"
+                tag={<SourceTag kind={site.heightSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />}
+                hint={`PlanningSnapshot effective: ${analysis.calculation.effectiveHeightM ?? "—"} m · LEP: ${analysis.planningSnapshot.effectiveControls.baseHeightM ?? "—"} m`}
+              >
+                <NumberField
+                  value={dto.inputs.heightOverrideM ?? analysis.calculation.effectiveHeightM}
+                  onCommit={(v) =>
+                    updateInputs({
+                      heightOverrideM:
+                        v && v !== analysis.planningSnapshot.effectiveControls.baseHeightM ? v : null,
+                    })
+                  }
+                />
               </Field>
               <Field label="Site coverage" tag={tag("siteCoverage")}>
                 <NumberField kind="pct" value={a.siteCoverage} onCommit={(v) => updateOverrides({ siteCoverage: v ?? undefined })} />
