@@ -24,12 +24,23 @@ import {
   saveScanSession,
 } from "@/lib/map-state";
 import { SCAN_CALCULATION_VERSION } from "@/lib/analysis/assembly-feasibility";
-import { fetchApiJson } from "@/lib/api-json";
+import { ApiJsonError, fetchApiJson, fetchApiJsonWithRetry, isTransientHttpError } from "@/lib/api-json";
+import {
+  POST_SCAN_PARCEL_COOLDOWN_MS,
+  POST_SCAN_PARCEL_REFRESH_DELAY_MS,
+  scanReturnedSufficientParcels,
+  shouldSilentSoftFailTransient,
+} from "@/lib/map-parcel-refresh";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
 const MIN_PARCEL_ZOOM = 17;
 const DEFAULT_START = { lat: -33.8362, lng: 151.2176, zoom: 18 };
+
+/** Wall clock outside the component so React Compiler does not treat map handlers as impure render. */
+function nowMs(): number {
+  return Date.now();
+}
 
 /** Client-side stage labels while /api/scan is in flight (server returns final progress). */
 const SCAN_STAGE_LABELS = [
@@ -101,7 +112,16 @@ function emptyScan(): ScanState {
   };
 }
 
-export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumptions: Assumptions; initialScanQuery?: string | null }) {
+export function MapWorkspace({
+  assumptions,
+  initialScanQuery = null,
+  mapVisible = true,
+}: {
+  assumptions: Assumptions;
+  initialScanQuery?: string | null;
+  /** False while the persistent shell keeps the map mounted but hidden under another tab. */
+  mapVisible?: boolean;
+}) {
   const router = useRouter();
   const start = useMemo(() => initialMapStart(), []);
   const restoredScan = useMemo(() => (typeof window !== "undefined" ? loadScanSession() : null), []);
@@ -117,7 +137,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
   const [zoneFill, setZoneFill] = useState(() => loadMapState()?.zoneFill ?? true);
   const [zoningWms, setZoningWms] = useState(() => loadMapState()?.zoningWms ?? false);
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
-  const [query, setQuery] = useState(() => loadMapState()?.query ?? restoredScan?.query ?? "");
+  const [query, setQuery] = useState(() => initialScanQuery ?? loadMapState()?.query ?? restoredScan?.query ?? "");
   const [results, setResults] = useState<GeocodeResult[] | null>(null);
   const [geoMessage, setGeoMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -151,6 +171,10 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
   const lastBBox = useRef<BBox | null>(restoredScan?.bbox ?? null);
   const mapViewRef = useRef({ lat: start.lat, lng: start.lng, zoom: start.zoom });
   const candidatesRef = useRef<HTMLDivElement | null>(null);
+  const parcelsCountRef = useRef(0);
+  /** Suppress aggressive /api/parcels calls right after a heavy /api/scan (avoids Render 502). */
+  const parcelCooldownUntilRef = useRef(0);
+  const postScanRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (find || scan.candidates.length) candidatesRef.current?.scrollIntoView({ block: "start" });
@@ -205,22 +229,26 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     [scan, query, zoneFill, zoningWms, centres, activeKey],
   );
 
-  const fetchParcels = useCallback(async (bbox: BBox) => {
+  const fetchParcels = useCallback(async (bbox: BBox, opts?: { soft?: boolean }) => {
+    // soft !== false means automatic refresh; soft === false is an explicit Retry (bypass cooldown).
+    const explicitRetry = opts?.soft === false;
+    if (!explicitRetry && nowMs() < parcelCooldownUntilRef.current) return;
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
     setLoad((s) => ({ ...s, loading: true }));
     try {
-      const body = await fetchApiJson<{
+      const body = await fetchApiJsonWithRetry<{
         parcels: ParcelData[];
         cadastreStatus?: string;
         planningStatus?: string;
         messages?: string[];
         error?: string;
-      }>(`/api/parcels?bbox=${[bbox.west, bbox.south, bbox.east, bbox.north].map((n) => n.toFixed(6)).join(",")}`, { signal: ac.signal });
+      }>(`/api/parcels?bbox=${[bbox.west, bbox.south, bbox.east, bbox.north].map((n) => n.toFixed(6)).join(",")}`, { signal: ac.signal }, { retries: 1, delayMs: 2000 });
       setParcels((prev) => {
         const next = prev.size > 4000 ? new Map<string, ParcelData>() : new Map(prev);
         for (const p of body.parcels as ParcelData[]) next.set(p.externalParcelId, p);
+        parcelsCountRef.current = next.size;
         return next;
       });
       setLoad((s) => ({
@@ -232,7 +260,24 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
       }));
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
-      setLoad((s) => ({ ...s, loading: false, messages: [(err as Error).message] }));
+      const transient = isTransientHttpError(err);
+      // Silent only when usable parcel data already exists — never hide an empty/broken map.
+      if (
+        shouldSilentSoftFailTransient({
+          transient,
+          explicitRetry,
+          usableParcelCount: parcelsCountRef.current,
+        })
+      ) {
+        setLoad((s) => ({ ...s, loading: false }));
+        return;
+      }
+      const base = (err as Error).message;
+      const msg =
+        transient && parcelsCountRef.current === 0
+          ? `${base} Map parcels could not be loaded — retry when the server recovers.`
+          : base;
+      setLoad((s) => ({ ...s, loading: false, messages: [msg] }));
     }
   }, []);
 
@@ -246,9 +291,13 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
       };
       setLoad((s) => ({ ...s, zoom }));
       if (zoom < MIN_PARCEL_ZOOM) return;
+      if (nowMs() < parcelCooldownUntilRef.current) {
+        persistClientState();
+        return;
+      }
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
-        fetchParcels(bbox);
+        void fetchParcels(bbox, { soft: true });
         const pad = 0.02;
         fetchApiJson<{ centres?: NominatedCentre[] }>(
           `/api/lmr/centres?bbox=${[bbox.west - pad, bbox.south - pad, bbox.east + pad, bbox.north + pad].map((n) => n.toFixed(5)).join(",")}`,
@@ -344,7 +393,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     setZoneFill(true);
     setZoningWms(false);
     mapViewRef.current = { ...DEFAULT_START };
-    setFlyTo({ ...DEFAULT_START, nonce: Date.now() });
+    setFlyTo({ ...DEFAULT_START, nonce: nowMs() });
     saveMapState({
       ...DEFAULT_START,
       query: "",
@@ -378,7 +427,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
     setResults(null);
     setQuery(r.label.split(",")[0]);
     const zoom = r.kind === "address" ? 19 : 17;
-    setFlyTo({ lat: r.lat, lng: r.lng, zoom, bbox: r.kind === "address" ? undefined : r.bbox, nonce: Date.now() });
+    setFlyTo({ lat: r.lat, lng: r.lng, zoom, bbox: r.kind === "address" ? undefined : r.bbox, nonce: nowMs() });
   }
 
   async function findAssemblies(p: ParcelData) {
@@ -444,7 +493,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
       } else {
         throw new Error("Search a suburb or zoom the map before scanning");
       }
-      const body = await fetchApiJson<{
+      const body = await fetchApiJsonWithRetry<{
         bbox?: BBox;
         centres?: NominatedCentre[];
         valuedParcels?: ParcelData[];
@@ -457,28 +506,47 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         assembliesGenerated?: number;
         funnel?: { parcelsConsidered: number; parcelsEligible: number; assembliesGenerated: number; candidatesReturned: number };
         error?: string;
-      }>("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) });
+      }>("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) }, { retries: 1, delayMs: 3500 });
+      // Merge scan parcels/valuations first so the map stays useful even if /api/parcels 502s.
+      const valuedParcels = Array.isArray(body.valuedParcels) ? (body.valuedParcels as ParcelData[]) : [];
+      const rankedCandidates = body.candidates ?? [];
+      if (valuedParcels.length) {
+        setParcels((prev) => {
+          const next = new Map(prev);
+          for (const p of valuedParcels) {
+            const existing = next.get(p.externalParcelId);
+            next.set(p.externalParcelId, existing ? { ...existing, valuation: p.valuation ?? existing.valuation } : p);
+          }
+          parcelsCountRef.current = next.size;
+          return next;
+        });
+      }
+      if (Array.isArray(body.centres)) setCentres(body.centres);
+
+      const candidateLotIds = rankedCandidates.flatMap((c) => c.lotIds ?? []);
+      const parcelsSufficient = scanReturnedSufficientParcels({ valuedParcels, candidateLotIds });
+      // Block viewport-driven /api/parcels storms while Render recovers from the scan.
+      parcelCooldownUntilRef.current = nowMs() + POST_SCAN_PARCEL_COOLDOWN_MS;
+
       if (body.bbox) {
+        lastBBox.current = body.bbox;
         setFlyTo({
           lat: (body.bbox.south + body.bbox.north) / 2,
           lng: (body.bbox.west + body.bbox.east) / 2,
           bbox: body.bbox,
           zoom: 16,
-          nonce: Date.now(),
+          nonce: nowMs(),
         });
-        fetchParcels(body.bbox);
-      }
-      if (Array.isArray(body.centres)) setCentres(body.centres);
-      // Merge automatic valuations onto the in-memory parcel map for Analyse handoff.
-      if (Array.isArray(body.valuedParcels)) {
-        setParcels((prev) => {
-          const next = new Map(prev);
-          for (const p of body.valuedParcels as ParcelData[]) {
-            const existing = next.get(p.externalParcelId);
-            next.set(p.externalParcelId, existing ? { ...existing, valuation: p.valuation ?? existing.valuation } : p);
-          }
-          return next;
-        });
+        if (postScanRefreshTimer.current) clearTimeout(postScanRefreshTimer.current);
+        // Prefer scan-returned parcels — only schedule a delayed refresh when map data is incomplete.
+        if (!parcelsSufficient) {
+          const refreshBbox = body.bbox;
+          postScanRefreshTimer.current = setTimeout(() => {
+            // Only clear cooldown after the full delay has elapsed (not at 4s).
+            parcelCooldownUntilRef.current = 0;
+            void fetchParcels(refreshBbox, { soft: true });
+          }, POST_SCAN_PARCEL_REFRESH_DELAY_MS);
+        }
       }
       const next: ScanState = {
         scanning: false,
@@ -502,22 +570,29 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
         bbox: body.bbox ?? bbox,
       };
       setScan(next);
+      setLoad((s) => ({ ...s, messages: [] }));
       persistClientState({ scanOverride: next, activeKey: null });
     } catch (err) {
-      setScan((s) => ({ ...s, scanning: false, stage: "", error: (err as Error).message }));
+      const msg =
+        err instanceof ApiJsonError && isTransientHttpError(err)
+          ? `${err.message} Scan may still complete if you retry in a moment.`
+          : (err as Error).message;
+      setScan((s) => ({ ...s, scanning: false, stage: "", error: msg }));
     } finally {
       clearInterval(stageTimer);
     }
   }
 
+  const assemblyKey = assembly.join("|");
   const assemblyParcels = assembly.map((id) => parcels.get(id)).filter((p): p is ParcelData => !!p);
   const manualMetrics = useMemo(() => {
     if (assemblyParcels.length < 1) return null;
     const adj = buildAdjacency(assemblyParcels.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })));
     const m = computeAssemblyMetrics(assemblyParcels.map(parcelToAnalysisLot), assumptions, adj);
     return { metrics: m, score: scoreAssembly(m, assumptions) };
+    // assemblyParcels is derived from assemblyKey + parcels
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assembly.join("|"), assumptions, parcels]);
+  }, [assemblyKey, assumptions, parcels]);
 
   const visibleScanCandidates = useMemo(() => {
     const hidden = new Set(scan.hiddenKeys);
@@ -655,19 +730,40 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
   }
 
   useEffect(() => {
-    setSaveName(assembly.length ? defaultName(assembly) : "");
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setSaveName(assembly.length ? defaultName(assembly) : "");
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assembly.join("|")]);
+  }, [assemblyKey]);
 
+  // Bootstrap from ?scan= once — never re-trigger when AppShell keeps MapWorkspace mounted across tabs.
+  const bootstrappedScanQueryRef = useRef<string | null>(null);
   useEffect(() => {
     if (!initialScanQuery || initialScanQuery.length < 2) return;
-    // Don't re-scan if we already restored a matching session.
-    if (restoredScan?.query && restoredScan.candidates.length && restoredScan.query.toLowerCase() === initialScanQuery.toLowerCase()) {
-      setQuery(initialScanQuery);
+    if (bootstrappedScanQueryRef.current === initialScanQuery) return;
+    // Live or restored session already covers this query — keep state, do not start a duplicate scan.
+    if (scan.scanning || scan.candidates.length > 0) {
+      bootstrappedScanQueryRef.current = initialScanQuery;
       return;
     }
-    setQuery(initialScanQuery);
-    void scanThisArea(initialScanQuery);
+    if (restoredScan?.query && restoredScan.candidates.length && restoredScan.query.toLowerCase() === initialScanQuery.toLowerCase()) {
+      bootstrappedScanQueryRef.current = initialScanQuery;
+      return;
+    }
+    bootstrappedScanQueryRef.current = initialScanQuery;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setQuery(initialScanQuery);
+      void scanThisArea(initialScanQuery);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialScanQuery]);
 
@@ -694,6 +790,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
           onParcelClick={onParcelClick}
           onBlankClick={onBlankMapClick}
           onViewportChange={onViewportChange}
+          visible={mapVisible}
         />
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[1000] flex items-start gap-3 p-3">
           <form onSubmit={search} className="pointer-events-auto relative w-[380px]">
@@ -765,7 +862,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
             {load.messages.map((m) => (
               <div key={m}>{m}</div>
             ))}
-            <button className="mt-1 text-[11px] font-semibold uppercase underline" onClick={() => lastBBox.current && fetchParcels(lastBBox.current)}>
+            <button className="mt-1 text-[11px] font-semibold uppercase underline" onClick={() => lastBBox.current && void fetchParcels(lastBBox.current, { soft: false })}>
               Retry
             </button>
           </div>
@@ -837,7 +934,7 @@ export function MapWorkspace({ assumptions, initialScanQuery = null }: { assumpt
               onRemove={() => setAssembly((a) => a.filter((x) => x !== selected.externalParcelId))}
               onFind={() => findAssemblies(selected)}
               finding={finding}
-              onRetry={() => lastBBox.current && fetchParcels(lastBBox.current)}
+              onRetry={() => lastBBox.current && void fetchParcels(lastBBox.current, { soft: false })}
               centres={centres}
             />
           ) : (

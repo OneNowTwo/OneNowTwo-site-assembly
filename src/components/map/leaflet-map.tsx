@@ -24,6 +24,8 @@ export interface MapProps {
   /** Polygons outlined without interaction (e.g. a saved opportunity). */
   fitToParcels?: boolean;
   interactive?: boolean;
+  /** When the persistent shell shows the map again, invalidate Leaflet size. */
+  visible?: boolean;
 }
 
 const ZONING_WMS =
@@ -76,6 +78,18 @@ function FlyTo({ target }: { target: MapProps["flyTo"] }) {
       );
     } else map.flyTo([target.lat, target.lng], target.zoom ?? 17, { duration: 0.8 });
   }, [target, map]);
+  return null;
+}
+
+function InvalidateOnShow({ visible }: { visible?: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (visible === false) return;
+    const t = window.setTimeout(() => {
+      map.invalidateSize({ animate: false });
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, [visible, map]);
   return null;
 }
 
@@ -170,6 +184,7 @@ export default function LeafletMap(props: MapProps) {
       {props.zoningWms && <WMSTileLayer url={ZONING_WMS} params={{ layers: "2", format: "image/png", transparent: true }} opacity={0.45} maxZoom={20} />}
       <ScaleControl position="bottomleft" imperial={false} />
       <ViewportEvents onViewportChange={props.onViewportChange} onBlankClick={props.onBlankClick} />
+      <InvalidateOnShow visible={props.visible} />
       <FlyTo target={props.flyTo} />
       <ParcelLayer {...props} />
     </MapContainer>

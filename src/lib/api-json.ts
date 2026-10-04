@@ -66,3 +66,31 @@ export async function fetchApiJson<T = unknown>(url: string, init?: RequestInit)
   }
   return body as T;
 }
+
+/** Gateway / cold-start failures that are safe to retry or soft-fail. */
+export function isTransientHttpError(err: unknown): boolean {
+  if (err instanceof ApiJsonError) return err.status === 502 || err.status === 503 || err.status === 504;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /HTTP 502|HTTP 503|HTTP 504|temporarily unavailable|Server temporarily unavailable/i.test(msg);
+}
+
+/** One delayed retry for transient gateway errors (e.g. Render 502 after a heavy scan). */
+export async function fetchApiJsonWithRetry<T = unknown>(
+  url: string,
+  init?: RequestInit,
+  opts?: { retries?: number; delayMs?: number },
+): Promise<T> {
+  const retries = opts?.retries ?? 1;
+  const delayMs = opts?.delayMs ?? 2500;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchApiJson<T>(url, init);
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientHttpError(err) || attempt >= retries) throw err;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}

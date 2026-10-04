@@ -1,10 +1,14 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
+import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { NavLinks } from "@/components/nav-links";
+import { AppShell } from "@/components/map/app-shell";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const session = await getSession();
   if (!session) redirect("/login");
+  const assumptions = await getGlobalAssumptions();
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-11 shrink-0 items-center gap-6 border-b border-[#0b2f49] bg-brand px-4 text-white">
@@ -19,7 +23,11 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
           </form>
         </div>
       </header>
-      <div className="min-h-0 flex-1">{children}</div>
+      <div className="min-h-0 flex-1">
+        <Suspense fallback={<div className="h-full bg-canvas">{children}</div>}>
+          <AppShell assumptions={assumptions}>{children}</AppShell>
+        </Suspense>
+      </div>
     </div>
   );
 }

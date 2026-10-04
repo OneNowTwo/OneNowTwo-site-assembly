@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { ApiJsonError, parseApiJsonText } from "@/lib/api-json";
+import { describe, expect, it, vi } from "vitest";
+import { ApiJsonError, fetchApiJsonWithRetry, isTransientHttpError, parseApiJsonText } from "@/lib/api-json";
 
 describe("parseApiJsonText", () => {
   it("parses normal JSON", () => {
@@ -32,5 +32,35 @@ describe("parseApiJsonText", () => {
 
   it("rejects empty bodies", () => {
     expect(() => parseApiJsonText("   ", 200, "application/json")).toThrow(/Empty/);
+  });
+});
+
+describe("transient HTTP helpers", () => {
+  it("detects gateway failures", () => {
+    expect(isTransientHttpError(new ApiJsonError("Server temporarily unavailable — retry in a moment. (HTTP 502)", 502, null))).toBe(true);
+    expect(isTransientHttpError(new ApiJsonError("nope", 400, null))).toBe(false);
+  });
+
+  it("retries once on 502 then succeeds", async () => {
+    const html = "<!DOCTYPE html><html><body>Bad Gateway</body></html>";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        headers: { get: () => "text/html" },
+        text: async () => html,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/json" },
+        text: async () => '{"ok":true}',
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const body = await fetchApiJsonWithRetry<{ ok: boolean }>("/api/parcels", undefined, { retries: 1, delayMs: 1 });
+    expect(body).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
   });
 });
