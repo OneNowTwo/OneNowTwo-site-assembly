@@ -103,6 +103,39 @@ describe("resolvePlanning → calculateOpportunity single-source coherence", () 
     expect(analysis.calculation.effectiveHeightM).not.toBe(17.5);
   });
 
+  it("de-authorises stale SCAN_MODELLED 1.5/17.5 when persisted proximity is INNER", () => {
+    const lots = innerLmrLots();
+    const stale = parseOpportunityInputs({
+      fsrOverride: 1.5,
+      fsrOverrideKind: "SCAN_MODELLED",
+      fsrOverrideCertainty: "REQUIRES_PLANNING_CONFIRMATION",
+      heightOverrideM: 17.5,
+      pathwaySnapshot: {
+        lepFsr: null,
+        statePathwayFsr: 2.2,
+        statePathwayName: "Low & Mid-Rise Housing (Housing SEPP)",
+        modelledFsr: 1.5,
+        modelledHeightM: 17.5,
+        certainty: "REQUIRES_PLANNING_CONFIRMATION",
+        lmrCentre: "Manly Vale",
+        nearestDistanceM: 189,
+        furthestDistanceM: 208,
+        proximityScreen: "PASS",
+        proximityLabel: "PASS — ESTIMATED",
+      },
+    });
+    const analysis = analyseOpportunity(lots, A, stale);
+    expect(analysis.planningSnapshot.effectiveControls.proximityBand).toBe("INNER_0_400");
+    expect(analysis.planningSnapshot.effectiveControls.stateFsr).toBe(2.2);
+    expect(analysis.planningSnapshot.effectiveControls.stateHeightM).toBe(22);
+    expect(analysis.planningSnapshot.effectiveControls.effectiveFsr).toBe(2.2);
+    expect(analysis.planningSnapshot.effectiveControls.effectiveHeightM).toBe(22);
+    expect(analysis.calculation.effectiveFsr).toBe(2.2);
+    expect(analysis.calculation.effectiveHeightM).toBe(22);
+    expect(analysis.base.yield.theoreticalGfa).toBeCloseTo(1382 * 2.2, 1);
+    expect(analysis.site.fsr).toBe(2.2);
+  });
+
   it("does not ask for USER FSR when State pathway supplies modelled FSR", () => {
     const lots = innerLmrLots();
     const bare = analyseOpportunity(lots, A, parseOpportunityInputs({}));

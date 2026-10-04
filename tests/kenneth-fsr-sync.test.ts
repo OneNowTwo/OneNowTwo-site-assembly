@@ -29,13 +29,16 @@ describe("Kenneth Road effective FSR sync", () => {
     const siteArea = lots.reduce((s, l) => s + l.areaSqm, 0);
     expect(siteArea).toBe(1382);
 
-    const stale = analyseOpportunity(
+    // Stale SCAN_MODELLED 1.5 with INNER proximity must not drive capacity — resolvePlanning
+    // recomputes from persisted proximity + zone (same LMR standards, no address hardcoding).
+    const staleInputsInner = analyseOpportunity(
       lots,
       A,
       parseOpportunityInputs({
         fsrOverride: 1.5,
         fsrOverrideKind: "SCAN_MODELLED",
         fsrOverrideCertainty: "REQUIRES_PLANNING_CONFIRMATION",
+        heightOverrideM: 17.5,
         pathwaySnapshot: {
           lepFsr: null,
           statePathwayFsr: 1.5,
@@ -50,8 +53,9 @@ describe("Kenneth Road effective FSR sync", () => {
         },
       }),
     );
-    expect(stale.site.fsr).toBe(1.5);
-    expect(stale.base.yield.theoreticalGfa).toBeCloseTo(1382 * 1.5, 0);
+    expect(staleInputsInner.site.fsr).toBe(2.2);
+    expect(staleInputsInner.base.yield.theoreticalGfa).toBeCloseTo(1382 * 2.2, 1);
+    expect(staleInputsInner.planningSnapshot.effectiveControls.effectiveHeightM).toBe(22);
 
     const current = analyseOpportunity(
       lots,
