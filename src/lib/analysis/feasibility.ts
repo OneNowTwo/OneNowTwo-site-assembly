@@ -67,6 +67,9 @@ export interface GrvCrossCheckWarning {
   unitMixImpliedRatePerSqm: number;
   crossCheckRatePerSqm: number;
   differencePct: number;
+  /** Area basis used for the like-for-like comparison. */
+  areaBasis: "INTERNAL" | "SALEABLE";
+  areaSqm: number;
   status: "EXIT_VALUE_VALIDATION_REQUIRED";
 }
 
@@ -76,7 +79,11 @@ export interface FeasibilityResult {
   /** Alternative GRV if the other revenue method were used (cross-check). */
   crossCheckGrv: number;
   crossCheckLabel: string;
+  /** For UNIT_MIX: internal area used by the $/sqm sense-check. */
+  crossCheckAreaSqm: number | null;
+  crossCheckAreaBasis: "INTERNAL" | "SALEABLE" | null;
   blendedPricePerSqm: number | null;
+  blendedPricePerInternalSqm: number | null;
   unitMixTotals: ReturnType<typeof computeUnitMix> | null;
   constructionCost: number;
   costLines: CostLine[];
@@ -179,23 +186,32 @@ function costBreakdown(i: FeasibilityInputs) {
   let revenueFormula: string;
   let crossCheckGrv: number;
   let crossCheckLabel: string;
+  let crossCheckAreaSqm: number | null = null;
+  let crossCheckAreaBasis: "INTERNAL" | "SALEABLE" | null = null;
 
   if (a.revenueMode === "UNIT_MIX" && i.unitMix && i.unitMix.length) {
     unitMixTotals = computeUnitMix(i.unitMix);
     salesRevenue = unitMixTotals.totalRevenue;
     revenueFormula = `Unit mix (${unitMixTotals.totalUnits} dwellings)`;
-    const perSqm = displaySaleable * displayRate;
-    crossCheckGrv = perSqm + a.otherRevenue;
-    crossCheckLabel = `${displaySaleable.toLocaleString("en-AU")} sqm × $${displayRate.toLocaleString("en-AU")}/sqm + other`;
+    // $15,500/sqm-style benchmarks are internal floor-area rates — not saleable (internal+balcony).
+    const internalArea = Math.round(unitMixTotals.totalInternalArea * 10) / 10;
+    crossCheckAreaSqm = internalArea;
+    crossCheckAreaBasis = "INTERNAL";
+    crossCheckGrv = internalArea * displayRate + a.otherRevenue;
+    crossCheckLabel = `${internalArea.toLocaleString("en-AU")} internal sqm × $${displayRate.toLocaleString("en-AU")}/internal sqm + other`;
   } else if (a.revenueMode === "PER_DWELLING") {
     salesRevenue = i.dwellings * a.avgDwellingPrice;
     revenueFormula = `${i.dwellings} dwellings × $${a.avgDwellingPrice.toLocaleString("en-AU")}`;
+    crossCheckAreaSqm = displaySaleable;
+    crossCheckAreaBasis = "SALEABLE";
     crossCheckGrv = displaySaleable * displayRate + a.otherRevenue;
     crossCheckLabel = `${displaySaleable.toLocaleString("en-AU")} sqm × $${displayRate.toLocaleString("en-AU")}/sqm + other`;
   } else {
     // PER_SQM — use displayed precision so the table reconciles exactly
     salesRevenue = displaySaleable * displayRate;
     revenueFormula = `${displaySaleable.toLocaleString("en-AU")} sqm × $${displayRate.toLocaleString("en-AU")}/sqm`;
+    crossCheckAreaSqm = displaySaleable;
+    crossCheckAreaBasis = "SALEABLE";
     crossCheckGrv = i.dwellings * a.avgDwellingPrice + a.otherRevenue;
     crossCheckLabel = `${i.dwellings} dwellings × $${a.avgDwellingPrice.toLocaleString("en-AU")} + other`;
   }
@@ -236,6 +252,8 @@ function costBreakdown(i: FeasibilityInputs) {
       : displaySaleable > 0
         ? salesRevenue / displaySaleable
         : null;
+  const blendedPricePerInternalSqm =
+    a.revenueMode === "UNIT_MIX" ? (unitMixTotals?.blendedPricePerInternalSqm ?? null) : null;
 
   return {
     salesRevenue,
@@ -247,7 +265,10 @@ function costBreakdown(i: FeasibilityInputs) {
     revenueFormula,
     crossCheckGrv,
     crossCheckLabel,
+    crossCheckAreaSqm,
+    crossCheckAreaBasis,
     blendedPricePerSqm,
+    blendedPricePerInternalSqm,
     display: { saleableArea: displaySaleable, salePricePerSqm: displayRate, gfa: displayGfa },
   };
 }
@@ -285,27 +306,44 @@ export function materialCostInputGaps(a: FeasibilityInputs["a"]): CostInputGap[]
 /** Material unit-mix vs $/sqm cross-check divergence (does not alter GRV). */
 export function grvCrossCheckDiscrepancy(
   grv: number,
-  saleableArea: number,
+  areaSqm: number,
   crossCheckRatePerSqm: number,
-  opts?: { materialPct?: number },
+  opts?: { materialPct?: number; areaBasis?: "INTERNAL" | "SALEABLE" },
 ): GrvCrossCheckWarning | null {
   const materialPct = opts?.materialPct ?? 0.1;
-  if (!(saleableArea > 0) || !(crossCheckRatePerSqm > 0) || !(grv > 0)) return null;
-  const unitMixImpliedRatePerSqm = grv / saleableArea;
+  const areaBasis = opts?.areaBasis ?? "INTERNAL";
+  if (!(areaSqm > 0) || !(crossCheckRatePerSqm > 0) || !(grv > 0)) return null;
+  const unitMixImpliedRatePerSqm = grv / areaSqm;
   const differencePct = (unitMixImpliedRatePerSqm - crossCheckRatePerSqm) / crossCheckRatePerSqm;
   if (Math.abs(differencePct) < materialPct) return null;
   return {
     unitMixImpliedRatePerSqm,
     crossCheckRatePerSqm,
     differencePct,
+    areaBasis,
+    areaSqm,
     status: "EXIT_VALUE_VALIDATION_REQUIRED",
   };
 }
 
 export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
   const a = i.a;
-  const { salesRevenue, grv, construction, lines, nonLandCosts, unitMixTotals, revenueFormula, crossCheckGrv, crossCheckLabel, blendedPricePerSqm, display } =
-    costBreakdown(i);
+  const {
+    salesRevenue,
+    grv,
+    construction,
+    lines,
+    nonLandCosts,
+    unitMixTotals,
+    revenueFormula,
+    crossCheckGrv,
+    crossCheckLabel,
+    crossCheckAreaSqm,
+    crossCheckAreaBasis,
+    blendedPricePerSqm,
+    blendedPricePerInternalSqm,
+    display,
+  } = costBreakdown(i);
   const k = 1 + a.acquisitionCostPct + a.landFinancePct;
   const allowableTotalCost = a.targetBasis === "REVENUE" ? grv * (1 - a.targetMarginOnRevenue) : grv / (1 + a.targetMarginOnCost);
   const residualLandValue = allowableTotalCost - nonLandCosts;
@@ -319,8 +357,8 @@ export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
   const target = a.targetBasis === "REVENUE" ? a.targetMarginOnRevenue : a.targetMarginOnCost;
   const costInputGaps = materialCostInputGaps(a);
   const grvCrossCheckWarning =
-    a.revenueMode === "UNIT_MIX"
-      ? grvCrossCheckDiscrepancy(grv, display.saleableArea, display.salePricePerSqm)
+    a.revenueMode === "UNIT_MIX" && crossCheckAreaSqm != null && crossCheckAreaBasis
+      ? grvCrossCheckDiscrepancy(grv, crossCheckAreaSqm, display.salePricePerSqm, { areaBasis: crossCheckAreaBasis })
       : null;
 
   const steps: FeasibilityResult["steps"] = [
@@ -349,7 +387,10 @@ export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
     salesRevenue,
     crossCheckGrv,
     crossCheckLabel,
+    crossCheckAreaSqm,
+    crossCheckAreaBasis,
     blendedPricePerSqm,
+    blendedPricePerInternalSqm,
     unitMixTotals,
     constructionCost: construction,
     costLines: lines,

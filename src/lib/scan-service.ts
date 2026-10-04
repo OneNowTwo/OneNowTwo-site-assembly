@@ -4,7 +4,8 @@ import { fetchNominatedCentres, bboxAround, type NominatedCentre } from "@/lib/d
 import { getParcelsForBBox } from "@/lib/parcel-service";
 import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
-import { buildLocalExitBenchmarksFromNswSales } from "@/lib/analysis/exit-benchmarks";
+import { resolveAreaExitBenchmarks } from "@/lib/analysis/exit-benchmark-provider";
+import { domainSuburbExitBenchmarkProvider } from "@/lib/data-sources/domain-suburb-exit-benchmarks";
 import { valueParcels, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
 import { StageTimer } from "@/lib/perf/timing";
 import { finaliseScanMessages } from "@/lib/scan-messages";
@@ -208,9 +209,24 @@ export async function scanArea(input: {
     const byId = new Map(batch.parcels.map((p) => [p.externalParcelId, p]));
     valuedParcels = loaded.parcels.map((p) => byId.get(p.externalParcelId) ?? p);
 
-    // Same prefetched sales → one local exit benchmark set for all shortlisted assemblies.
-    const exitBenchmarks = buildLocalExitBenchmarksFromNswSales(batch.salesPool);
-    if (exitBenchmarks.overallSampleSize > 0) {
+    // Bedroom-specific suburb medians (Domain) win over NSW registered-sale fallbacks.
+    const suburbHint =
+      input.suburbHint ??
+      toValue.find((p) => p.suburb)?.suburb ??
+      loaded.parcels.find((p) => p.suburb)?.suburb ??
+      null;
+    const centroidLng = toValue.length ? toValue.reduce((s, p) => s + p.centroid[0], 0) / toValue.length : undefined;
+    const centroidLat = toValue.length ? toValue.reduce((s, p) => s + p.centroid[1], 0) / toValue.length : undefined;
+    const exitBenchmarks = await timer.time("exit_benchmarks", () =>
+      resolveAreaExitBenchmarks({
+        suburb: suburbHint,
+        lng: centroidLng,
+        lat: centroidLat,
+        nswSales: batch.salesPool,
+        bedroomProviders: [domainSuburbExitBenchmarkProvider],
+      }),
+    );
+    if (exitBenchmarks.overallSampleSize > 0 || Object.keys(exitBenchmarks.byUnitType).length) {
       progress.push("Applying local exit benchmarks");
     }
 

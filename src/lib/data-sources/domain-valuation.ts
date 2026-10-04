@@ -22,7 +22,8 @@ import type { PropertyValuationResult, PropertyValuationProvider } from "./provi
 const DOMAIN_AUTH_URL = process.env.DOMAIN_AUTH_URL ?? "https://auth.domain.com.au/v1/connect/token";
 const DOMAIN_API_BASE = process.env.DOMAIN_API_BASE ?? "https://api.domain.com.au";
 const DOMAIN_SCOPES =
-  process.env.DOMAIN_SCOPES ?? "api_properties_read api_addresslocators_read api_listings_read api_locations_read";
+  process.env.DOMAIN_SCOPES ??
+  "api_properties_read api_addresslocators_read api_listings_read api_locations_read api_suburbperformance_read";
 
 let cachedToken: { accessToken: string; expiresAt: number } | null = null;
 
@@ -55,7 +56,7 @@ export function domainCredentialStatus(): {
   };
 }
 
-async function getAccessToken(): Promise<{ token: string | null; error?: string }> {
+export async function getDomainAccessToken(): Promise<{ token: string | null; error?: string }> {
   if (!domainValuationConfigured()) return { token: null, error: "DOMAIN_CLIENT_ID / DOMAIN_CLIENT_SECRET not set" };
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return { token: cachedToken.accessToken };
 
@@ -137,7 +138,7 @@ export class DomainValuationProvider implements PropertyValuationProvider {
   readonly name = "Domain Price Estimate API";
 
   async resolvePropertyId(address: string, suburb?: string | null, token?: string): Promise<{ id: string | null; note?: string }> {
-    const auth = token ? { token } : await getAccessToken();
+    const auth = token ? { token } : await getDomainAccessToken();
     if (!auth.token) return { id: null, note: auth.error ?? "Domain auth failed" };
     const terms = buildSearchTerms(address, suburb);
     if (!terms) return { id: null, note: "No address to resolve" };
@@ -208,7 +209,7 @@ export class DomainValuationProvider implements PropertyValuationProvider {
       };
     }
 
-    const auth = await getAccessToken();
+    const auth = await getDomainAccessToken();
     if (!auth.token) {
       return {
         mid: null,

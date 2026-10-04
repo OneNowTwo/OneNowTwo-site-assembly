@@ -2,6 +2,7 @@
 
 import { useOpportunity } from "./context";
 import { autoGenerateUnitMix, computeUnitMix, DEFAULT_MIX_SHARES, DEFAULT_UNIT_MIX_TEMPLATE, type UnitMixRow } from "@/lib/analysis/unit-mix";
+import { exitPriceSourceLabel } from "@/lib/analysis/exit-benchmarks";
 import { fsr, money, num, pct, sqm } from "@/lib/format";
 import { Badge, Button, Field, NumberField, Panel, Select, SourceTag, Stat } from "@/components/ui";
 import type { Assumptions } from "@/lib/analysis/assumptions";
@@ -14,14 +15,22 @@ export function YieldTab() {
   const tag = (k: keyof Assumptions) => (ov[k] != null ? <SourceTag kind="ASSUMPTION" /> : <Badge>Global default</Badge>);
   const mix = analysis.unitMix.length ? analysis.unitMix : DEFAULT_UNIT_MIX_TEMPLATE;
   const totals = computeUnitMix(mix);
+  const exitSources = dto.inputs.exitPriceSources ?? {};
 
-  function setMix(next: UnitMixRow[]) {
-    updateInputs({ unitMix: next });
+  function setMix(next: UnitMixRow[], sources?: Record<string, string>) {
+    updateInputs({
+      unitMix: next,
+      ...(sources ? { exitPriceSources: { ...exitSources, ...sources } } : {}),
+    });
   }
 
   function updateRow(i: number, patch: Partial<UnitMixRow>) {
     const next = mix.map((r, idx) => (idx === i ? { ...r, ...patch } : r));
-    setMix(next);
+    const sources =
+      patch.salePricePerUnit != null
+        ? { [mix[i]!.name]: "USER_OVERRIDE" }
+        : undefined;
+    setMix(next, sources);
   }
 
   return (
@@ -130,22 +139,29 @@ export function YieldTab() {
                 tag={
                   site.heightSource === "OVERRIDE" ? (
                     <SourceTag kind="ASSUMPTION" />
-                  ) : analysis.planningSnapshot.effectiveControls.fsrSource === "STATE_PATHWAY" ? (
-                    <Badge tone="estimate">State pathway / system modelled</Badge>
-                  ) : (
+                  ) : site.heightSource === "STATE_PATHWAY" ? (
+                    <Badge tone="estimate">STATE PATHWAY / SYSTEM MODELLED</Badge>
+                  ) : site.heightSource === "OFFICIAL" ? (
                     <SourceTag kind="OFFICIAL" />
+                  ) : (
+                    <Badge>System estimate</Badge>
                   )
                 }
                 hint={`PlanningSnapshot effective: ${analysis.calculation.effectiveHeightM ?? "—"} m · LEP: ${analysis.planningSnapshot.effectiveControls.baseHeightM ?? "—"} m`}
               >
                 <NumberField
                   value={dto.inputs.heightOverrideM ?? analysis.calculation.effectiveHeightM}
-                  onCommit={(v) =>
+                  onCommit={(v) => {
+                    const effective = analysis.calculation.effectiveHeightM;
                     updateInputs({
                       heightOverrideM:
-                        v && v !== analysis.planningSnapshot.effectiveControls.baseHeightM ? v : null,
-                    })
-                  }
+                        v != null && effective != null && Math.abs(v - effective) > 0.05
+                          ? v
+                          : v != null && effective == null
+                            ? v
+                            : null,
+                    });
+                  }}
                 />
               </Field>
               <Field label="Site coverage" tag={tag("siteCoverage")}>
@@ -214,7 +230,9 @@ export function YieldTab() {
             <Button
               onClick={() => {
                 const probeSaleable = y.theoreticalGfa * a.planningAdjustment * a.efficiency;
-                setMix(autoGenerateUnitMix(probeSaleable, DEFAULT_UNIT_MIX_TEMPLATE, dto.inputs.mixShares ?? DEFAULT_MIX_SHARES));
+                const next = autoGenerateUnitMix(probeSaleable, DEFAULT_UNIT_MIX_TEMPLATE, dto.inputs.mixShares ?? DEFAULT_MIX_SHARES);
+                const cleared = Object.fromEntries(next.map((r) => [r.name, "TEMPLATE_FALLBACK"]));
+                setMix(next, cleared);
               }}
             >
               Auto-generate indicative mix
@@ -232,7 +250,8 @@ export function YieldTab() {
               <th className="px-2 py-2 text-right">External</th>
               <th className="px-2 py-2 text-right">Saleable</th>
               <th className="px-2 py-2 text-right">Sale price / unit</th>
-              <th className="px-2 py-2 text-right">$/sqm</th>
+              <th className="px-2 py-2 text-left">Source</th>
+              <th className="px-2 py-2 text-right">$/sqm saleable</th>
               <th className="px-2 py-2 text-right">Revenue</th>
             </tr>
           </thead>
@@ -255,6 +274,9 @@ export function YieldTab() {
                 <td className="px-2 py-1.5">
                   <NumberField kind="money" className="ml-auto h-7 w-28" value={r.salePricePerUnit} onCommit={(v) => updateRow(i, { salePricePerUnit: v ?? 0 })} />
                 </td>
+                <td className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted">
+                  {r.count > 0 ? exitPriceSourceLabel(exitSources[r.name]) : "—"}
+                </td>
                 <td className="px-2 py-1.5 text-right text-muted">{r.pricePerSqm != null ? money(r.pricePerSqm) : "—"}</td>
                 <td className="px-2 py-1.5 text-right font-semibold">{money(r.revenue, { compact: true })}</td>
               </tr>
@@ -262,17 +284,20 @@ export function YieldTab() {
             <tr className="border-t-2 border-ink/20 bg-canvas/60">
               <td className="px-3 py-2 font-semibold">Total</td>
               <td className="px-2 py-2 text-right font-semibold">{num(totals.totalUnits)}</td>
-              <td colSpan={2} />
+              <td className="px-2 py-2 text-right font-semibold">{sqm(totals.totalInternalArea)}</td>
+              <td className="px-2 py-2 text-[10px] text-muted">internal</td>
               <td className="px-2 py-2 text-right font-semibold">{sqm(totals.totalSaleableArea)}</td>
               <td className="px-2 py-2 text-right text-muted">{totals.averageSalePrice != null ? money(totals.averageSalePrice, { compact: true }) : "—"}</td>
-              <td className="px-2 py-2 text-right font-semibold">{totals.blendedPricePerSqm != null ? money(totals.blendedPricePerSqm) : "—"}</td>
+              <td />
+              <td className="px-2 py-2 text-right font-semibold">{totals.blendedPricePerInternalSqm != null ? money(totals.blendedPricePerInternalSqm) : "—"}</td>
               <td className="px-2 py-2 text-right font-semibold text-brand">{money(totals.totalRevenue, { compact: true })}</td>
             </tr>
           </tbody>
         </table>
         <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[11px] text-muted">
           <span>
-            Blended $/sqm = unit-mix GRV ÷ saleable area (sanity check vs exit comps). Revenue method:{" "}
+            Internal {sqm(totals.totalInternalArea)} · Saleable {sqm(totals.totalSaleableArea)} · Blended{" "}
+            {totals.blendedPricePerInternalSqm != null ? `${money(totals.blendedPricePerInternalSqm)}/internal sqm` : "—"}. Revenue method:{" "}
             <Select
               value={a.revenueMode}
               onChange={(v) => updateOverrides({ revenueMode: v as Assumptions["revenueMode"] })}
