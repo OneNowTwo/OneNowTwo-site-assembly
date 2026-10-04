@@ -82,6 +82,28 @@ export function estimateWholePropertyValue(members: CadastralLotRef[]): {
   const zone = members.find((m) => m.zone)?.zone ?? null;
   const isStrata = members.some((m) => m.isStrata);
   const comps = poolComps(members);
+  const methods = members.map((m) => m.marketValueMethod ?? "");
+  const mids = members.map((m) => m.marketValue).filter((v): v is number => v != null && v > 0);
+
+  // A whole-property result may be stamped onto each cadastral row for storage.
+  // Consume that single estimate before attempting to rebuild it from the truncated
+  // per-lot comp payload.
+  if (
+    mids.length === members.length &&
+    (methods.some((method) => method.includes("property_level")) || mids.every((value) => value === mids[0]))
+  ) {
+    const lows = members.map((m) => m.marketValueLow).filter((v): v is number => v != null && v > 0);
+    const highs = members.map((m) => m.marketValueHigh).filter((v): v is number => v != null && v > 0);
+    return {
+      mid: mids[0]!,
+      low: lows[0] ?? null,
+      high: highs[0] ?? null,
+      valueBasis: "PROPERTY_LEVEL_AVM",
+      note: `${members.length} cadastral lots share one address — one stored whole-property estimate applied once.`,
+      sourceLabel: members[0]?.marketValueSource ?? "Property-level market estimate (shared address)",
+      numberOfComps: 0,
+    };
+  }
 
   if (comps.length >= 3 && areaSqm > 0) {
     const built = estimatePropertyLevelValue({
@@ -106,37 +128,6 @@ export function estimateWholePropertyValue(members: CadastralLotRef[]): {
         numberOfComps: built.numberOfComps,
       };
     }
-  }
-
-  // Property-level AVM already stamped equally on each lot (from valueParcels).
-  const methods = members.map((m) => m.marketValueMethod ?? "");
-  const mids = members.map((m) => m.marketValue).filter((v): v is number => v != null && v > 0);
-  if (mids.length && methods.some((m) => m.includes("property_level"))) {
-    const mid = mids[0]!;
-    const lows = members.map((m) => m.marketValueLow).filter((v): v is number => v != null && v > 0);
-    const highs = members.map((m) => m.marketValueHigh).filter((v): v is number => v != null && v > 0);
-    return {
-      mid,
-      low: lows[0] ?? null,
-      high: highs[0] ?? null,
-      valueBasis: "PROPERTY_LEVEL_AVM",
-      note: `${members.length} cadastral lots share one address — whole-property estimate applied.`,
-      sourceLabel: "Property-level market estimate (shared address)",
-      numberOfComps: 0,
-    };
-  }
-
-  // Identical mids already represent a property-level stamp.
-  if (mids.length >= 2 && mids.every((v) => v === mids[0])) {
-    return {
-      mid: mids[0]!,
-      low: members[0]?.marketValueLow ?? null,
-      high: members[0]?.marketValueHigh ?? null,
-      valueBasis: "PROPERTY_LEVEL_AVM",
-      note: `${members.length} cadastral lots share one address — single property estimate.`,
-      sourceLabel: members[0]?.marketValueSource ?? "Property-level estimate",
-      numberOfComps: 0,
-    };
   }
 
   return {
