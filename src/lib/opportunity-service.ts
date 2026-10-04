@@ -19,11 +19,9 @@ import type { ComparableSaleDTO, LotDTO, OpportunityDTO, UnitTypeDTO } from "@/l
 import { toParcelValuation, valueParcels } from "@/lib/data-sources/valuation-service";
 import type { MarketValueSource } from "@/generated/prisma/client";
 import { queryNswUrbanSalesNear } from "@/lib/data-sources/nsw-property-sales";
-import {
-  applyExitBenchmarksToUnitMix,
-  buildLocalExitBenchmarksFromNswSales,
-  isTemplateDefaultSalePrice,
-} from "@/lib/analysis/exit-benchmarks";
+import { applyExitBenchmarksToUnitMix } from "@/lib/analysis/exit-benchmarks";
+import { resolveAreaExitBenchmarks } from "@/lib/analysis/exit-benchmark-provider";
+import { domainSuburbExitBenchmarkProvider } from "@/lib/data-sources/domain-suburb-exit-benchmarks";
 import { autoGenerateUnitMix, DEFAULT_MIX_SHARES } from "@/lib/analysis/unit-mix";
 
 export const opportunityInclude = {
@@ -241,7 +239,7 @@ export async function loadOpportunity(id: string) {
   return prisma.opportunity.findUnique({ where: { id }, include: opportunityInclude });
 }
 
-/** Apply local strata/unit sale medians to template-default unit prices (not user overrides). */
+/** Apply best available local exit benchmarks (bedroom medians → NSW strata → unit median). */
 async function enrichUnitMixWithLocalExitBenchmarks(
   opp: OpportunityWithRelations,
   inputs: OpportunityInputs,
@@ -250,8 +248,6 @@ async function enrichUnitMixWithLocalExitBenchmarks(
   const mix = inputs.unitMix.length
     ? inputs.unitMix
     : autoGenerateUnitMix(Math.max(saleableAreaHint, 1), defaultUnitMix(), inputs.mixShares ?? DEFAULT_MIX_SHARES);
-  const needsBenchmark = mix.some((r) => r.count > 0 && isTemplateDefaultSalePrice(r));
-  if (!needsBenchmark) return { ...inputs, unitMix: mix };
 
   const included = opp.parcels.filter((p) => p.included);
   if (!included.length) return { ...inputs, unitMix: mix };
@@ -261,9 +257,17 @@ async function enrichUnitMixWithLocalExitBenchmarks(
   try {
     // Same radius/method as scan-area sales reuse so Analyse does not transform scan economics.
     const sales = await queryNswUrbanSalesNear({ lng, lat, radiusM: 1500, suburb, maxRecords: 200 });
-    const benchmarks = buildLocalExitBenchmarksFromNswSales(sales);
-    const applied = applyExitBenchmarksToUnitMix(mix, benchmarks);
-    if (!applied.applied) return { ...inputs, unitMix: mix, exitPriceSources: inputs.exitPriceSources };
+    const benchmarks = await resolveAreaExitBenchmarks({
+      suburb,
+      lng,
+      lat,
+      nswSales: sales,
+      bedroomProviders: [domainSuburbExitBenchmarkProvider],
+    });
+    const applied = applyExitBenchmarksToUnitMix(mix, benchmarks, inputs.exitPriceSources);
+    if (!applied.applied) {
+      return { ...inputs, unitMix: mix, exitPriceSources: { ...inputs.exitPriceSources, ...applied.sources } };
+    }
     return {
       ...inputs,
       unitMix: applied.rows,

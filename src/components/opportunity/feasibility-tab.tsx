@@ -56,15 +56,31 @@ export function FeasibilityTab() {
           </p>
         </div>
       )}
-      {f.grvCrossCheckWarning && (
+      {a.revenueMode === "UNIT_MIX" && (
         <div className="rounded-[3px] border border-line bg-canvas p-3 text-[12.5px] text-muted">
-          <div className="font-medium text-ink">$/sqm cross-check</div>
-          <p className="mt-1 num">
-            Unit mix implied {money(f.grvCrossCheckWarning.unitMixImpliedRatePerSqm)}/sqm vs cross-check{" "}
-            {money(f.grvCrossCheckWarning.crossCheckRatePerSqm)}/sqm (
-            {f.grvCrossCheckWarning.differencePct >= 0 ? "+" : ""}
-            {(f.grvCrossCheckWarning.differencePct * 100).toFixed(1)}%). Sense-check only — unit-mix GRV unchanged.
+          <div className="font-medium text-ink">GRV sense-check</div>
+          <p className="mt-1">
+            Unit-mix GRV {money(f.grv, { compact: true })} based on local unit-sale benchmarks.
+            {f.unitMixTotals ? (
+              <>
+                {" "}
+                Internal area {sqm(f.unitMixTotals.totalInternalArea)} · Saleable {sqm(f.unitMixTotals.totalSaleableArea)}.
+                {f.blendedPricePerInternalSqm != null ? <> Equivalent blended {money(f.blendedPricePerInternalSqm)}/internal sqm.</> : null}
+              </>
+            ) : null}
           </p>
+          <p className="mt-1 num">
+            Market $/sqm cross-check: {money(a.salePricePerSqm)}/internal sqm → implied GRV{" "}
+            {money(f.crossCheckGrv, { compact: true })}
+            {f.crossCheckAreaSqm != null ? ` (${sqm(f.crossCheckAreaSqm)} internal)` : ""}. Sense-check only — unit-mix GRV remains primary.
+          </p>
+          {f.grvCrossCheckWarning && (
+            <p className="mt-1 num">
+              Divergence {f.grvCrossCheckWarning.differencePct >= 0 ? "+" : ""}
+              {(f.grvCrossCheckWarning.differencePct * 100).toFixed(1)}% vs {money(f.grvCrossCheckWarning.crossCheckRatePerSqm)}/
+              {f.grvCrossCheckWarning.areaBasis === "INTERNAL" ? "internal" : "saleable"} sqm.
+            </p>
+          )}
         </div>
       )}
 
@@ -88,11 +104,13 @@ export function FeasibilityTab() {
               {a.revenueMode === "PER_DWELLING" && moneyField("avgDwellingPrice", "Avg dwelling price")}
               {a.revenueMode === "UNIT_MIX" && (
                 <p className="text-[12px] text-muted">
-                  GRV from Yield tab unit mix: {money(f.grv, { compact: true })}. Blended {f.blendedPricePerSqm != null ? `${money(f.blendedPricePerSqm)}/sqm` : "—"}. Cross-check: {f.crossCheckLabel} = {money(f.crossCheckGrv, { compact: true })}.
+                  GRV from Yield tab unit mix: {money(f.grv, { compact: true })}.
+                  {f.blendedPricePerInternalSqm != null ? <> Blended {money(f.blendedPricePerInternalSqm)}/internal sqm.</> : null}
+                  Cross-check: {f.crossCheckLabel} = {money(f.crossCheckGrv, { compact: true })}.
                 </p>
               )}
               {moneyField("otherRevenue", "Other project revenue")}
-              {a.revenueMode !== "PER_SQM" && moneyField("salePricePerSqm", "$/sqm cross-check rate")}
+              {a.revenueMode !== "PER_SQM" && moneyField("salePricePerSqm", "$/internal sqm cross-check rate")}
             </div>
           </Panel>
           <Panel title="Construction & costs" actions={<Badge tone="assumption">User assumptions</Badge>}>

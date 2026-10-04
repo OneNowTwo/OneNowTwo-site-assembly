@@ -103,14 +103,16 @@ export function assessEconomicConfidence(input: {
           : "GLOBAL_DEFAULT";
     const sourceLabel =
       src === "LOCAL_BEDROOM_MEDIAN"
-        ? "Local bedroom sale median"
+        ? "LOCAL BEDROOM MEDIAN"
         : src === "LOCAL_UNIT_MEDIAN"
-          ? "Local unit/strata sale median"
-          : src === "LOCAL_STRATA_AREA_BAND"
-            ? "Local strata median (area band)"
+          ? "LOCAL UNIT MEDIAN"
+          : src === "LOCAL_STRATA_BENCHMARK" || src === "LOCAL_STRATA_AREA_BAND"
+            ? "LOCAL STRATA BENCHMARK"
             : src === "USER_OVERRIDE"
               ? "USER OVERRIDE"
-              : "DEFAULT MARKET VALUE";
+              : src === "TEMPLATE_FALLBACK" || src === "TEMPLATE_DEFAULT"
+                ? "TEMPLATE FALLBACK"
+                : "DEFAULT MARKET VALUE";
     return {
       name: r.name,
       count: r.count,

@@ -15,11 +15,15 @@ export interface UnitMixRow {
 
 export interface UnitMixTotals {
   totalUnits: number;
+  /** Sum of count × avgInternalArea — basis for internal-area $/sqm cross-checks. */
+  totalInternalArea: number;
   totalSaleableArea: number;
   totalRevenue: number;
   averageSalePrice: number | null;
-  /** Blended $/sqm = total revenue ÷ total saleable area (sanity check vs comps). */
+  /** Blended $/sqm = total revenue ÷ total saleable area (optional secondary sense-check). */
   blendedPricePerSqm: number | null;
+  /** Blended $/sqm = total revenue ÷ total internal area (primary like-for-like rate). */
+  blendedPricePerInternalSqm: number | null;
   rows: Array<
     UnitMixRow & {
       pricePerSqm: number | null;
@@ -55,14 +59,17 @@ export function computeUnitMix(rows: UnitMixRow[]): UnitMixTotals {
     return { ...r, avgSaleableArea: saleable, pricePerSqm, revenue };
   });
   const totalUnits = computed.reduce((s, r) => s + r.count, 0);
+  const totalInternalArea = computed.reduce((s, r) => s + r.count * Math.max(0, r.avgInternalArea), 0);
   const totalSaleableArea = computed.reduce((s, r) => s + r.count * r.avgSaleableArea, 0);
   const totalRevenue = computed.reduce((s, r) => s + r.revenue, 0);
   return {
     totalUnits,
+    totalInternalArea,
     totalSaleableArea,
     totalRevenue,
     averageSalePrice: totalUnits > 0 ? totalRevenue / totalUnits : null,
     blendedPricePerSqm: totalSaleableArea > 0 ? totalRevenue / totalSaleableArea : null,
+    blendedPricePerInternalSqm: totalInternalArea > 0 ? totalRevenue / totalInternalArea : null,
     rows: computed,
   };
 }

@@ -55,6 +55,7 @@ export interface ScenarioResult {
 }
 
 export type SiteFsrSource = "OFFICIAL" | "NO_MAPPED" | "OVERRIDE" | "STATE_PATHWAY";
+export type SiteHeightSource = "OFFICIAL" | "OVERRIDE" | "STATE_PATHWAY" | "NONE";
 /** CALCULABLE = a usable FSR exists; REQUIRES_PLANNING_INPUT = missing LEP FSR and no State pathway yet. */
 export type YieldStatus = "CALCULABLE" | "REQUIRES_PLANNING_INPUT";
 
@@ -81,7 +82,7 @@ export interface SiteBasis {
   lmrProximityScreen: "PASS" | "FAIL" | "MIXED" | "NONE" | null;
   lmrProximityLabel: string | null;
   heightLimitM: number | null;
-  heightSource: "OFFICIAL" | "OVERRIDE" | "NONE";
+  heightSource: SiteHeightSource;
 }
 
 export interface OpportunityAnalysis {
@@ -199,7 +200,14 @@ export function siteBasisFromPlanningSnapshot(planning: PlanningSnapshot, inputs
           : null,
     lmrProximityLabel: lmr ? (inputs.pathwaySnapshot?.proximityLabel ?? "PASS — ESTIMATED") : null,
     heightLimitM: ec.effectiveHeightM,
-    heightSource: inputs.heightOverrideM != null ? "OVERRIDE" : ec.effectiveHeightM != null ? "OFFICIAL" : "NONE",
+    heightSource:
+      inputs.heightOverrideM != null
+        ? "OVERRIDE"
+        : ec.fsrSource === "STATE_PATHWAY" && ec.effectiveHeightM != null
+          ? "STATE_PATHWAY"
+          : ec.effectiveHeightM != null
+            ? "OFFICIAL"
+            : "NONE",
   };
 }
 

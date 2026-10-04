@@ -129,7 +129,7 @@ export const ASSUMPTION_META: Record<
   carSpacesPerDwelling: { label: "Car spaces per dwelling", unit: "ratio", group: "Yield" },
   planningAdjustment: { label: "Planning / site efficiency adjustment", unit: "pct", group: "Yield", help: "Applied to theoretical GFA to estimate achievable GFA (not an architect test-fit)." },
   revenueMode: { label: "Revenue method", unit: "enum", group: "Revenue", help: "UNIT_MIX recommended for residential; $/sqm useful for early-stage cross-check." },
-  salePricePerSqm: { label: "Average sale price ($/sqm saleable)", unit: "moneyPerSqm", group: "Revenue" },
+  salePricePerSqm: { label: "Average sale price ($/sqm internal — cross-check)", unit: "moneyPerSqm", group: "Revenue" },
   avgDwellingPrice: { label: "Average dwelling price", unit: "money", group: "Revenue" },
   otherRevenue: { label: "Other project revenue", unit: "money", group: "Revenue" },
   constructionCostPerSqm: {
