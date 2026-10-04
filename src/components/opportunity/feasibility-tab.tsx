@@ -48,6 +48,25 @@ export function FeasibilityTab() {
         <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Same as acquisition headroom" />
       </div>
       {!f.viable && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[12.5px] text-bad">At these assumptions the project cannot support any land cost at the target margin.</div>}
+      {f.costInputIncomplete && (
+        <div className="rounded-[3px] border border-amber-300 bg-amber-50 p-3 text-[12.5px] text-amber-950">
+          <div className="font-semibold uppercase tracking-wide">Cost input incomplete — feasibility requires cost validation</div>
+          <p className="mt-1">
+            Material cost categories remain $0 (not confirmed no-cost): {f.costInputGaps.map((g) => g.label).join(", ")}. Enter estimates before treating zero as a confirmed assumption.
+          </p>
+        </div>
+      )}
+      {f.grvCrossCheckWarning && (
+        <div className="rounded-[3px] border border-amber-300 bg-amber-50 p-3 text-[12.5px] text-amber-950">
+          <div className="font-semibold uppercase tracking-wide">Exit value validation required</div>
+          <p className="mt-1 num">
+            Unit mix implied rate: {money(f.grvCrossCheckWarning.unitMixImpliedRatePerSqm)}/sqm · Cross-check rate:{" "}
+            {money(f.grvCrossCheckWarning.crossCheckRatePerSqm)}/sqm · Difference:{" "}
+            {f.grvCrossCheckWarning.differencePct >= 0 ? "+" : ""}
+            {(f.grvCrossCheckWarning.differencePct * 100).toFixed(1)}%. Unit-mix GRV is unchanged.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-4 space-y-4">

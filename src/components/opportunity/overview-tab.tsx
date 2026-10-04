@@ -483,13 +483,13 @@ export function OverviewTab() {
             <Stat
               size="md"
               label="FSR used"
-              value={analysis.site.fsrSource === "NO_MAPPED" ? "—" : fsr(analysis.site.fsr)}
+              value={analysis.calculation.effectiveFsr != null ? fsr(analysis.calculation.effectiveFsr) : "—"}
               sub={
-                analysis.site.fsrSource === "STATE_PATHWAY"
-                  ? `STATE LMR ${analysis.site.statePathwayFsr != null ? fsr(analysis.site.statePathwayFsr) : fsr(analysis.site.fsr)} · LEP ${analysis.site.lepFsr != null ? fsr(analysis.site.lepFsr) : "not mapped"} · ${analysis.site.lmrProximityLabel ?? "PASS — ESTIMATED"}`
-                  : analysis.site.fsrSource === "OVERRIDE"
+                analysis.planningSnapshot.effectiveControls.fsrSource === "STATE_PATHWAY"
+                  ? `STATE LMR ${analysis.planningSnapshot.effectiveControls.stateFsr != null ? fsr(analysis.planningSnapshot.effectiveControls.stateFsr) : "—"} · LEP ${analysis.planningSnapshot.effectiveControls.baseFsr != null ? fsr(analysis.planningSnapshot.effectiveControls.baseFsr) : "not mapped"} · ${analysis.planningSnapshot.effectiveControls.proximityBandLabel}`
+                  : analysis.planningSnapshot.effectiveControls.fsrSource === "OVERRIDE"
                     ? "USER ASSUMPTION"
-                    : analysis.site.fsrSource === "OFFICIAL"
+                    : analysis.planningSnapshot.effectiveControls.fsrSource === "OFFICIAL"
                       ? "OFFICIAL MAPPED FSR"
                       : "NO MAPPED FSR ≠ 0:1"
               }
@@ -497,15 +497,15 @@ export function OverviewTab() {
             <Stat
               size="md"
               label="Theoretical GFA"
-              value={analysis.feasibilityCalculable ? sqm(y.theoreticalGfa) : "—"}
-              sub={analysis.feasibilityCalculable ? "Site × FSR" : "Needs planning pathway"}
+              value={analysis.calculation.calculable ? sqm(analysis.calculation.theoreticalGfa) : "—"}
+              sub={analysis.calculation.calculable ? "Site × PlanningSnapshot effective FSR" : "Needs planning pathway"}
             />
             <Stat
               size="md"
               label="Achievable GFA"
-              value={analysis.feasibilityCalculable ? sqm(y.achievableGfa) : "—"}
+              value={analysis.calculation.calculable ? sqm(analysis.calculation.achievableGfa) : "—"}
               sub={
-                !analysis.feasibilityCalculable
+                !analysis.calculation.calculable
                   ? "FEASIBILITY NOT YET CALCULABLE"
                   : y.gfaSource === "OVERRIDE"
                     ? "Manual override"

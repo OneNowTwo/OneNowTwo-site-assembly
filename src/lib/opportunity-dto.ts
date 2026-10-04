@@ -173,5 +173,8 @@ export function dtoToLots(dto: OpportunityDTO): OpportunityLot[] {
     maxAllocationOverride: l.maxAllocationOverride,
     openingOfferOverride: l.openingOfferOverride,
     strategicWeight: l.strategicWeight,
+    ownerName: l.owner?.name ?? null,
+    planningInstrument: l.planningInstrument,
+    planningCheckedAt: l.planningCheckedAt,
   }));
 }

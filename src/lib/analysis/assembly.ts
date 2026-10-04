@@ -264,9 +264,26 @@ const sqm = (n: number) => `${Math.round(n).toLocaleString("en-AU")} sqm`;
 const words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight"];
 const count = (n: number, noun: string) => `${words[n] ?? n} ${noun}${n === 1 ? "" : "s"}`;
 
+export interface ScoreAssemblyOptions {
+  /** Effective modelled FSR driving yield (State pathway / override) — not LEP-only. */
+  effectiveFsr?: number | null;
+  fsrSource?: "OFFICIAL" | "NO_MAPPED" | "OVERRIDE" | "STATE_PATHWAY" | null;
+  statePathwayName?: string | null;
+  lepFsr?: number | null;
+  proximityLabel?: string | null;
+  /** True only when title/ownership data confirms owner count. Lot count alone is not enough. */
+  ownerCountKnown?: boolean;
+  ownerCount?: number | null;
+}
+
 /** Transparent 0–100 score: weighted rule-based components with the reasons that drove them. */
-export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunityScore {
+export function scoreAssembly(m: AssemblyMetrics, a: Assumptions, opts?: ScoreAssemblyOptions): OpportunityScore {
   const factors: ScoreFactor[] = [];
+  const modelled =
+    opts?.fsrSource === "STATE_PATHWAY" || opts?.fsrSource === "OVERRIDE"
+      ? (opts.effectiveFsr ?? m.weightedFsr)
+      : m.weightedFsr;
+  const hasUsableModelledFsr = modelled != null && modelled > 0 && opts?.fsrSource !== "NO_MAPPED";
 
   // Acquisition headroom — only when trusted valuations exist. Never reward suburb fallback.
   let headroomScore = 40;
@@ -298,26 +315,50 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunitySc
     factors.push({ sign: "-", text: "ROUGH SCREENING ESTIMATE only — DO NOT USE FOR ACQUISITION DECISION" });
   }
 
-  const planningCapacity = clamp01(m.weightedFsr / 2) * 80 + clamp01((m.heightMinM ?? 0) / 24) * 20;
-  const fsrText =
-    m.fsrUnmappedLots > 0
-      ? `official FSR ${m.weightedFsr.toFixed(2)}:1 (${m.fsrUnmappedLots} lot${m.fsrUnmappedLots === 1 ? "" : "s"} with no mapped FSR)`
-      : `official FSR ${m.weightedFsr.toFixed(2)}:1`;
-  if (m.weightedFsr >= 1.2) factors.push({ sign: "+", text: `${fsrText} — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA` });
-  else factors.push({ sign: "-", text: `${fsrText} limits apartment yield` });
+  const planningCapacity = clamp01(modelled / 2) * 80 + clamp01((m.heightMinM ?? 0) / 24) * 20;
+  if (opts?.fsrSource === "STATE_PATHWAY" && hasUsableModelledFsr) {
+    factors.push({
+      sign: "+",
+      text:
+        `LEP FSR ${opts.lepFsr != null ? `${opts.lepFsr.toFixed(2)}:1` : "not mapped"} · ` +
+        `Current State pathway ${opts.statePathwayName ?? "LMR"} · ` +
+        `Modelled effective FSR ${modelled.toFixed(2)}:1` +
+        (opts.proximityLabel ? ` · ${opts.proximityLabel}` : "") +
+        ` — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA · Planning confirmation required`,
+    });
+  } else if (opts?.fsrSource === "OVERRIDE" && hasUsableModelledFsr) {
+    factors.push({
+      sign: modelled >= 1.2 ? "+" : "-",
+      text: `USER modelled FSR ${modelled.toFixed(2)}:1 — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA`,
+    });
+  } else {
+    const fsrText =
+      m.fsrUnmappedLots > 0
+        ? `official FSR ${m.weightedFsr.toFixed(2)}:1 (${m.fsrUnmappedLots} lot${m.fsrUnmappedLots === 1 ? "" : "s"} with no mapped FSR)`
+        : `official FSR ${m.weightedFsr.toFixed(2)}:1`;
+    if (m.weightedFsr >= 1.2) factors.push({ sign: "+", text: `${fsrText} — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA` });
+    else factors.push({ sign: "-", text: `${fsrText} limits apartment yield` });
+  }
   if (m.fsrSplitLots > 0) factors.push({ sign: "-", text: `${count(m.fsrSplitLots, "lot")} with split mapped FSR controls` });
   if (m.heightMinM != null && m.heightMinM >= 15) factors.push({ sign: "+", text: `${m.heightMinM} m height control` });
 
+  // Simplicity uses lot count only — do not assume owners = lots without title data.
   let simplicity = 100 - (m.lotCount - 2) * 15 - m.strataLots * 25;
   simplicity = Math.max(0, Math.min(100, simplicity));
-  if (m.lotCount <= 3) factors.push({ sign: "+", text: `only ${count(m.lotCount, "owner")} to negotiate` });
-  else if (m.lotCount >= 5) factors.push({ sign: "-", text: `${count(m.lotCount, "owner")} to negotiate` });
+  factors.push({
+    sign: m.lotCount <= 3 ? "+" : m.lotCount >= 5 ? "-" : "+",
+    text: `${count(m.lotCount, "lot")} · Owner count ${opts?.ownerCountKnown && opts.ownerCount != null ? String(opts.ownerCount) : "unknown"}`,
+  });
   if (m.strataLots) {
     factors.push({ sign: "-", text: `${count(m.strataLots, "strata scheme")} (collective sale required)` });
     simplicity = Math.max(0, simplicity - 20 * m.strataLots);
   }
   if (m.totalAreaSqm >= a.minViableSiteAreaSqm) factors.push({ sign: "+", text: `${sqm(m.totalAreaSqm)} combined site` });
-  else factors.push({ sign: "-", text: `${sqm(m.totalAreaSqm)} is below the ${sqm(a.minViableSiteAreaSqm)} minimum viable site` });
+  else
+    factors.push({
+      sign: "-",
+      text: `${sqm(m.totalAreaSqm)} is below preferred scanner site-size threshold (${sqm(a.minViableSiteAreaSqm)})`,
+    });
 
   let geometry = m.connected ? 85 : 20;
   if (!m.connected) factors.push({ sign: "-", text: "lots are not contiguous" });
@@ -347,9 +388,18 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions): OpportunitySc
     planningRisk -= 20;
     factors.push({ sign: "-", text: `planning data unavailable for ${count(m.planningUnknownLots, "lot")}` });
   }
-  if (m.fsrUnmappedLots) {
+  // Only demand a USER FSR when neither LEP nor State pathway supplies a usable modelled FSR.
+  if (m.fsrUnmappedLots && !hasUsableModelledFsr) {
     planningRisk -= 15;
-    factors.push({ sign: "-", text: `no mapped FSR control for ${count(m.fsrUnmappedLots, "lot")} — enter a USER ASSUMPTION to model yield` });
+    factors.push({
+      sign: "-",
+      text: `no mapped LEP FSR and no State pathway FSR for ${count(m.fsrUnmappedLots, "lot")} — USER FSR REQUIRED to model yield`,
+    });
+  } else if (m.fsrUnmappedLots && opts?.fsrSource === "STATE_PATHWAY") {
+    factors.push({
+      sign: "+",
+      text: "LEP FSR not mapped — Current State pathway supplies modelled FSR (confirmation required)",
+    });
   }
   for (const issue of m.minLotSizeIssues) {
     planningRisk -= 20;
