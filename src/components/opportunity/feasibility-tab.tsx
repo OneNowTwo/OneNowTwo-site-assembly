@@ -49,21 +49,21 @@ export function FeasibilityTab() {
       </div>
       {!f.viable && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[12.5px] text-bad">At these assumptions the project cannot support any land cost at the target margin.</div>}
       {f.costInputIncomplete && (
-        <div className="rounded-[3px] border border-amber-300 bg-amber-50 p-3 text-[12.5px] text-amber-950">
-          <div className="font-semibold uppercase tracking-wide">Cost input incomplete — feasibility requires cost validation</div>
+        <div className="rounded-[3px] border border-line bg-canvas p-3 text-[12.5px] text-muted">
+          <div className="font-medium text-ink">Optional cost lines at $0</div>
           <p className="mt-1">
-            Material cost categories remain $0 (not confirmed no-cost): {f.costInputGaps.map((g) => g.label).join(", ")}. Enter estimates before treating zero as a confirmed assumption.
+            {f.costInputGaps.map((g) => g.label).join(", ")} — enter a figure if needed. Lift/basement are not flagged when using the BMT all-in $/sqm default.
           </p>
         </div>
       )}
       {f.grvCrossCheckWarning && (
-        <div className="rounded-[3px] border border-amber-300 bg-amber-50 p-3 text-[12.5px] text-amber-950">
-          <div className="font-semibold uppercase tracking-wide">Exit value validation required</div>
+        <div className="rounded-[3px] border border-line bg-canvas p-3 text-[12.5px] text-muted">
+          <div className="font-medium text-ink">$/sqm cross-check</div>
           <p className="mt-1 num">
-            Unit mix implied rate: {money(f.grvCrossCheckWarning.unitMixImpliedRatePerSqm)}/sqm · Cross-check rate:{" "}
-            {money(f.grvCrossCheckWarning.crossCheckRatePerSqm)}/sqm · Difference:{" "}
+            Unit mix implied {money(f.grvCrossCheckWarning.unitMixImpliedRatePerSqm)}/sqm vs cross-check{" "}
+            {money(f.grvCrossCheckWarning.crossCheckRatePerSqm)}/sqm (
             {f.grvCrossCheckWarning.differencePct >= 0 ? "+" : ""}
-            {(f.grvCrossCheckWarning.differencePct * 100).toFixed(1)}%. Unit-mix GRV is unchanged.
+            {(f.grvCrossCheckWarning.differencePct * 100).toFixed(1)}%). Sense-check only — unit-mix GRV unchanged.
           </p>
         </div>
       )}

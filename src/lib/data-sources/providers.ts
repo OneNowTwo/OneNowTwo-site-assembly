@@ -101,7 +101,7 @@ export interface OwnerDataProvider {
 
 export interface ConstructionCostEstimate {
   costPerSqmGfa: number | null;
-  source: "USER_ASSUMPTION" | "LIVE_PROVIDER";
+  source: "USER_ASSUMPTION" | "LIVE_PROVIDER" | "PUBLISHED_BENCHMARK";
   note?: string;
 }
 
@@ -219,12 +219,17 @@ export const noOwnerDataProvider: OwnerDataProvider = {
   },
 };
 
-/** V1: returns the user rate as a labelled assumption — never pretends to be a live cost feed. */
+/** Returns user override, else BMT Sydney 4–8 MEDIUM published benchmark. */
 export const manualConstructionCostProvider: ConstructionCostProvider = {
-  name: "Manual construction assumption",
+  name: "BMT / manual construction benchmark",
   estimate({ userRate }) {
     if (userRate != null && userRate > 0) return { costPerSqmGfa: userRate, source: "USER_ASSUMPTION" };
-    return { costPerSqmGfa: null, source: "USER_ASSUMPTION", note: "Enter a base build cost $/sqm GFA" };
+    // Lazy import avoided — keep provider sync; rate mirrored from construction-benchmarks.
+    return {
+      costPerSqmGfa: 4154,
+      source: "PUBLISHED_BENCHMARK",
+      note: "BMT 2026 Sydney 4–8 level unit MEDIUM (incl. lift + basement)",
+    };
   },
 };
 

@@ -1,7 +1,14 @@
 import type { Polygon, MultiPolygon } from "geojson";
 import { prisma } from "@/lib/db";
 import type { ParcelData, FsrControl, FsrMappedStatus } from "@/lib/types";
-import { mergeAssumptions, parseOpportunityInputs, DEFAULT_ASSUMPTIONS, type Assumptions } from "@/lib/analysis/assumptions";
+import {
+  mergeAssumptions,
+  parseOpportunityInputs,
+  DEFAULT_ASSUMPTIONS,
+  defaultUnitMix,
+  type Assumptions,
+  type OpportunityInputs,
+} from "@/lib/analysis/assumptions";
 import { analyseOpportunity, type OpportunityLot } from "@/lib/analysis/opportunity";
 import { resolveAssemblyModelledControls } from "@/lib/analysis/resolve-assembly-controls";
 import { fetchNominatedCentres } from "@/lib/data-sources/housing-sepp-lmr";
@@ -11,6 +18,13 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { ComparableSaleDTO, LotDTO, OpportunityDTO, UnitTypeDTO } from "@/lib/opportunity-dto";
 import { toParcelValuation, valueParcels } from "@/lib/data-sources/valuation-service";
 import type { MarketValueSource } from "@/generated/prisma/client";
+import { queryNswUrbanSalesNear } from "@/lib/data-sources/nsw-property-sales";
+import {
+  applyExitBenchmarksToUnitMix,
+  buildLocalExitBenchmarks,
+  isTemplateDefaultSalePrice,
+} from "@/lib/analysis/exit-benchmarks";
+import { autoGenerateUnitMix, DEFAULT_MIX_SHARES } from "@/lib/analysis/unit-mix";
 
 export const opportunityInclude = {
   parcels: {
@@ -219,6 +233,55 @@ export async function loadOpportunity(id: string) {
   return prisma.opportunity.findUnique({ where: { id }, include: opportunityInclude });
 }
 
+/** Apply local strata/unit sale medians to template-default unit prices (not user overrides). */
+async function enrichUnitMixWithLocalExitBenchmarks(
+  opp: OpportunityWithRelations,
+  inputs: OpportunityInputs,
+  saleableAreaHint: number,
+): Promise<OpportunityInputs> {
+  let mix = inputs.unitMix.length
+    ? inputs.unitMix
+    : autoGenerateUnitMix(Math.max(saleableAreaHint, 1), defaultUnitMix(), inputs.mixShares ?? DEFAULT_MIX_SHARES);
+  const needsBenchmark = mix.some((r) => r.count > 0 && isTemplateDefaultSalePrice(r));
+  if (!needsBenchmark) return { ...inputs, unitMix: mix };
+
+  const included = opp.parcels.filter((p) => p.included);
+  if (!included.length) return { ...inputs, unitMix: mix };
+  const lng = included.reduce((s, p) => s + p.parcel.centroidLng, 0) / included.length;
+  const lat = included.reduce((s, p) => s + p.parcel.centroidLat, 0) / included.length;
+  const suburb = opp.suburb;
+  try {
+    const sales = await queryNswUrbanSalesNear({ lng, lat, radiusM: 1500, suburb, maxRecords: 200 });
+    const evidence = sales
+      .filter((s) => s.strata)
+      .map((s) => ({
+        salePrice: s.salePrice,
+        bedrooms: null as number | null,
+        unitAreaSqm: s.landAreaSqm != null && s.landAreaSqm > 0 && s.landAreaSqm <= 280 ? s.landAreaSqm : null,
+        strata: true,
+      }));
+    // Also allow non-strata unit-sized sales as weak fallback only when strata sample is tiny.
+    if (evidence.length < 4) {
+      for (const s of sales) {
+        if (s.strata) continue;
+        if (s.landAreaSqm != null && s.landAreaSqm > 0 && s.landAreaSqm <= 200) {
+          evidence.push({ salePrice: s.salePrice, bedrooms: null, unitAreaSqm: s.landAreaSqm, strata: true });
+        }
+      }
+    }
+    const benchmarks = buildLocalExitBenchmarks(evidence);
+    const applied = applyExitBenchmarksToUnitMix(mix, benchmarks);
+    if (!applied.applied) return { ...inputs, unitMix: mix, exitPriceSources: inputs.exitPriceSources };
+    return {
+      ...inputs,
+      unitMix: applied.rows,
+      exitPriceSources: { ...inputs.exitPriceSources, ...applied.sources },
+    };
+  } catch {
+    return { ...inputs, unitMix: mix };
+  }
+}
+
 /** Recalculate the opportunity and persist summary + per-lot computed fields (used by lists and the CRM board). */
 export async function recomputeOpportunity(id: string, meta?: { reason?: string; source?: string }) {
   const opp = await loadOpportunity(id);
@@ -231,7 +294,7 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
     grv: opp.grv,
     combinedMarketValue: opp.combinedMarketValue,
   };
-  const inputs = parseOpportunityInputs(opp.inputs);
+  let inputs = parseOpportunityInputs(opp.inputs);
   const hadPersistedMix = inputs.unitMix.length > 0 || opp.unitTypes.length > 0;
   // Prefer persisted unitTypes when inputs.unitMix is empty
   if (!inputs.unitMix.length && opp.unitTypes.length) {
@@ -246,12 +309,19 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
     }));
   }
   const a = mergeAssumptions(await getGlobalAssumptions(), inputs.overrides);
+  // Probe saleable for mix generation before local exit enrichment.
+  const probe = analyseOpportunity(toOpportunityLots(opp), a, inputs);
+  const beforeExit = inputs;
+  inputs = await enrichUnitMixWithLocalExitBenchmarks(opp, inputs, probe.base.yield.saleableArea);
+  const exitBenchmarksApplied =
+    JSON.stringify(beforeExit.unitMix) !== JSON.stringify(inputs.unitMix) ||
+    JSON.stringify(beforeExit.exitPriceSources) !== JSON.stringify(inputs.exitPriceSources);
   const analysis = analyseOpportunity(toOpportunityLots(opp), a, inputs);
   const f = analysis.base.feasibility;
   const alloc = new Map(analysis.allocation.lots.map((l) => [l.id, l]));
   const crit = new Map(analysis.critical.map((c) => [c.id, c]));
   // After FSR pathway refresh clears unit mix, persist the regenerated mix so Yield/Feasibility stay aligned.
-  const shouldPersistRegeneratedMix = !hadPersistedMix && analysis.unitMix.length > 0;
+  const shouldPersistRegeneratedMix = (!hadPersistedMix || exitBenchmarksApplied) && analysis.unitMix.length > 0;
 
   // Persist canonical CalculationSnapshot onto scanProvenance so map/Top Opportunities
   // can sync without re-running suburb scan or inventing a parallel calculator.
@@ -259,6 +329,7 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
   const nextInputs = {
     ...inputs,
     ...(shouldPersistRegeneratedMix ? { unitMix: analysis.unitMix } : {}),
+    exitPriceSources: inputs.exitPriceSources,
     ...(scanProv
       ? {
           scanProvenance: {

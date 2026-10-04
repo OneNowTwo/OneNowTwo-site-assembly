@@ -84,7 +84,8 @@ export const DEFAULT_ASSUMPTIONS: Assumptions = {
   salePricePerSqm: 15500,
   avgDwellingPrice: 1_300_000,
   otherRevenue: 0,
-  constructionCostPerSqm: 4600,
+  /** BMT 2026 Sydney 4–8 unit MEDIUM (incl. lift + basement) — see construction-benchmarks.ts */
+  constructionCostPerSqm: 4154,
   basementParkingCost: 0,
   demolitionPerLot: 60_000,
   siteWorksCost: 0,
@@ -131,14 +132,29 @@ export const ASSUMPTION_META: Record<
   salePricePerSqm: { label: "Average sale price ($/sqm saleable)", unit: "moneyPerSqm", group: "Revenue" },
   avgDwellingPrice: { label: "Average dwelling price", unit: "money", group: "Revenue" },
   otherRevenue: { label: "Other project revenue", unit: "money", group: "Revenue" },
-  constructionCostPerSqm: { label: "Base build cost ($/sqm GFA)", unit: "moneyPerSqm", group: "Costs", help: "USER ASSUMPTION unless a construction cost provider is connected." },
-  basementParkingCost: { label: "Basement parking (fixed)", unit: "money", group: "Costs" },
+  constructionCostPerSqm: {
+    label: "Base build cost ($/sqm GFA)",
+    unit: "moneyPerSqm",
+    group: "Costs",
+    help: "Default: BMT 2026 Sydney 4–8 level unit MEDIUM $4,154/sqm (includes lift + basement). Editable override.",
+  },
+  basementParkingCost: {
+    label: "Basement parking (fixed)",
+    unit: "money",
+    group: "Costs",
+    help: "Included in BMT 4–8 unit benchmark when using the default $/sqm — leave $0 to avoid double counting.",
+  },
   demolitionPerLot: { label: "Demolition & site prep (per lot)", unit: "money", group: "Costs" },
   siteWorksCost: { label: "Site works (fixed)", unit: "money", group: "Costs" },
   remediationCost: { label: "Remediation (fixed)", unit: "money", group: "Costs" },
   difficultExcavationCost: { label: "Difficult excavation (fixed)", unit: "money", group: "Costs" },
   premiumFacadeCost: { label: "Premium façade (fixed)", unit: "money", group: "Costs" },
-  liftsCost: { label: "Lifts (fixed)", unit: "money", group: "Costs" },
+  liftsCost: {
+    label: "Lifts (fixed)",
+    unit: "money",
+    group: "Costs",
+    help: "Included in BMT 4–8 unit benchmark when using the default $/sqm — leave $0 to avoid double counting.",
+  },
   publicDomainWorksCost: { label: "Public domain works (fixed)", unit: "money", group: "Costs" },
   landscapingCost: { label: "Landscaping (fixed)", unit: "money", group: "Costs" },
   otherFixedConstructionCost: { label: "Other fixed construction", unit: "money", group: "Costs" },
@@ -274,6 +290,8 @@ export const opportunityInputsSchema = z.object({
     .default(DEFAULT_SCENARIOS),
   contactDetails: z.string().max(300).default(""),
   scanProvenance: scanProvenanceSchema.nullable().default(null),
+  /** Provenance of unit-mix sale prices after local exit benchmark application. */
+  exitPriceSources: z.record(z.string(), z.string()).default({}),
   /** Transparent NSW comps / valuation detail keyed by externalParcelId. */
   lotValuationDetails: z
     .record(

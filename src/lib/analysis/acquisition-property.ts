@@ -1,8 +1,11 @@
 /**
  * Acquisition property vs cadastral lot.
  * Multiple cadastral lots may form one physical/saleable property (same address).
- * Existing acquisition value should not double-count those lots as separate houses.
+ * Value the whole property — never MAX-of-lot AVMs and never sum duplicate house AVMs.
  */
+
+import type { CompSaleInput } from "./comparable-valuation";
+import { estimatePropertyLevelValue } from "./property-level-valuation";
 
 export interface CadastralLotRef {
   id: string;
@@ -13,6 +16,12 @@ export interface CadastralLotRef {
   marketValueHigh?: number | null;
   marketValueSource?: string | null;
   marketValueConfidence?: string | null;
+  marketValueMethod?: string | null;
+  suburb?: string | null;
+  zone?: string | null;
+  isStrata?: boolean;
+  /** Stored NSW comps for property-level re-estimate on combined land area. */
+  comps?: CompSaleInput[] | null;
 }
 
 export interface AcquisitionProperty {
@@ -21,13 +30,19 @@ export interface AcquisitionProperty {
   address: string | null;
   lotIds: string[];
   areaSqm: number;
-  /** Mid acquisition value at property level (not sum of duplicate house AVMs). */
+  /** Mid acquisition value at property level (one estimate for the whole property). */
   marketValue: number | null;
   marketValueLow: number | null;
   marketValueHigh: number | null;
-  /** How the property value was derived from lot valuations. */
-  valueBasis: "SINGLE_LOT" | "MAX_OF_SHARED_ADDRESS" | "SUM_DISTINCT_ADDRESSES" | "INCOMPLETE";
+  /** How the property value was derived. */
+  valueBasis:
+    | "SINGLE_LOT"
+    | "PROPERTY_LEVEL_COMPS"
+    | "PROPERTY_LEVEL_AVM"
+    | "SUM_DISTINCT_ADDRESSES"
+    | "INCOMPLETE";
   note: string | null;
+  sourceLabel: string | null;
 }
 
 function normAddress(address: string | null | undefined): string | null {
@@ -39,10 +54,105 @@ function normAddress(address: string | null | undefined): string | null {
     .replace(/,/g, "");
 }
 
+function poolComps(members: CadastralLotRef[]): CompSaleInput[] {
+  const byId = new Map<string, CompSaleInput>();
+  for (const m of members) {
+    for (const c of m.comps ?? []) {
+      if (!byId.has(c.id)) byId.set(c.id, c);
+    }
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Whole-property estimate for shared-address cadastral lots.
+ * Uses pooled registered-sale comps against combined land area.
+ */
+export function estimateWholePropertyValue(members: CadastralLotRef[]): {
+  mid: number | null;
+  low: number | null;
+  high: number | null;
+  valueBasis: AcquisitionProperty["valueBasis"];
+  note: string | null;
+  sourceLabel: string | null;
+  numberOfComps: number;
+} {
+  const areaSqm = members.reduce((s, m) => s + m.areaSqm, 0);
+  const suburb = members.find((m) => m.suburb)?.suburb ?? null;
+  const zone = members.find((m) => m.zone)?.zone ?? null;
+  const isStrata = members.some((m) => m.isStrata);
+  const comps = poolComps(members);
+
+  if (comps.length >= 3 && areaSqm > 0) {
+    const built = estimatePropertyLevelValue({
+      areaSqm,
+      suburb,
+      zone,
+      isStrata,
+      sales: comps,
+    });
+    if (built.mid != null) {
+      const sourceLabel =
+        built.methodDetail === "LOCAL_LAND_RATE"
+          ? "NSW registered comps — property-level (local land rate × combined area)"
+          : "NSW registered comps — property-level (combined land area)";
+      return {
+        mid: built.mid,
+        low: built.low,
+        high: built.high,
+        valueBasis: "PROPERTY_LEVEL_COMPS",
+        note: `${members.length} cadastral lots share one address — valued as one property on combined ${Math.round(areaSqm)} sqm (${built.numberOfComps} sales, ${built.methodDetail}).`,
+        sourceLabel,
+        numberOfComps: built.numberOfComps,
+      };
+    }
+  }
+
+  // Property-level AVM already stamped equally on each lot (from valueParcels).
+  const methods = members.map((m) => m.marketValueMethod ?? "");
+  const mids = members.map((m) => m.marketValue).filter((v): v is number => v != null && v > 0);
+  if (mids.length && methods.some((m) => m.includes("property_level"))) {
+    const mid = mids[0]!;
+    const lows = members.map((m) => m.marketValueLow).filter((v): v is number => v != null && v > 0);
+    const highs = members.map((m) => m.marketValueHigh).filter((v): v is number => v != null && v > 0);
+    return {
+      mid,
+      low: lows[0] ?? null,
+      high: highs[0] ?? null,
+      valueBasis: "PROPERTY_LEVEL_AVM",
+      note: `${members.length} cadastral lots share one address — whole-property estimate applied.`,
+      sourceLabel: "Property-level market estimate (shared address)",
+      numberOfComps: 0,
+    };
+  }
+
+  // Identical mids already represent a property-level stamp.
+  if (mids.length >= 2 && mids.every((v) => v === mids[0])) {
+    return {
+      mid: mids[0]!,
+      low: members[0]?.marketValueLow ?? null,
+      high: members[0]?.marketValueHigh ?? null,
+      valueBasis: "PROPERTY_LEVEL_AVM",
+      note: `${members.length} cadastral lots share one address — single property estimate.`,
+      sourceLabel: members[0]?.marketValueSource ?? "Property-level estimate",
+      numberOfComps: 0,
+    };
+  }
+
+  return {
+    mid: null,
+    low: null,
+    high: null,
+    valueBasis: "INCOMPLETE",
+    note: `${members.length} cadastral lots share one address — property-level estimate required (lot AVMs not summed or maxed).`,
+    sourceLabel: null,
+    numberOfComps: 0,
+  };
+}
+
 /**
  * Group included cadastral lots into acquisition properties.
- * Same normalised street address → one property; value = max mid among lots
- * (avoids treating one dual-lot title as two houses).
+ * Same normalised street address → one property valued as a whole.
  */
 export function groupAcquisitionProperties(lots: CadastralLotRef[]): AcquisitionProperty[] {
   const groups = new Map<string, CadastralLotRef[]>();
@@ -57,42 +167,38 @@ export function groupAcquisitionProperties(lots: CadastralLotRef[]): Acquisition
   for (const [key, members] of groups) {
     const address = members.find((m) => m.address)?.address ?? null;
     const areaSqm = members.reduce((s, m) => s + m.areaSqm, 0);
-    const mids = members.map((m) => m.marketValue).filter((v): v is number => v != null && v > 0);
-    const lows = members.map((m) => m.marketValueLow).filter((v): v is number => v != null && v > 0);
-    const highs = members.map((m) => m.marketValueHigh).filter((v): v is number => v != null && v > 0);
-
-    let marketValue: number | null = null;
-    let marketValueLow: number | null = null;
-    let marketValueHigh: number | null = null;
-    let valueBasis: AcquisitionProperty["valueBasis"] = "INCOMPLETE";
-    let note: string | null = null;
 
     if (members.length === 1) {
-      marketValue = mids[0] ?? null;
-      marketValueLow = lows[0] ?? null;
-      marketValueHigh = highs[0] ?? null;
-      valueBasis = marketValue != null ? "SINGLE_LOT" : "INCOMPLETE";
-    } else if (mids.length) {
-      // Shared address → one acquisition property. Use the higher mid (same comps often
-      // value the dual-lot holding once); do NOT sum as two separate dwellings.
-      marketValue = Math.max(...mids);
-      marketValueLow = lows.length ? Math.max(...lows) : null;
-      marketValueHigh = highs.length ? Math.max(...highs) : null;
-      valueBasis = "MAX_OF_SHARED_ADDRESS";
-      note = `${members.length} cadastral lots share address — valued as one acquisition property (not sum of lot AVMs).`;
+      const m = members[0]!;
+      properties.push({
+        id: `acq:${key}`,
+        label: address ?? m.id,
+        address,
+        lotIds: [m.id],
+        areaSqm,
+        marketValue: m.marketValue,
+        marketValueLow: m.marketValueLow ?? null,
+        marketValueHigh: m.marketValueHigh ?? null,
+        valueBasis: m.marketValue != null ? "SINGLE_LOT" : "INCOMPLETE",
+        note: null,
+        sourceLabel: m.marketValueSource ?? null,
+      });
+      continue;
     }
 
+    const whole = estimateWholePropertyValue(members);
     properties.push({
       id: `acq:${key}`,
       label: address ?? members.map((m) => m.id).join(" + "),
       address,
       lotIds: members.map((m) => m.id),
       areaSqm,
-      marketValue,
-      marketValueLow,
-      marketValueHigh,
-      valueBasis,
-      note,
+      marketValue: whole.mid,
+      marketValueLow: whole.low,
+      marketValueHigh: whole.high,
+      valueBasis: whole.valueBasis,
+      note: whole.note,
+      sourceLabel: whole.sourceLabel,
     });
   }
 

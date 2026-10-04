@@ -129,16 +129,39 @@ describe("sync scan canonical", () => {
 });
 
 describe("acquisition property grouping", () => {
-  it("does not sum two cadastral lots that share one address", () => {
+  it("does not sum or max two cadastral lots that share one address without property-level comps", () => {
     const props = groupAcquisitionProperties([
       { id: "1", address: "66-68 Kenneth Road, Manly Vale", areaSqm: 909, marketValue: 1_897_061, marketValueLow: 1_500_000, marketValueHigh: 2_200_000 },
       { id: "2", address: "66-68 Kenneth Road, Manly Vale", areaSqm: 473, marketValue: 1_631_517, marketValueLow: 1_400_000, marketValueHigh: 1_800_000 },
     ]);
     expect(props).toHaveLength(1);
-    expect(props[0]!.valueBasis).toBe("MAX_OF_SHARED_ADDRESS");
-    expect(props[0]!.marketValue).toBe(1_897_061);
+    // Differing lot AVMs without pooled comps → incomplete (not MAX / not SUM).
+    expect(props[0]!.valueBasis).toBe("INCOMPLETE");
+    expect(props[0]!.marketValue).toBeNull();
     const total = acquisitionPropertyTotal(props);
-    expect(total.mid).toBe(1_897_061);
-    expect(total.complete).toBe(true);
+    expect(total.complete).toBe(false);
+  });
+
+  it("uses equal property-level stamp when shared-address lots already carry one estimate", () => {
+    const props = groupAcquisitionProperties([
+      {
+        id: "1",
+        address: "66-68 Kenneth Road, Manly Vale",
+        areaSqm: 909,
+        marketValue: 3_350_000,
+        marketValueMethod: "nsw_registered_comps_weighted|property_level",
+      },
+      {
+        id: "2",
+        address: "66-68 Kenneth Road, Manly Vale",
+        areaSqm: 473,
+        marketValue: 3_350_000,
+        marketValueMethod: "nsw_registered_comps_weighted|property_level",
+      },
+    ]);
+    expect(props).toHaveLength(1);
+    expect(props[0]!.valueBasis).toBe("PROPERTY_LEVEL_AVM");
+    expect(props[0]!.marketValue).toBe(3_350_000);
+    expect(acquisitionPropertyTotal(props).mid).toBe(3_350_000);
   });
 });
