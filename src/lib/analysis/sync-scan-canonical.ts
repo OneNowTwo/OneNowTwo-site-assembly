@@ -18,6 +18,10 @@ export interface CanonicalScanOverlay {
   currentGrv: number | null;
   currentTheoreticalGfa: number | null;
   currentAchievableGfa: number | null;
+  currentExistingValue: number | null;
+  currentHeadroomPercent: number | null;
+  currentDwellings: number | null;
+  currentSaleableArea: number | null;
   /** Historical scan-era values (display only). */
   originalScanFsr: number | null;
   originalScanMaxPayable: number | null;
@@ -40,6 +44,10 @@ export function canonicalFromOpportunity(input: {
     grv: number | null;
     theoreticalGfa: number | null;
     achievableGfa: number | null;
+    existingValue: number | null;
+    headroomPercent: number | null;
+    dwellings: number | null;
+    saleableArea: number | null;
   };
   originalScan?: Partial<ScanCalculationSnapshot> | null;
   analysedAt?: string;
@@ -57,6 +65,10 @@ export function canonicalFromOpportunity(input: {
     currentGrv: input.calculation.grv,
     currentTheoreticalGfa: input.calculation.theoreticalGfa,
     currentAchievableGfa: input.calculation.achievableGfa,
+    currentExistingValue: input.calculation.existingValue,
+    currentHeadroomPercent: input.calculation.headroomPercent,
+    currentDwellings: input.calculation.dwellings,
+    currentSaleableArea: input.calculation.saleableArea,
     originalScanFsr: orig?.modelledEffectiveFsr ?? null,
     originalScanMaxPayable: orig?.maxPayable ?? null,
     originalScanHeadroom: orig?.headroom ?? null,
@@ -79,6 +91,12 @@ export function applyCanonicalOverlay(candidate: ScanCandidate, overlay: Canonic
     effectiveFsr: overlay.currentEffectiveFsr ?? candidate.effectiveFsr,
     maxPayable: overlay.currentMaxPayable ?? candidate.maxPayable,
     headroom: overlay.currentHeadroom ?? candidate.headroom,
+    headroomPercent: overlay.currentHeadroomPercent ?? candidate.headroomPercent,
+    existingValue: overlay.currentExistingValue ?? candidate.existingValue,
+    existingValueLow: overlay.currentExistingValue != null ? null : candidate.existingValueLow,
+    existingValueHigh: overlay.currentExistingValue != null ? null : candidate.existingValueHigh,
+    existingValueEstimated: overlay.currentExistingValue == null,
+    indicativeUnits: overlay.currentDwellings ?? candidate.indicativeUnits,
     financialRankingAvailable: overlay.currentMaxPayable != null,
     score: { ...candidate.score, score: nextScore },
     calculationSnapshot: {
@@ -91,6 +109,8 @@ export function applyCanonicalOverlay(candidate: ScanCandidate, overlay: Canonic
       grv: overlay.currentGrv ?? candidate.calculationSnapshot.grv,
       theoreticalGfa: overlay.currentTheoreticalGfa ?? candidate.calculationSnapshot.theoreticalGfa,
       achievableGfa: overlay.currentAchievableGfa ?? candidate.calculationSnapshot.achievableGfa,
+      existingValue: overlay.currentExistingValue ?? candidate.calculationSnapshot.existingValue,
+      dwellings: overlay.currentDwellings ?? candidate.calculationSnapshot.dwellings,
       calculatedAt: overlay.analysedAt,
     },
     originalScanFsr: originalFsr,

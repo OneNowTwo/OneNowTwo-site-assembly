@@ -33,6 +33,10 @@ export async function GET(req: Request) {
         grv: true,
         theoreticalGfa: true,
         achievableGfa: true,
+        combinedMarketValue: true,
+        acquisitionHeadroomPercent: true,
+        saleableArea: true,
+        unitCount: true,
         updatedAt: true,
       },
     });
@@ -47,15 +51,15 @@ export async function GET(req: Request) {
       // Analyse → Map sync works after session restore / new tab.
       if (!keys.length && sessionId && prov.scanSessionId !== sessionId) continue;
 
-      const canonical = prov.canonicalCalculation;
       const orig = prov.scanCalculationSnapshot as Partial<ScanCalculationSnapshot> | undefined;
-      // Prefer persisted canonicalCalculation; fall back to opportunity cached summary + FSR override.
+      // Current financial values come directly from the latest persisted opportunity row.
+      // scanProvenance.canonicalCalculation is retained for backwards-compatible history only.
       const effectiveFsr =
-        canonical?.effectiveFsr ??
         (inputs.fsrOverrideKind === "SCAN_MODELLED" || inputs.fsrOverrideKind === "USER" ? inputs.fsrOverride : null) ??
         inputs.pathwaySnapshot?.modelledFsr ??
+        prov.canonicalCalculation?.effectiveFsr ??
         null;
-      if (canonical == null && row.maxLandBudget == null && effectiveFsr == null) continue;
+      if (row.maxLandBudget == null && effectiveFsr == null) continue;
 
       overlays.push(
         canonicalFromOpportunity({
@@ -64,16 +68,20 @@ export async function GET(req: Request) {
           scanSessionId: prov.scanSessionId,
           calculation: {
             effectiveFsr,
-            effectiveHeightM: canonical?.effectiveHeightM ?? inputs.heightOverrideM ?? inputs.pathwaySnapshot?.modelledHeightM ?? null,
-            maxPayable: canonical?.maxPayable ?? row.maxLandBudget ?? null,
-            headroom: canonical?.headroom ?? row.acquisitionHeadroom ?? null,
-            score: canonical?.score ?? row.score ?? null,
-            grv: canonical?.grv ?? row.grv ?? null,
-            theoreticalGfa: canonical?.theoreticalGfa ?? row.theoreticalGfa ?? null,
-            achievableGfa: canonical?.achievableGfa ?? row.achievableGfa ?? null,
+            effectiveHeightM: inputs.heightOverrideM ?? inputs.pathwaySnapshot?.modelledHeightM ?? prov.canonicalCalculation?.effectiveHeightM ?? null,
+            maxPayable: row.maxLandBudget ?? null,
+            headroom: row.acquisitionHeadroom ?? null,
+            score: row.score ?? null,
+            grv: row.grv ?? null,
+            theoreticalGfa: row.theoreticalGfa ?? null,
+            achievableGfa: row.achievableGfa ?? null,
+            existingValue: row.combinedMarketValue ?? null,
+            headroomPercent: row.acquisitionHeadroomPercent ?? null,
+            dwellings: row.unitCount ?? null,
+            saleableArea: row.saleableArea ?? null,
           },
           originalScan: orig ?? null,
-          analysedAt: canonical?.analysedAt ?? row.updatedAt.toISOString(),
+          analysedAt: row.updatedAt.toISOString(),
         }),
       );
     }

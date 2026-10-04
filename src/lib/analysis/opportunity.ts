@@ -18,6 +18,7 @@ import { acquisitionPropertyTotal, groupAcquisitionProperties } from "./acquisit
 import { assessEconomicConfidence, type EconomicConfidence } from "./economic-confidence";
 
 export interface OpportunityLot extends AnalysisLot {
+  externalParcelId?: string;
   geometry: Polygon | MultiPolygon;
   included: boolean;
   maxAllocationOverride: number | null;
@@ -303,7 +304,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     : null;
   const acquisitionProperties = groupAcquisitionProperties(
     lots.map((l) => {
-      const detail = inputs.lotValuationDetails?.[l.id];
+      const detail = inputs.lotValuationDetails?.[l.externalParcelId ?? l.id];
       const comps = (detail?.comps ?? []).map((c) => ({
         id: c.id,
         address: c.address,
@@ -337,8 +338,45 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   );
   // Prefer property-level acquisition value (shared address → one property, not sum of lot AVMs).
   const acqTotal = acquisitionPropertyTotal(acquisitionProperties);
-  const combinedMarketValue = acqTotal.mid ?? cadastralLotSumMid ?? lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
-  const marketValueComplete = acqTotal.complete || (lots.length > 0 && lots.every((l) => (l.marketValue ?? 0) > 0));
+  const hasSharedProperty = acquisitionProperties.some((p) => p.lotIds.length > 1);
+  // A shared property estimate must enter economics once. Never fall back to summing
+  // identical property-level values stamped on each cadastral parcel.
+  const combinedMarketValue =
+    acqTotal.mid ??
+    (!hasSharedProperty ? (cadastralLotSumMid ?? lots.reduce((s, l) => s + (l.marketValue ?? 0), 0)) : 0);
+  const marketValueComplete =
+    acqTotal.complete || (!hasSharedProperty && lots.length > 0 && lots.every((l) => (l.marketValue ?? 0) > 0));
+
+  // Allocate each acquisition-property estimate across its cadastral lots solely for
+  // existing lot-level offer/criticality machinery. The allocations sum exactly to the
+  // property value and are not presented as independent lot AVMs.
+  const allocatedPropertyValues = new Map<
+    string,
+    { mid: number | null; low: number | null; high: number | null; shared: boolean }
+  >();
+  for (const property of acquisitionProperties) {
+    const members = lots.filter((l) => property.lotIds.includes(l.id));
+    const totalArea = members.reduce((sum, l) => sum + l.areaSqm, 0) || 1;
+    for (const member of members) {
+      const share = member.areaSqm / totalArea;
+      allocatedPropertyValues.set(member.id, {
+        mid: property.marketValue != null ? property.marketValue * share : null,
+        low: property.marketValueLow != null ? property.marketValueLow * share : null,
+        high: property.marketValueHigh != null ? property.marketValueHigh * share : null,
+        shared: property.lotIds.length > 1,
+      });
+    }
+  }
+  const economicLots = lots.map((lot) => {
+    const allocated = allocatedPropertyValues.get(lot.id);
+    if (!allocated?.shared) return lot;
+    return {
+      ...lot,
+      marketValue: allocated.mid,
+      marketValueLow: allocated.low,
+      marketValueHigh: allocated.high,
+    };
+  });
   // Probe saleable area from the SAME effective FSR used by yield/feasibility (not stale LEP-only metrics).
   const mixProbe = computeYield({
     siteAreaSqm: site.siteAreaSqm,
@@ -353,7 +391,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     achievableGfaOverride: inputs.achievableGfaOverride,
   });
   const unitMix = resolveUnitMix(inputs, site.yieldStatus === "CALCULABLE" ? mixProbe.saleableArea : 0);
-  const metrics = computeAssemblyMetrics(lots, a, adj, a.revenueMode === "UNIT_MIX" ? unitMix : undefined);
+  const metrics = computeAssemblyMetrics(economicLots, a, adj, a.revenueMode === "UNIT_MIX" ? unitMix : undefined);
 
   // Max payable comes from development feasibility — independent of existing property values.
   const scenarios = {
@@ -370,9 +408,9 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   const head =
     feasibilityCalculable && existingValue != null ? acquisitionHeadroom(budget, existingValue) : null;
   const valuation = feasibilityCalculable
-    ? summariseAssemblyValuation(lots, budget, a.existingValuePerSqm)
+    ? summariseAssemblyValuation(economicLots, budget, a.existingValuePerSqm)
     : {
-        ...summariseAssemblyValuation(lots, 0, a.existingValuePerSqm),
+        ...summariseAssemblyValuation(economicLots, 0, a.existingValuePerSqm),
         headroomMid: null,
         headroomLow: null,
         headroomHigh: null,
@@ -388,7 +426,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   };
   const parcelArea = lots.reduce((s, l) => s + l.areaSqm, 0) || 1;
   const economicsFor = (ids: string[]): Economics => {
-    const subset = lots.filter((l) => ids.includes(l.id));
+    const subset = economicLots.filter((l) => ids.includes(l.id));
     const subArea = subset.reduce((s, l) => s + l.areaSqm, 0);
     const scaledSite: SiteBasis = {
       ...siteBasisFromLots(subset, { ...inputs, siteAreaOverride: null, fsrOverride: inputs.fsrOverride, heightOverrideM: inputs.heightOverrideM }),
@@ -406,7 +444,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     };
   };
   const critical = analyseCriticalLots(
-    lots.map((l) => ({ id: l.id, areaSqm: l.areaSqm, marketValue: l.marketValue ?? null })),
+    economicLots.map((l) => ({ id: l.id, areaSqm: l.areaSqm, marketValue: l.marketValue ?? null })),
     adj,
     baseEcon,
     economicsFor,
@@ -416,7 +454,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
 
   const allocation = allocateOffers(
     budget,
-    lots.map((l) => {
+    economicLots.map((l) => {
       const c = critById.get(l.id);
       return {
         id: l.id,
@@ -444,7 +482,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     acquisitionHeadroom: head?.acquisitionHeadroom ?? 0,
   };
   const marginal = analyseMarginalLots(
-    lots.map((l) => ({ id: l.id, marketValue: l.marketValue ?? null, label: l.label })),
+    economicLots.map((l) => ({ id: l.id, marketValue: l.marketValue ?? null, label: l.label })),
     baseMarginal,
     (id) => {
       const e = economicsFor(lots.filter((l) => l.id !== id).map((l) => l.id));
@@ -454,7 +492,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
         achievableGfa: e.gfa,
         grv: e.grv ?? 0,
         maxPayable: e.budget,
-        combinedExistingValue: Math.max(0, (existingValue ?? 0) - (lots.find((l) => l.id === id)?.marketValue ?? 0)),
+        combinedExistingValue: Math.max(0, (existingValue ?? 0) - (economicLots.find((l) => l.id === id)?.marketValue ?? 0)),
         acquisitionHeadroom: e.headroom ?? 0,
       };
     },

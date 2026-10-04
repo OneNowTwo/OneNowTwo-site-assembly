@@ -27,6 +27,16 @@ export interface PersistedScanSession {
   parcelsConsidered: number;
   parcelsEligible: number;
   assembliesGenerated: number;
+  funnel?: {
+    parcelsLoaded: number;
+    parcelsConsidered: number;
+    parcelsEligible: number;
+    assembliesGenerated: number;
+    candidatesReturned: number;
+    generatedByLotCount?: Record<string, number>;
+    partialScan?: boolean;
+  } | null;
+  valuationStatus?: { valued: number; attempted: number } | null;
   centres: unknown[];
   activeKey: string | null;
   hiddenKeys: string[];

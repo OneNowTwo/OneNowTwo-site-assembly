@@ -88,6 +88,16 @@ interface ScanState {
   parcelsEligible: number;
   assembliesGenerated: number;
   funnelSummary: string | null;
+  funnel: {
+    parcelsLoaded: number;
+    parcelsConsidered: number;
+    parcelsEligible: number;
+    assembliesGenerated: number;
+    candidatesReturned: number;
+    generatedByLotCount?: Record<string, number>;
+    partialScan?: boolean;
+  } | null;
+  valuationStatus: { valued: number; attempted: number } | null;
   hiddenKeys: string[];
   showAllAssemblies: boolean;
   bbox: BBox | null;
@@ -107,6 +117,8 @@ function emptyScan(): ScanState {
     parcelsEligible: 0,
     assembliesGenerated: 0,
     funnelSummary: null,
+    funnel: null,
+    valuationStatus: null,
     hiddenKeys: [],
     showAllAssemblies: true,
     bbox: null,
@@ -160,6 +172,8 @@ export function MapWorkspace({
           parcelsEligible: restoredScan.parcelsEligible ?? 0,
           assembliesGenerated: restoredScan.assembliesGenerated ?? 0,
           funnelSummary: (restoredScan.messages ?? []).find((m: string) => m.startsWith("Scan funnel:")) ?? null,
+          funnel: restoredScan.funnel ?? null,
+          valuationStatus: restoredScan.valuationStatus ?? null,
           hiddenKeys: restoredScan.hiddenKeys ?? [],
           showAllAssemblies: restoredScan.showAllAssemblies ?? true,
           bbox: restoredScan.bbox,
@@ -209,6 +223,8 @@ export function MapWorkspace({
           parcelsConsidered: s.parcelsConsidered,
           parcelsEligible: s.parcelsEligible,
           assembliesGenerated: s.assembliesGenerated,
+          funnel: s.funnel,
+          valuationStatus: s.valuationStatus,
           centres,
           activeKey: opts?.activeKey !== undefined ? opts.activeKey : activeKey,
           hiddenKeys: s.hiddenKeys,
@@ -230,7 +246,7 @@ export function MapWorkspace({
     [scan, query, zoneFill, zoningWms, centres, activeKey],
   );
 
-  /** Overlay canonical CalculationSnapshot from analysed opportunities onto scan cards (no suburb rescan). */
+  /** Overlay latest persisted opportunity result onto scan cards (no suburb rescan). */
   const syncCanonicalFromOpportunities = useCallback(async () => {
     if (!scan.candidates.length) return;
     try {
@@ -248,6 +264,8 @@ export function MapWorkspace({
           c.effectiveFsr !== prev.effectiveFsr ||
           c.maxPayable !== prev.maxPayable ||
           c.headroom !== prev.headroom ||
+          c.existingValue !== prev.existingValue ||
+          c.indicativeUnits !== prev.indicativeUnits ||
           c.score.score !== prev.score.score ||
           c.rank !== prev.rank
         );
@@ -273,10 +291,7 @@ export function MapWorkspace({
         ...scan,
         candidates: nextCandidates,
         families: orderedFamilies.length ? orderedFamilies : nextFamilies,
-        messages: [
-          ...scan.messages.filter((m) => !m.startsWith("Canonical analysis synced")),
-          `Canonical analysis synced for ${overlays.length} assembly card(s) — original scan kept as history.`,
-        ],
+        messages: scan.messages.filter((m) => !m.startsWith("Canonical analysis synced")),
       };
       setScan(next);
       persistClientState({ scanOverride: next });
@@ -574,7 +589,16 @@ export function MapWorkspace({
         parcelsConsidered?: number;
         parcelsEligible?: number;
         assembliesGenerated?: number;
-        funnel?: { parcelsConsidered: number; parcelsEligible: number; assembliesGenerated: number; candidatesReturned: number };
+        funnel?: {
+          parcelsLoaded: number;
+          parcelsConsidered: number;
+          parcelsEligible: number;
+          assembliesGenerated: number;
+          candidatesReturned: number;
+          generatedByLotCount?: Record<string, number>;
+          partialScan?: boolean;
+        };
+        valuationStatus?: { valued: number; attempted: number };
         error?: string;
       }>("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) }, { retries: 1, delayMs: 3500 });
       // Merge scan parcels/valuations first so the map stays useful even if /api/parcels 502s.
@@ -635,6 +659,8 @@ export function MapWorkspace({
           (body.funnel
             ? `Scan funnel: ${body.funnel.parcelsConsidered} considered → ${body.funnel.parcelsEligible} eligible → ${body.funnel.assembliesGenerated} assemblies → ${body.funnel.candidatesReturned} ranked`
             : null),
+        funnel: body.funnel ?? null,
+        valuationStatus: body.valuationStatus ?? null,
         hiddenKeys: [],
         showAllAssemblies: true,
         bbox: body.bbox ?? bbox,
@@ -843,6 +869,19 @@ export function MapWorkspace({
     const hidden = new Set(scan.hiddenKeys);
     return scan.families.filter((f) => !hidden.has(f.best.key));
   }, [scan.families, scan.hiddenKeys]);
+
+  const scanDiagnostics = scan.messages.filter((message) =>
+    /PERF timings|NSW sales prefetch|canonical analysis synced|cache|request|timings|Property-level valuations|reranked/i.test(message),
+  );
+  const scanDetailMessages = scan.messages.filter(
+    (message) =>
+      !/PERF timings|NSW sales prefetch|canonical analysis synced|commercial licence|MVP\/research PSI|FINANCIAL RANKING PENDING|^LMR |PARTIAL SCAN|Property-level valuations|reranked/i.test(
+        message,
+      ),
+  );
+  const processedParcels = scan.funnel?.parcelsConsidered ?? scan.parcelsConsidered;
+  const loadedParcels = scan.funnel?.parcelsLoaded ?? processedParcels;
+  const isPartialScan = !!scan.funnel?.partialScan || loadedParcels > processedParcels;
 
   return (
     <div className="flex h-full">
@@ -1060,13 +1099,27 @@ export function MapWorkspace({
                   Clear results
                 </button>
                 <span className="text-[10.5px] text-muted">
-                  {scan.parcelsEligible}/{scan.parcelsConsidered} eligible · {scan.assembliesGenerated} combos · top {scan.candidates.length}
+                  {scan.assembliesGenerated.toLocaleString("en-AU")} assemblies found · Top {scan.candidates.length} shown
                 </span>
               </div>
             </div>
-            <div className="mt-1 flex flex-wrap gap-2 text-[10.5px]">
-              <Badge tone="neutral">Planning first · auto-value top assemblies</Badge>
-              <Badge tone="neutral">Negative headroom kept</Badge>
+            <div className="mt-2 rounded-[3px] border border-line bg-canvas/50 p-3 text-[11.5px]">
+              <div className={cx("font-semibold uppercase tracking-wide", isPartialScan ? "text-amber-900" : "text-good")}>
+                {isPartialScan ? "Partial scan" : "Scan complete"}
+              </div>
+              <div className="mt-1">
+                {processedParcels.toLocaleString("en-AU")}
+                {isPartialScan ? ` of ${loadedParcels.toLocaleString("en-AU")}` : ""} parcels processed
+              </div>
+              <div>{scan.assembliesGenerated.toLocaleString("en-AU")} assemblies found · Top {scan.candidates.length} shown</div>
+              {scan.valuationStatus && (
+                <div>
+                  Property values: {scan.valuationStatus.valued} of {scan.valuationStatus.attempted} valued
+                </div>
+              )}
+              <div>LMR: ≤800m straight-line proximity screen · estimated</div>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-[10.5px]">
               <button className="underline text-muted" onClick={showAllAssemblies}>
                 Show all
               </button>
@@ -1074,12 +1127,41 @@ export function MapWorkspace({
                 Hide all
               </button>
             </div>
-            {scan.funnelSummary && <p className="mt-1 text-[11px] font-medium text-ink">{scan.funnelSummary}</p>}
-            {scan.messages.map((m) => (
-              <p key={m} className="mt-1 text-[11px] text-amber-900">
-                {m}
-              </p>
-            ))}
+            <details className="mt-2 rounded-[3px] border border-line px-2 py-1.5 text-[11px]">
+              <summary className="cursor-pointer font-medium text-ink">Scan details</summary>
+              <div className="mt-2 space-y-1 text-muted">
+                <p>
+                  Funnel: {scan.parcelsConsidered.toLocaleString("en-AU")} considered · {scan.parcelsEligible.toLocaleString("en-AU")} eligible ·{" "}
+                  {scan.assembliesGenerated.toLocaleString("en-AU")} assemblies · {scan.candidates.length} shown
+                </p>
+                {scan.funnel?.generatedByLotCount && (
+                  <p>
+                    Combinations:{" "}
+                    {Object.entries(scan.funnel.generatedByLotCount)
+                      .map(([lots, count]) => `${lots} lots: ${count}`)
+                      .join(" · ")}
+                  </p>
+                )}
+                {scan.bbox && (
+                  <p className="num">
+                    Scope: {scan.bbox.west.toFixed(4)}, {scan.bbox.south.toFixed(4)} → {scan.bbox.east.toFixed(4)}, {scan.bbox.north.toFixed(4)}
+                  </p>
+                )}
+                {scanDetailMessages.slice(0, 8).map((message) => (
+                  <p key={message}>{message}</p>
+                ))}
+              </div>
+            </details>
+            {!!scanDiagnostics.length && (
+              <details className="mt-2 rounded-[3px] border border-line px-2 py-1.5 text-[11px]">
+                <summary className="cursor-pointer font-medium text-muted">Diagnostics</summary>
+                <div className="mt-2 space-y-1 text-muted">
+                  {scanDiagnostics.map((message) => (
+                    <p key={message}>{message}</p>
+                  ))}
+                </div>
+              </details>
+            )}
             <div className="mt-3 space-y-2">
               {scan.families.map((fam) => {
                 const c = fam.best;
@@ -1202,7 +1284,11 @@ export function MapWorkspace({
                           )}
                       </div>
                     )}
-                    {!!c.constraints.length && <div className="mt-2 text-[10.5px] text-muted">{c.constraints.join(" · ")}</div>}
+                    {!!c.constraints.filter((constraint) => !/LMR 800 m proximity/i.test(constraint)).length && (
+                      <div className="mt-2 text-[10.5px] text-muted">
+                        {c.constraints.filter((constraint) => !/LMR 800 m proximity/i.test(constraint)).join(" · ")}
+                      </div>
+                    )}
                     <ul className="mt-2 space-y-0.5 text-[11.5px]">
                       {c.scoreFactors.slice(0, 3).map((f) => (
                         <li key={f.text} className={f.sign === "+" ? "text-good" : "text-bad"}>

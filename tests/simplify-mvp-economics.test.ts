@@ -12,6 +12,10 @@ import {
 import { DEFAULT_UNIT_MIX_TEMPLATE } from "@/lib/analysis/unit-mix";
 import { assessEconomicConfidence } from "@/lib/analysis/economic-confidence";
 import { estimatePropertyLevelValue } from "@/lib/analysis/property-level-valuation";
+import { analyseOpportunity } from "@/lib/analysis/opportunity";
+import { parseOpportunityInputs } from "@/lib/analysis/assumptions";
+import { row } from "./helpers";
+import { finaliseScanMessages } from "@/lib/scan-messages";
 
 function makeComp(partial: Partial<CompSaleInput> & { id: string; salePrice: number; landAreaSqm: number }): CompSaleInput {
   return {
@@ -161,5 +165,47 @@ describe("simplify MVP economics", () => {
     expect(ec.costLines.find((c) => c.key === "basementParkingCost")?.sourceType).toBe("INCLUDED_IN_BENCHMARK");
     expect(ec.exit.status).toBe("BENCHMARK");
     expect(ec.overall).not.toBe("LOW");
+  });
+
+  it("counts one shared property estimate once across valuation, metrics and offer allocation", () => {
+    const lots = row(2, {
+      address: "66-68 Shared Road, Testville",
+      marketValue: 3_357_840,
+      marketValueLow: 3_022_056,
+      marketValueHigh: 3_693_624,
+      marketValueSource: "COMPARABLE_DERIVED",
+      marketValueMethod: "nsw_property_level_land_rate|property_level",
+    });
+    lots[0]!.areaSqm = 909;
+    lots[1]!.areaSqm = 473;
+    const analysis = analyseOpportunity(
+      lots,
+      { ...DEFAULT_ASSUMPTIONS, revenueMode: "PER_SQM" },
+      parseOpportunityInputs({}),
+    );
+
+    expect(analysis.combinedExistingValue).toBe(3_357_840);
+    expect(analysis.metrics.combinedValue).toBe(3_357_840);
+    expect(analysis.valuation.mid).toBeCloseTo(3_357_840, 0);
+    expect(analysis.valuation.mid).not.toBe(6_715_680);
+    expect(analysis.allocation.lots.reduce((sum, lot) => sum + lot.maximumOffer, 0)).toBeCloseTo(
+      analysis.maxPayableToOwners,
+      4,
+    );
+  });
+
+  it("removes transient pending and commercial licence copy from completed scans", () => {
+    const messages = finaliseScanMessages(
+      [
+        "FINANCIAL RANKING PENDING PROPERTY VALUES",
+        "Property valuations applied — assemblies reranked.",
+        "MVP/research PSI — commercial licence required before product sale.",
+        "PARTIAL SCAN — processed 1,200 of 1,880 parcels.",
+      ],
+      true,
+    );
+    expect(messages.some((message) => /PENDING PROPERTY VALUES/i.test(message))).toBe(false);
+    expect(messages.some((message) => /commercial licence|MVP\/research PSI/i.test(message))).toBe(false);
+    expect(messages.some((message) => /PARTIAL SCAN/i.test(message))).toBe(true);
   });
 });

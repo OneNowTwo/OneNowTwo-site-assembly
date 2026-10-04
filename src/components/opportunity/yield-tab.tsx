@@ -127,7 +127,15 @@ export function YieldTab() {
               </Field>
               <Field
                 label="Height limit (m)"
-                tag={<SourceTag kind={site.heightSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />}
+                tag={
+                  site.heightSource === "OVERRIDE" ? (
+                    <SourceTag kind="ASSUMPTION" />
+                  ) : analysis.planningSnapshot.effectiveControls.fsrSource === "STATE_PATHWAY" ? (
+                    <Badge tone="estimate">State pathway / system modelled</Badge>
+                  ) : (
+                    <SourceTag kind="OFFICIAL" />
+                  )
+                }
                 hint={`PlanningSnapshot effective: ${analysis.calculation.effectiveHeightM ?? "—"} m · LEP: ${analysis.planningSnapshot.effectiveControls.baseHeightM ?? "—"} m`}
               >
                 <NumberField

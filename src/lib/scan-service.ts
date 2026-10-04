@@ -6,6 +6,7 @@ import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
 import { valueParcels, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
 import { StageTimer } from "@/lib/perf/timing";
+import { finaliseScanMessages } from "@/lib/scan-messages";
 
 /** Tile a bbox into cadastre-safe cells. */
 export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
@@ -207,6 +208,9 @@ export async function scanArea(input: {
     progress.push("Running feasibility");
     const tFeas = performance.now();
     result = applyValuationsToScanResult(result, valuedParcels, assumptions);
+    // Pending valuation copy is transient. Once valuation has run, completed scan
+    // status must not display both "pending" and "valuations applied".
+    result = { ...result, messages: finaliseScanMessages(result.messages, true) };
     timer.add("feasibility_rerank", performance.now() - tFeas);
     progress.push("Ranking opportunities");
     result = { ...result, progress: [...new Set([...progress, ...result.progress])] };
@@ -222,7 +226,10 @@ export async function scanArea(input: {
 
   return {
     ...result,
-    messages: [...loaded.messages, ...valMessages, ...result.messages],
+    messages: finaliseScanMessages(
+      [...loaded.messages, ...valMessages, ...result.messages],
+      !input.skipValuation && toValue.length > 0,
+    ),
     bbox,
     cadastreStatus: loaded.cadastreStatus,
     planningStatus: loaded.planningStatus,
