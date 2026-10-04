@@ -6,6 +6,7 @@ import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
 import { resolveAreaExitBenchmarks } from "@/lib/analysis/exit-benchmark-provider";
 import { domainSuburbExitBenchmarkProvider } from "@/lib/data-sources/domain-suburb-exit-benchmarks";
+import { configSuburbExitBenchmarkProvider } from "@/lib/data-sources/config-suburb-exit-benchmarks";
 import { valueParcels, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
 import { StageTimer } from "@/lib/perf/timing";
 import { finaliseScanMessages } from "@/lib/scan-messages";
@@ -223,7 +224,8 @@ export async function scanArea(input: {
         lng: centroidLng,
         lat: centroidLat,
         nswSales: batch.salesPool,
-        bedroomProviders: [domainSuburbExitBenchmarkProvider],
+        // Config first; Domain last so live Domain bedroom medians win when available.
+        bedroomProviders: [configSuburbExitBenchmarkProvider, domainSuburbExitBenchmarkProvider],
       }),
     );
     if (exitBenchmarks.overallSampleSize > 0 || Object.keys(exitBenchmarks.byUnitType).length) {

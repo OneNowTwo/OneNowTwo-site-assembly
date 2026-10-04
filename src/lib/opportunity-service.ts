@@ -22,6 +22,7 @@ import { queryNswUrbanSalesNear } from "@/lib/data-sources/nsw-property-sales";
 import { applyExitBenchmarksToUnitMix } from "@/lib/analysis/exit-benchmarks";
 import { resolveAreaExitBenchmarks } from "@/lib/analysis/exit-benchmark-provider";
 import { domainSuburbExitBenchmarkProvider } from "@/lib/data-sources/domain-suburb-exit-benchmarks";
+import { configSuburbExitBenchmarkProvider } from "@/lib/data-sources/config-suburb-exit-benchmarks";
 import { autoGenerateUnitMix, DEFAULT_MIX_SHARES } from "@/lib/analysis/unit-mix";
 
 export const opportunityInclude = {
@@ -262,7 +263,8 @@ async function enrichUnitMixWithLocalExitBenchmarks(
       lng,
       lat,
       nswSales: sales,
-      bedroomProviders: [domainSuburbExitBenchmarkProvider],
+      // Config first; Domain last so live Domain bedroom medians win when available.
+      bedroomProviders: [configSuburbExitBenchmarkProvider, domainSuburbExitBenchmarkProvider],
     });
     const applied = applyExitBenchmarksToUnitMix(mix, benchmarks, inputs.exitPriceSources);
     if (!applied.applied) {
