@@ -4,6 +4,7 @@ import { fetchNominatedCentres, bboxAround, type NominatedCentre } from "@/lib/d
 import { getParcelsForBBox } from "@/lib/parcel-service";
 import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
+import { buildLocalExitBenchmarksFromNswSales } from "@/lib/analysis/exit-benchmarks";
 import { valueParcels, valuationProviderStatus } from "@/lib/data-sources/valuation-service";
 import { StageTimer } from "@/lib/perf/timing";
 import { finaliseScanMessages } from "@/lib/scan-messages";
@@ -93,7 +94,9 @@ export type ScanTimings = {
 /**
  * Staged area scan:
  * 1) planning/geometry (800 m straight-line LMR screen)  2) assemblies  3) top candidates
- * 4) auto-value only those lots  5) feasibility  6) rerank
+ * 4) prefetch NSW sales + auto-value those lots
+ * 5) derive local exit benchmarks once for the scan area
+ * 6) final feasibility with same market assumptions as Analyse  7) rerank
  * No pedestrian-routing APIs in MVP.
  */
 export async function scanArea(input: {
@@ -205,9 +208,15 @@ export async function scanArea(input: {
     const byId = new Map(batch.parcels.map((p) => [p.externalParcelId, p]));
     valuedParcels = loaded.parcels.map((p) => byId.get(p.externalParcelId) ?? p);
 
+    // Same prefetched sales → one local exit benchmark set for all shortlisted assemblies.
+    const exitBenchmarks = buildLocalExitBenchmarksFromNswSales(batch.salesPool);
+    if (exitBenchmarks.overallSampleSize > 0) {
+      progress.push("Applying local exit benchmarks");
+    }
+
     progress.push("Running feasibility");
     const tFeas = performance.now();
-    result = applyValuationsToScanResult(result, valuedParcels, assumptions);
+    result = applyValuationsToScanResult(result, valuedParcels, assumptions, { exitBenchmarks });
     // Pending valuation copy is transient. Once valuation has run, completed scan
     // status must not display both "pending" and "valuations applied".
     result = { ...result, messages: finaliseScanMessages(result.messages, true) };

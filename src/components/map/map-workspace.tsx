@@ -871,11 +871,13 @@ export function MapWorkspace({
   }, [scan.families, scan.hiddenKeys]);
 
   const scanDiagnostics = scan.messages.filter((message) =>
-    /PERF timings|NSW sales prefetch|canonical analysis synced|cache|request|timings|Property-level valuations|reranked/i.test(message),
+    /PERF timings|NSW sales prefetch|canonical analysis synced|cache|request|timings|Property-level valuations|reranked|Local exit benchmarks applied/i.test(
+      message,
+    ),
   );
   const scanDetailMessages = scan.messages.filter(
     (message) =>
-      !/PERF timings|NSW sales prefetch|canonical analysis synced|commercial licence|MVP\/research PSI|FINANCIAL RANKING PENDING|^LMR |PARTIAL SCAN|Property-level valuations|reranked/i.test(
+      !/PERF timings|NSW sales prefetch|canonical analysis synced|commercial licence|MVP\/research PSI|FINANCIAL RANKING PENDING|^LMR |PARTIAL SCAN|Property-level valuations|reranked|Local exit benchmarks applied/i.test(
         message,
       ),
   );

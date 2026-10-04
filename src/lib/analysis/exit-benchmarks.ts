@@ -2,6 +2,8 @@
  * Local apartment exit benchmarks for unit-mix GRV.
  * Prefer bedroom-specific medians when the source provides bedrooms;
  * otherwise fall back to local strata/unit median (no invented new-build premium).
+ *
+ * Used by both Area Scan (final ranking) and Analyse — same evidence → same prices.
  */
 
 import { DEFAULT_UNIT_MIX_TEMPLATE, type UnitMixRow } from "./unit-mix";
@@ -19,6 +21,49 @@ export interface ExitSaleEvidence {
   /** Strata unit area when available (not house land area). */
   unitAreaSqm?: number | null;
   strata?: boolean;
+}
+
+/** Minimal sale shape shared by NSW registered sales + other permitted sources. */
+export interface NswLikeSaleForExit {
+  salePrice: number;
+  strata: boolean;
+  landAreaSqm?: number | null;
+  bedrooms?: number | null;
+}
+
+/**
+ * Convert registered/permitted sales into exit evidence.
+ * Prefer strata; if the strata sample is tiny, allow small non-strata unit-sized sales
+ * as a weak fallback (same rule as Analyse enrichment).
+ */
+export function exitEvidenceFromNswLikeSales(sales: NswLikeSaleForExit[]): ExitSaleEvidence[] {
+  const evidence: ExitSaleEvidence[] = sales
+    .filter((s) => s.strata)
+    .map((s) => ({
+      salePrice: s.salePrice,
+      bedrooms: s.bedrooms ?? null,
+      unitAreaSqm: s.landAreaSqm != null && s.landAreaSqm > 0 && s.landAreaSqm <= 280 ? s.landAreaSqm : null,
+      strata: true,
+    }));
+  if (evidence.length < 4) {
+    for (const s of sales) {
+      if (s.strata) continue;
+      if (s.landAreaSqm != null && s.landAreaSqm > 0 && s.landAreaSqm <= 200) {
+        evidence.push({
+          salePrice: s.salePrice,
+          bedrooms: s.bedrooms ?? null,
+          unitAreaSqm: s.landAreaSqm,
+          strata: true,
+        });
+      }
+    }
+  }
+  return evidence;
+}
+
+/** Build local exit benchmarks from a prefetched NSW (or NSW-like) sales pool. */
+export function buildLocalExitBenchmarksFromNswSales(sales: NswLikeSaleForExit[]): ExitBenchmarkSet {
+  return buildLocalExitBenchmarks(exitEvidenceFromNswLikeSales(sales));
 }
 
 export interface ExitBenchmarkSet {

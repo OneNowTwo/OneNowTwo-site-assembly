@@ -10,6 +10,7 @@ import {
   type AssemblyCandidate,
 } from "./assembly";
 import type { Assumptions } from "./assumptions";
+import type { ExitBenchmarkSet } from "./exit-benchmarks";
 import { buildAdjacency, type Adjacency } from "./geometry";
 import { parcelLabel } from "@/lib/parcel-analysis";
 import {
@@ -310,6 +311,8 @@ export function runAreaScan(input: {
   maxResults?: number;
   /** Optional pedestrian-route hints keyed by externalParcelId. */
   walkingByParcelId?: Map<string, WalkingDistanceHint>;
+  /** Local exit benchmarks — same market inputs Analyse will use. */
+  exitBenchmarks?: ExitBenchmarkSet | null;
 }): AreaScanResult {
   const progress: string[] = [];
   const messages: string[] = [];
@@ -356,6 +359,7 @@ export function runAreaScan(input: {
       centres: input.centres,
       effectiveByParcelId: effectiveById,
       adjacency: adj,
+      exitBenchmarks: input.exitBenchmarks,
     });
     const snapshot = buildScanCalculationSnapshot(feasibility, memberParcels);
     const streets = c.lotIds.map((id) => streetKey(byParcel.get(id)?.address ?? null));
@@ -378,6 +382,7 @@ export function runAreaScan(input: {
     };
     const pps = planningPotentialScore(candidateForScore, effectiveById);
     const scored = feasibility.score;
+    const financial = feasibility.metrics.financialValuationAvailable;
 
     return {
       key: c.key,
@@ -392,29 +397,30 @@ export function runAreaScan(input: {
       effectiveCertainty: feasibility.effectiveCertainty,
       developmentType: feasibility.developmentType ?? "Residential redevelopment",
       indicativeUnits: feasibility.metrics.dwellings,
-      existingValue: feasibility.metrics.financialValuationAvailable ? feasibility.metrics.combinedValue : 0,
+      existingValue: financial ? feasibility.metrics.combinedValue : 0,
       existingValueLow: null,
       existingValueHigh: null,
-      existingValueEstimated: !feasibility.metrics.financialValuationAvailable,
+      existingValueEstimated: !financial,
       maxPayable: feasibility.metrics.maxPayableToOwners,
       headroom: feasibility.metrics.acquisitionHeadroom,
       headroomLow: null,
       headroomHigh: null,
       headroomPercent: feasibility.metrics.acquisitionHeadroomPercent,
-      financialRankingAvailable: feasibility.metrics.financialValuationAvailable,
+      financialRankingAvailable: financial,
       planningPotentialScore: pps,
-      constraints: feasibility.metrics.financialValuationAvailable
+      constraints: financial
         ? constraints
         : [...constraints, "FINANCIAL RANKING PENDING PROPERTY VALUES"],
       scoreFactors: scored.factors.slice(0, 5),
       lmrCentre: feasibility.lmrCentre,
       lmrBand: feasibility.lmrBand,
       metrics: feasibility.metrics,
-      // Without trusted values, rank on planning potential only — no fake headroom precision.
+      // With trusted values + exit benchmarks: same scoreAssembly as Analyse.
+      // Without values: planning potential only — no fake headroom precision.
       score: {
         ...scored,
-        score: feasibility.metrics.financialValuationAvailable
-          ? Math.round(scored.score * 0.55 + pps * 0.45)
+        score: financial
+          ? scored.score
           : Math.round(pps * 0.85 + scored.components.planningCapacity * 0.1 + scored.components.geometry * 0.05),
       },
       calculationSnapshot: snapshot,
@@ -479,11 +485,13 @@ export function runAreaScan(input: {
 /**
  * After automatic valuations are attached to parcels, rebuild financials for existing
  * scan candidates and rerank (planning score retained when values still missing).
+ * Pass the same local exit benchmarks Analyse will use so ranking economics match.
  */
 export function applyValuationsToScanResult(
   result: AreaScanResult,
   valuedParcels: ParcelData[],
   assumptions: Assumptions,
+  opts?: { exitBenchmarks?: ExitBenchmarkSet | null },
 ): AreaScanResult {
   const byParcel = new Map(valuedParcels.map((p) => [p.externalParcelId, p]));
   const adj = buildAdjacency(valuedParcels.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })));
@@ -493,6 +501,7 @@ export function applyValuationsToScanResult(
       return [p.externalParcelId, el.effective] as const;
     }),
   );
+  const exitBenchmarks = opts?.exitBenchmarks ?? null;
 
   const rebuild = (c: ScanCandidate): ScanCandidate => {
     const memberParcels = c.lotIds.map((id) => byParcel.get(id)).filter((p): p is ParcelData => !!p);
@@ -503,6 +512,7 @@ export function applyValuationsToScanResult(
       centres: result.centres,
       effectiveByParcelId: effectiveById,
       adjacency: adj,
+      exitBenchmarks,
     });
     const snapshot = buildScanCalculationSnapshot(feasibility, memberParcels);
     const lotValuations: NonNullable<ScanCandidate["lotValuations"]> = {};
@@ -568,9 +578,12 @@ export function applyValuationsToScanResult(
         : [...new Set([...c.constraints, "FINANCIAL RANKING PENDING PROPERTY VALUES"])],
       scoreFactors: scored.factors.slice(0, 5),
       metrics: feasibility.metrics,
+      // Final financial ranking uses the same scoreAssembly result as Analyse.
       score: {
         ...scored,
-        score: financial ? Math.round(scored.score * 0.55 + pps * 0.45) : Math.round(pps * 0.85 + scored.components.planningCapacity * 0.1 + scored.components.geometry * 0.05),
+        score: financial
+          ? scored.score
+          : Math.round(pps * 0.85 + scored.components.planningCapacity * 0.1 + scored.components.geometry * 0.05),
       },
       calculationSnapshot: snapshot,
       lotValuations,
@@ -606,6 +619,11 @@ export function applyValuationsToScanResult(
   const messages = [...result.messages];
   if (candidates.some((c) => c.financialRankingAvailable)) {
     messages.push("Property valuations applied — assemblies reranked with acquisition headroom where AVM data exists.");
+  }
+  if (exitBenchmarks && exitBenchmarks.overallSampleSize > 0) {
+    messages.push(
+      `Local exit benchmarks applied to scan ranking (${exitBenchmarks.overallSampleSize} sales) — ${exitBenchmarks.sourceLabel}.`,
+    );
   }
 
   return {

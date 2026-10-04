@@ -21,7 +21,7 @@ import type { MarketValueSource } from "@/generated/prisma/client";
 import { queryNswUrbanSalesNear } from "@/lib/data-sources/nsw-property-sales";
 import {
   applyExitBenchmarksToUnitMix,
-  buildLocalExitBenchmarks,
+  buildLocalExitBenchmarksFromNswSales,
   isTemplateDefaultSalePrice,
 } from "@/lib/analysis/exit-benchmarks";
 import { autoGenerateUnitMix, DEFAULT_MIX_SHARES } from "@/lib/analysis/unit-mix";
@@ -259,25 +259,9 @@ async function enrichUnitMixWithLocalExitBenchmarks(
   const lat = included.reduce((s, p) => s + p.parcel.centroidLat, 0) / included.length;
   const suburb = opp.suburb;
   try {
+    // Same radius/method as scan-area sales reuse so Analyse does not transform scan economics.
     const sales = await queryNswUrbanSalesNear({ lng, lat, radiusM: 1500, suburb, maxRecords: 200 });
-    const evidence = sales
-      .filter((s) => s.strata)
-      .map((s) => ({
-        salePrice: s.salePrice,
-        bedrooms: null as number | null,
-        unitAreaSqm: s.landAreaSqm != null && s.landAreaSqm > 0 && s.landAreaSqm <= 280 ? s.landAreaSqm : null,
-        strata: true,
-      }));
-    // Also allow non-strata unit-sized sales as weak fallback only when strata sample is tiny.
-    if (evidence.length < 4) {
-      for (const s of sales) {
-        if (s.strata) continue;
-        if (s.landAreaSqm != null && s.landAreaSqm > 0 && s.landAreaSqm <= 200) {
-          evidence.push({ salePrice: s.salePrice, bedrooms: null, unitAreaSqm: s.landAreaSqm, strata: true });
-        }
-      }
-    }
-    const benchmarks = buildLocalExitBenchmarks(evidence);
+    const benchmarks = buildLocalExitBenchmarksFromNswSales(sales);
     const applied = applyExitBenchmarksToUnitMix(mix, benchmarks);
     if (!applied.applied) return { ...inputs, unitMix: mix, exitPriceSources: inputs.exitPriceSources };
     return {
