@@ -1,14 +1,7 @@
-import { MapWorkspace } from "@/components/map/map-workspace";
-import { getGlobalAssumptions } from "@/lib/opportunity-service";
-
+/** Map UI is kept mounted by AppShell so nav tabs do not remount Leaflet / abort scans. */
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Map — Site Assembly" };
 
-export default async function MapPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ scan?: string; lat?: string; lng?: string; zoom?: string }>;
-}) {
-  const sp = await searchParams;
-  return <MapWorkspace assumptions={await getGlobalAssumptions()} initialScanQuery={sp.scan ?? null} />;
+export default function MapPage() {
+  return <div className="h-full" aria-label="Map workspace" />;
 }
