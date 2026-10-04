@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { createOpportunity } from "@/lib/opportunity-service";
+import { parseOpportunityInputs } from "@/lib/analysis/assumptions";
 import { STAGE_PROGRESS } from "@/lib/constants";
 import { jsonError, requireSession } from "@/lib/session";
 import type { ParcelData } from "@/lib/types";
@@ -18,6 +19,13 @@ export async function GET() {
     return NextResponse.json(
       rows.map((o) => {
         const inc = o.parcels.filter((p) => p.included);
+        const inputs = parseOpportunityInputs(o.inputs);
+        const canonical = inputs.scanProvenance?.canonicalCalculation;
+        const effectiveFsr =
+          canonical?.effectiveFsr ??
+          (inputs.fsrOverrideKind === "SCAN_MODELLED" || inputs.fsrOverrideKind === "USER" ? inputs.fsrOverride : null) ??
+          inputs.pathwaySnapshot?.modelledFsr ??
+          null;
         return {
           id: o.id,
           name: o.name,
@@ -27,13 +35,14 @@ export async function GET() {
           demoFinancialData: o.demoFinancialData,
           lotCount: inc.length,
           totalSiteArea: o.totalSiteArea,
-          score: o.score,
-          grv: o.grv,
-          maxLandBudget: o.maxLandBudget,
+          score: canonical?.score ?? o.score,
+          effectiveFsr,
+          grv: canonical?.grv ?? o.grv,
+          maxLandBudget: canonical?.maxPayable ?? o.maxLandBudget,
           profit: o.profit,
           marginOnCost: o.marginOnCost,
           combinedMarketValue: o.combinedMarketValue,
-          acquisitionHeadroom: o.acquisitionHeadroom,
+          acquisitionHeadroom: canonical?.headroom ?? o.acquisitionHeadroom,
           acquisitionHeadroomPercent: o.acquisitionHeadroomPercent,
           unitCount: o.unitCount,
           acquisitionProgress: inc.length ? inc.reduce((s, p) => s + STAGE_PROGRESS[p.acquisitionStage], 0) / inc.length : 0,

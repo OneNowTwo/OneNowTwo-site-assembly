@@ -64,6 +64,7 @@ export function toOpportunityLots(opp: OpportunityWithRelations): OpportunityLot
       ownerName: op.owner?.name ?? null,
       planningInstrument: op.parcel.planningInstrument,
       planningCheckedAt: op.parcel.planningCheckedAt?.toISOString() ?? null,
+      address: op.parcel.address,
     };
   });
 }
@@ -252,13 +253,37 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
   // After FSR pathway refresh clears unit mix, persist the regenerated mix so Yield/Feasibility stay aligned.
   const shouldPersistRegeneratedMix = !hadPersistedMix && analysis.unitMix.length > 0;
 
+  // Persist canonical CalculationSnapshot onto scanProvenance so map/Top Opportunities
+  // can sync without re-running suburb scan or inventing a parallel calculator.
+  const scanProv = inputs.scanProvenance;
+  const nextInputs = {
+    ...inputs,
+    ...(shouldPersistRegeneratedMix ? { unitMix: analysis.unitMix } : {}),
+    ...(scanProv
+      ? {
+          scanProvenance: {
+            ...scanProv,
+            canonicalCalculation: {
+              effectiveFsr: analysis.calculation.effectiveFsr,
+              effectiveHeightM: analysis.calculation.effectiveHeightM,
+              maxPayable: analysis.calculation.maxPayable,
+              headroom: analysis.calculation.headroom,
+              score: analysis.calculation.score,
+              grv: analysis.calculation.grv,
+              theoreticalGfa: analysis.calculation.theoreticalGfa,
+              achievableGfa: analysis.calculation.achievableGfa,
+              analysedAt: new Date().toISOString(),
+            },
+          },
+        }
+      : {}),
+  };
+
   await prisma.$transaction([
     prisma.opportunity.update({
       where: { id },
       data: {
-        ...(shouldPersistRegeneratedMix
-          ? { inputs: { ...inputs, unitMix: analysis.unitMix } as unknown as Prisma.InputJsonValue }
-          : {}),
+        inputs: nextInputs as unknown as Prisma.InputJsonValue,
         score: analysis.score.score,
         scoreFactors: analysis.score as unknown as Prisma.InputJsonValue,
         totalSiteArea: analysis.site.siteAreaSqm,

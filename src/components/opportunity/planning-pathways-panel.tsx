@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useOpportunity } from "./context";
-import { Badge, Panel, SourceTag } from "@/components/ui";
+import { Badge, Button, Panel, SourceTag } from "@/components/ui";
 import { date, fsr } from "@/lib/format";
 import { formatLepFsr, type PlanningSnapshot } from "@/lib/planning/planning-snapshot";
 import type { PlanningChangeRecord } from "@/lib/planning/types";
@@ -19,6 +19,8 @@ function Line({ k, v, tag }: { k: string; v: string; tag?: "OFFICIAL" | "ASSUMPT
   );
 }
 
+const PENDING_TIMEOUT_MS = 18_000;
+
 /** A / B / C — render solely from the opportunity PlanningSnapshot; only pending is hydrated from the API. */
 export function PlanningPathwaysPanel({ snapshot }: { snapshot: PlanningSnapshot }) {
   const { dto } = useOpportunity();
@@ -26,18 +28,27 @@ export function PlanningPathwaysPanel({ snapshot }: { snapshot: PlanningSnapshot
   const [pendingCheckedAt, setPendingCheckedAt] = useState<string | null>(snapshot.pendingChangesCheckedAt);
   const [pendingSource, setPendingSource] = useState(snapshot.pendingChangesSource);
   const [loadingPending, setLoadingPending] = useState(true);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  const loadPending = useCallback(async (signal: AbortSignal) => {
+    const { fetchApiJson } = await import("@/lib/api-json");
+    return fetchApiJson<{
+      pendingChanges?: PlanningChangeRecord[];
+      pendingChangesCheckedAt?: string | null;
+      pendingChangesSource?: string;
+      planningSnapshot?: PlanningSnapshot;
+    }>(`/api/opportunities/${dto.id}/planning-context`, { signal });
+  }, [dto.id]);
 
   useEffect(() => {
     let cancelled = false;
-    import("@/lib/api-json")
-      .then(({ fetchApiJson }) =>
-        fetchApiJson<{
-          pendingChanges?: PlanningChangeRecord[];
-          pendingChangesCheckedAt?: string | null;
-          pendingChangesSource?: string;
-          planningSnapshot?: PlanningSnapshot;
-        }>(`/api/opportunities/${dto.id}/planning-context`),
-      )
+    const ac = new AbortController();
+    const timer = window.setTimeout(() => ac.abort(), PENDING_TIMEOUT_MS);
+    setLoadingPending(true);
+    setPendingError(null);
+
+    loadPending(ac.signal)
       .then((body) => {
         if (cancelled) return;
         setPending(body.pendingChanges ?? body.planningSnapshot?.proposedPendingChanges ?? []);
@@ -47,19 +58,25 @@ export function PlanningPathwaysPanel({ snapshot }: { snapshot: PlanningSnapshot
             body.planningSnapshot?.pendingChangesSource ??
             "NSW Planning Proposal layers + curated watchlist",
         );
+        setPendingError(null);
       })
-      .catch(() => {
+      .catch((err: Error) => {
         if (cancelled) return;
-        setPending([]);
+        // Do not invent an empty success — surface failure + retry. A/B and feasibility stay untouched.
+        setPendingError(err.name === "AbortError" ? "Planning proposal check timed out" : err.message || "Planning proposal check failed");
         setPendingCheckedAt(new Date().toISOString());
       })
       .finally(() => {
+        window.clearTimeout(timer);
         if (!cancelled) setLoadingPending(false);
       });
+
     return () => {
       cancelled = true;
+      ac.abort();
+      window.clearTimeout(timer);
     };
-  }, [dto.id]);
+  }, [dto.id, loadPending, retryNonce]);
 
   const statutory = snapshot.currentStatutoryControls;
   const pathways = snapshot.currentStatePathways;
@@ -168,9 +185,30 @@ export function PlanningPathwaysPanel({ snapshot }: { snapshot: PlanningSnapshot
         </div>
       </Panel>
 
-      <Panel title="C · Proposed / pending changes">
+      <Panel
+        title="C · Proposed / pending changes"
+        actions={
+          pendingError ? (
+            <Button size="sm" onClick={() => setRetryNonce((n) => n + 1)}>
+              Retry
+            </Button>
+          ) : undefined
+        }
+      >
         {loadingPending && <p className="text-[12px] text-muted">Checking NSW planning-proposal layers…</p>}
-        {!loadingPending && !pending.length && (
+        {!loadingPending && pendingError && (
+          <div className="space-y-2 text-[12px]">
+            <p className="font-medium text-amber-900">Planning proposal check failed — retry</p>
+            <p className="text-muted">{pendingError}</p>
+            <p className="text-muted">
+              Current statutory controls and State pathways above are unaffected. Proposed layers never change today&apos;s
+              max payable.
+            </p>
+            <p className="text-muted">Source attempted: {pendingSource}</p>
+            <p className="text-muted">Date checked: {date(pendingCheckedAt)}</p>
+          </div>
+        )}
+        {!loadingPending && !pendingError && !pending.length && (
           <div className="space-y-1 text-[12px] text-muted">
             <p className="font-medium text-ink">No relevant proposed / pending changes found</p>
             <p>Source checked: {pendingSource}</p>

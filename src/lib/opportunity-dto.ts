@@ -176,5 +176,6 @@ export function dtoToLots(dto: OpportunityDTO): OpportunityLot[] {
     ownerName: l.owner?.name ?? null,
     planningInstrument: l.planningInstrument,
     planningCheckedAt: l.planningCheckedAt,
+    address: l.address,
   }));
 }

@@ -453,6 +453,64 @@ export function OverviewTab() {
         <div className="h-[340px] overflow-hidden rounded-[3px] border border-line">
           <LotsMap lots={dto.lots} selectedId={selected} onSelect={setSelected} />
         </div>
+        <Panel title="Feasibility confidence">
+          <p className="mb-2 text-[11px] text-muted">
+            Separate from opportunity score. High score can still mean low confidence in GRV / costs.
+          </p>
+          <div className="grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-3">
+            {(
+              [
+                ["Acquisition value", analysis.economicConfidence.acquisitionValue],
+                ["Exit value", analysis.economicConfidence.exitValue],
+                ["Development cost", analysis.economicConfidence.developmentCost],
+                ["Planning", analysis.economicConfidence.planning],
+                ["Overall feasibility", analysis.economicConfidence.overall],
+              ] as const
+            ).map(([label, level]) => (
+              <div key={label} className="rounded-[3px] border border-line px-2 py-1.5">
+                <div className="text-[10px] uppercase text-muted">{label}</div>
+                <div
+                  className={cx(
+                    "mt-0.5 font-semibold",
+                    level === "HIGH" || level === "CONFIRMED"
+                      ? "text-good"
+                      : level === "MEDIUM" || level === "ESTIMATED"
+                        ? "text-amber-900"
+                        : "text-bad",
+                  )}
+                >
+                  {level}
+                </div>
+              </div>
+            ))}
+          </div>
+          {analysis.economicConfidence.acquisitionProperties.some((p) => p.valueBasis === "MAX_OF_SHARED_ADDRESS") && (
+            <p className="mt-2 text-[11px] text-amber-900">
+              Shared-address cadastral lots valued as one acquisition property
+              {analysis.economicConfidence.cadastralLotSumMid != null &&
+                analysis.economicConfidence.acquisitionValueMid != null &&
+                ` (property mid ${money(analysis.economicConfidence.acquisitionValueMid)} vs lot-sum ${money(analysis.economicConfidence.cadastralLotSumMid)})`}
+              .
+            </p>
+          )}
+          {analysis.economicConfidence.exit.status === "EXIT_VALUE_VALIDATION_REQUIRED" && (
+            <p className="mt-2 text-[11px] text-amber-900">
+              Exit GRV {money(analysis.economicConfidence.exit.baseGrv, { compact: true })} — USER / SYSTEM ASSUMPTION —
+              EXIT VALUE VALIDATION REQUIRED
+              {analysis.economicConfidence.exit.impliedSaleableRate != null
+                ? ` (implied ${money(analysis.economicConfidence.exit.impliedSaleableRate)}/sqm vs cross-check ${money(analysis.economicConfidence.exit.crossCheckRate)}/sqm)`
+                : ""}
+              .
+            </p>
+          )}
+          {!!analysis.economicConfidence.notes.length && (
+            <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] text-muted">
+              {analysis.economicConfidence.notes.slice(0, 4).map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
+        </Panel>
         <Panel title={`Opportunity score · ${analysis.score.score}/100`}>
           <div className="space-y-1.5">
             {(Object.keys(SCORE_WEIGHTS) as (keyof typeof SCORE_WEIGHTS)[]).map((k) => (
