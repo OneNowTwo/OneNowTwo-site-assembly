@@ -9,6 +9,7 @@
  */
 import type { OpportunityInputs } from "@/lib/analysis/assumptions";
 import { officialParcelTheoreticalGfa } from "@/lib/analysis/assembly";
+import { lmrRfbStandardForZone, type LmrBand } from "@/lib/data-sources/housing-sepp-lmr";
 import {
   buildPlanningSnapshot,
   inferStatePathwayHeightM,
@@ -56,7 +57,9 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
 
   const snap = input.inputs.pathwaySnapshot;
   const band = bandFromPersisted(snap?.lmrBand, snap?.nearestDistanceM ?? null);
-  const inferredPathwayHeight = snap?.modelledHeightM ?? inferStatePathwayHeightM(zone, band);
+  // Band+zone standard wins over stale persisted modelledHeightM (e.g. outer 17.5 left after inner screen).
+  const bandHeight = inferStatePathwayHeightM(zone, band);
+  const inferredPathwayHeight = bandHeight ?? snap?.modelledHeightM ?? null;
   const lepFsr = snap?.lepFsr ?? (anyUnmapped && officialFsr <= 0 ? null : officialFsr > 0 ? officialFsr : null);
 
   let fsrSource: PlanningFsrSource;
@@ -70,13 +73,29 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
     const fromScan = input.inputs.fsrOverrideKind === "SCAN_MODELLED";
     fsrSource = fromScan ? "STATE_PATHWAY" : "OVERRIDE";
     yieldStatus = "CALCULABLE";
-    effectiveFsr = input.inputs.fsrOverride;
-    statePathwayFsr = snap?.statePathwayFsr ?? (fromScan ? input.inputs.fsrOverride : null);
     statePathwayName =
       snap?.statePathwayName ?? (fromScan ? "Low & Mid-Rise Housing (Housing SEPP)" : null);
-    effectiveHeightM = fromScan
-      ? (input.inputs.heightOverrideM ?? inferredPathwayHeight ?? lepHeightM)
-      : (input.inputs.heightOverrideM ?? lepHeightM);
+
+    if (fromScan) {
+      // De-authorise stale SCAN_MODELLED numbers when persisted proximity+zone imply a
+      // different current LMR standard (e.g. outer 1.5/17.5 left behind after inner 2.2/22).
+      const bandForStd = band === "UNKNOWN" ? "OUTSIDE" : (band as LmrBand);
+      const std = lmrRfbStandardForZone(zone, bandForStd);
+      const fromProximityFsr = std.applicable ? std.fsr : null;
+      const fromProximityHeight = std.applicable ? std.heightM : null;
+      statePathwayFsr = fromProximityFsr ?? snap?.statePathwayFsr ?? input.inputs.fsrOverride;
+      effectiveFsr = statePathwayFsr;
+      effectiveHeightM =
+        fromProximityHeight ??
+        input.inputs.heightOverrideM ??
+        inferredPathwayHeight ??
+        snap?.modelledHeightM ??
+        lepHeightM;
+    } else {
+      effectiveFsr = input.inputs.fsrOverride;
+      statePathwayFsr = snap?.statePathwayFsr ?? null;
+      effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
+    }
   } else if (anyUnmapped && officialFsr <= 0) {
     fsrSource = "NO_MAPPED";
     yieldStatus = "REQUIRES_PLANNING_INPUT";

@@ -5,6 +5,7 @@ import { mergeAssumptions, parseOpportunityInputs, DEFAULT_ASSUMPTIONS, type Ass
 import { analyseOpportunity, type OpportunityLot } from "@/lib/analysis/opportunity";
 import { resolveAssemblyModelledControls } from "@/lib/analysis/resolve-assembly-controls";
 import { fetchNominatedCentres } from "@/lib/data-sources/housing-sepp-lmr";
+import { resolvePlanning } from "@/lib/planning/resolve-planning";
 import { lotDp } from "@/lib/format";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ComparableSaleDTO, LotDTO, OpportunityDTO, UnitTypeDTO } from "@/lib/opportunity-dto";
@@ -721,23 +722,69 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
   }
 
   const current = inputs.fsrOverride;
+  const snap = inputs.pathwaySnapshot;
+  // If persisted pathway fields already disagree with SCAN_MODELLED FSR (duplicate state),
+  // prefer the higher-fidelity live modelled result — or, when live equals the stale
+  // override, reconcile from resolvePlanning (proximity band + zone standards).
+  const includedOps = opp.parcels.filter((op) => op.included);
+  const planningReconcile = resolvePlanning({
+    lots: parcels.map((p, i) => ({
+      id: includedOps[i]?.id ?? p.externalParcelId,
+      label: p.address ?? p.externalParcelId,
+      included: true,
+      areaSqm: p.areaSqm,
+      zone: p.planning?.zone ?? null,
+      zoneName: p.planning?.zoneName ?? null,
+      fsr: p.planning?.fsr ?? null,
+      heightM: p.planning?.heightM ?? null,
+      minLotSizeSqm: p.planning?.minLotSizeSqm ?? null,
+      heritage: p.planning?.heritage ?? null,
+      planningInstrument: p.planning?.planningInstrument ?? null,
+      planningCheckedAt: p.retrievedAt ?? null,
+    })),
+    inputs,
+  });
+  const reconciledFsr = planningReconcile.effectiveControls.effectiveFsr;
+  const reconciledHeight = planningReconcile.effectiveControls.effectiveHeightM;
+  const targetFsr =
+    modelled.modelledFsr != null &&
+    (current == null || Math.abs(modelled.modelledFsr - (current ?? 0)) > 0.0005)
+      ? modelled.modelledFsr
+      : reconciledFsr ?? modelled.modelledFsr;
+  const targetHeight =
+    modelled.modelledHeightM != null &&
+    (inputs.heightOverrideM == null || Math.abs(modelled.modelledHeightM - inputs.heightOverrideM) > 0.05)
+      ? modelled.modelledHeightM
+      : reconciledHeight ?? modelled.modelledHeightM;
+
+  if (targetFsr == null || targetFsr <= 0) {
+    return {
+      applied: false,
+      modelledFsr: null,
+      messages: [
+        "NO MAPPED LEP FSR and no usable State pathway FSR resolved — feasibility stays REQUIRES PLANNING INPUT (not FSR 0:1).",
+        ...modelled.notes.slice(0, 3),
+      ],
+    };
+  }
+
   const fsrChanged =
     current == null ||
     inputs.fsrOverrideKind !== "SCAN_MODELLED" ||
-    Math.abs(current - modelled.modelledFsr) > 0.0005;
+    Math.abs(current - targetFsr) > 0.0005;
   const heightChanged =
-    modelled.modelledHeightM != null &&
-    (inputs.heightOverrideM == null || Math.abs(inputs.heightOverrideM - modelled.modelledHeightM) > 0.05);
-  const snap = inputs.pathwaySnapshot;
+    targetHeight != null &&
+    (inputs.heightOverrideM == null || Math.abs(inputs.heightOverrideM - targetHeight) > 0.05);
   const snapshotStale =
     !snap ||
-    snap.modelledFsr !== modelled.modelledFsr ||
-    snap.statePathwayFsr !== modelled.statePathwayFsr ||
+    snap.modelledFsr !== targetFsr ||
+    snap.statePathwayFsr !== (modelled.statePathwayFsr ?? planningReconcile.effectiveControls.stateFsr) ||
     snap.proximityScreen !== modelled.proximityScreen ||
-    snap.nearestDistanceM !== modelled.nearestDistanceM;
+    snap.nearestDistanceM !== modelled.nearestDistanceM ||
+    snap.modelledHeightM !== targetHeight;
 
   if (!fsrChanged && !heightChanged && !snapshotStale) {
-    return { applied: false, modelledFsr: modelled.modelledFsr, messages: ["Current modelled pathway FSR already applied"] };
+    return { applied: false, modelledFsr: targetFsr, messages: ["Current modelled pathway FSR already applied"] };
   }
 
   const originalScanFsr =
@@ -747,10 +794,10 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
 
   const next = {
     ...inputs,
-    fsrOverride: modelled.modelledFsr,
+    fsrOverride: targetFsr,
     fsrOverrideKind: "SCAN_MODELLED" as const,
-    fsrOverrideCertainty: modelled.certainty,
-    heightOverrideM: modelled.modelledHeightM ?? inputs.heightOverrideM,
+    fsrOverrideCertainty: modelled.certainty ?? "REQUIRES_PLANNING_CONFIRMATION",
+    heightOverrideM: targetHeight ?? inputs.heightOverrideM,
     originalScanFsr,
     fsrRecalculationStatus: recalculated
       ? "RECALCULATED_FROM_UPDATED_PLANNING_PATHWAY"
@@ -758,18 +805,21 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
     // Drop stale mix so dwellings / GRV rebuild from the new saleable area.
     ...(fsrChanged ? { unitMix: [] } : {}),
     pathwaySnapshot: {
-      lepFsr: modelled.lepFsr,
-      statePathwayFsr: modelled.statePathwayFsr,
-      statePathwayName: modelled.statePathwayName,
-      modelledFsr: modelled.modelledFsr,
-      modelledHeightM: modelled.modelledHeightM,
-      certainty: modelled.certainty,
-      lmrCentre: modelled.lmrCentre,
-      lmrBand: modelled.lmrBand,
-      nearestDistanceM: modelled.nearestDistanceM,
-      furthestDistanceM: modelled.furthestDistanceM,
-      proximityScreen: modelled.proximityScreen,
-      proximityLabel: modelled.proximityLabel,
+      lepFsr: modelled.lepFsr ?? planningReconcile.effectiveControls.baseFsr,
+      statePathwayFsr: planningReconcile.effectiveControls.stateFsr ?? modelled.statePathwayFsr ?? targetFsr,
+      statePathwayName:
+        planningReconcile.effectiveControls.statePathway ??
+        modelled.statePathwayName ??
+        "Low & Mid-Rise Housing (Housing SEPP)",
+      modelledFsr: targetFsr,
+      modelledHeightM: targetHeight,
+      certainty: modelled.certainty || "REQUIRES_PLANNING_CONFIRMATION",
+      lmrCentre: modelled.lmrCentre ?? planningReconcile.currentStatePathways.find((p) => p.kind === "LMR")?.centre ?? null,
+      lmrBand: modelled.lmrBand !== "OUTSIDE" ? modelled.lmrBand : planningReconcile.effectiveControls.proximityBand,
+      nearestDistanceM: modelled.nearestDistanceM ?? planningReconcile.effectiveControls.proximityDistanceM,
+      furthestDistanceM: modelled.furthestDistanceM ?? planningReconcile.effectiveControls.proximityDistanceMaxM,
+      proximityScreen: modelled.proximityScreen !== "NONE" ? modelled.proximityScreen : "PASS",
+      proximityLabel: modelled.proximityLabel ?? "PASS — ESTIMATED",
     },
   };
 
@@ -785,23 +835,23 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
   const messages: string[] = [];
   if (recalculated) {
     messages.push(
-      `RECALCULATED FROM UPDATED PLANNING PATHWAY — original scan FSR ${originalScanFsr}:1 superseded by current modelled FSR ${modelled.modelledFsr}:1` +
+      `RECALCULATED FROM UPDATED PLANNING PATHWAY — original scan FSR ${originalScanFsr}:1 superseded by current modelled FSR ${targetFsr}:1` +
         (modelled.lmrCentre ? ` near ${modelled.lmrCentre}` : "") +
         ` · ${modelled.proximityLabel ?? "PASS — ESTIMATED"}.`,
     );
   } else if (fsrChanged) {
     messages.push(
-      `Applied CURRENT State pathway modelled FSR ${modelled.modelledFsr}:1` +
+      `Applied CURRENT State pathway modelled FSR ${targetFsr}:1` +
         (modelled.lmrCentre ? ` near ${modelled.lmrCentre}` : "") +
         ` · 800 m proximity ${modelled.proximityLabel ?? "PASS — ESTIMATED"}` +
-        ` (${modelled.certainty.replaceAll("_", " ")}). NOT a silent LEP invent.`,
+        ` (${(modelled.certainty || "REQUIRES_PLANNING_CONFIRMATION").replaceAll("_", " ")}). NOT a silent LEP invent.`,
     );
   } else {
     messages.push("Refreshed LEP vs State pathway snapshot for display");
   }
   messages.push(...modelled.notes.slice(0, 4));
 
-  return { applied: true, modelledFsr: modelled.modelledFsr, messages };
+  return { applied: true, modelledFsr: targetFsr, messages };
 }
 
 /**
