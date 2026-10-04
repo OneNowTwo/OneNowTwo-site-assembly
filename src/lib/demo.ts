@@ -70,7 +70,7 @@ export const DEMO_INPUTS = {
     siteCoverage: 0.5,
     efficiency: 0.82,
     planningAdjustment: 0.9,
-    constructionCostPerSqm: 4_600,
+    constructionCostPerSqm: 4_154,
     targetMarginOnCost: 0.2,
   },
   fsrOverride: 2.0,

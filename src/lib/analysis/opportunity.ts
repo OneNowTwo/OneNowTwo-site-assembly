@@ -302,16 +302,38 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     ? lots.reduce((s, l) => s + (l.marketValue as number), 0)
     : null;
   const acquisitionProperties = groupAcquisitionProperties(
-    lots.map((l) => ({
-      id: l.id,
-      address: l.address ?? null,
-      areaSqm: l.areaSqm,
-      marketValue: l.marketValue ?? null,
-      marketValueLow: l.marketValueLow ?? null,
-      marketValueHigh: l.marketValueHigh ?? null,
-      marketValueSource: l.marketValueSource ?? null,
-      marketValueConfidence: l.marketValueConfidence ?? null,
-    })),
+    lots.map((l) => {
+      const detail = inputs.lotValuationDetails?.[l.id];
+      const comps = (detail?.comps ?? []).map((c) => ({
+        id: c.id,
+        address: c.address,
+        salePrice: c.salePrice,
+        saleDate: c.saleDate,
+        saleDateMs: c.saleDate ? Date.parse(c.saleDate) || null : null,
+        landAreaSqm: c.landAreaSqm,
+        distanceM: c.distanceM,
+        strata: false,
+        suburb: null as string | null,
+        zone: l.zone ?? null,
+        source: c.source,
+        dealing: c.dealing ?? null,
+      }));
+      return {
+        id: l.id,
+        address: l.address ?? null,
+        areaSqm: l.areaSqm,
+        marketValue: l.marketValue ?? null,
+        marketValueLow: l.marketValueLow ?? null,
+        marketValueHigh: l.marketValueHigh ?? null,
+        marketValueSource: l.marketValueSource ?? null,
+        marketValueConfidence: l.marketValueConfidence ?? null,
+        marketValueMethod: l.marketValueMethod ?? null,
+        suburb: null,
+        zone: l.zone ?? null,
+        isStrata: l.isStrata,
+        comps,
+      };
+    }),
   );
   // Prefer property-level acquisition value (shared address → one property, not sum of lot AVMs).
   const acqTotal = acquisitionPropertyTotal(acquisitionProperties);
@@ -545,6 +567,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
     acquisitionProperties,
     cadastralLotSumMid,
     overrides: inputs.overrides ?? {},
+    exitPriceSources: inputs.exitPriceSources ?? {},
   });
 
   return {

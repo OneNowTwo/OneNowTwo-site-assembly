@@ -1,6 +1,7 @@
 import type { Assumptions } from "./assumptions";
 import type { UnitMixRow } from "./unit-mix";
 import { computeUnitMix } from "./unit-mix";
+import { constructionCostSourceLabel, constructionRateIncludesLiftAndBasement } from "./construction-benchmarks";
 
 export interface FeasibilityInputs {
   gfa: number;
@@ -132,18 +133,38 @@ export function roundArea(n: number): number {
 }
 
 function fixedConstruction(a: FeasibilityInputs["a"]): { amount: number; lines: CostLine[] } {
+  const allIn = constructionRateIncludesLiftAndBasement(a.constructionCostPerSqm);
   const items: CostLine[] = [
-    { key: "basement", label: "Basement parking", amount: a.basementParkingCost, basis: "Fixed — user assumption" },
+    {
+      key: "basement",
+      label: "Basement parking",
+      amount: a.basementParkingCost,
+      basis:
+        allIn && a.basementParkingCost === 0
+          ? "Included in BMT all-in $/sqm benchmark — $0 here avoids double counting"
+          : "Fixed — user assumption",
+    },
     { key: "siteWorks", label: "Site works", amount: a.siteWorksCost, basis: "Fixed — user assumption" },
     { key: "remediation", label: "Remediation", amount: a.remediationCost, basis: "Fixed — user assumption" },
     { key: "excavation", label: "Difficult excavation", amount: a.difficultExcavationCost, basis: "Fixed — user assumption" },
     { key: "facade", label: "Premium façade", amount: a.premiumFacadeCost, basis: "Fixed — user assumption" },
-    { key: "lifts", label: "Lifts", amount: a.liftsCost, basis: "Fixed — user assumption" },
+    {
+      key: "lifts",
+      label: "Lifts",
+      amount: a.liftsCost,
+      basis:
+        allIn && a.liftsCost === 0
+          ? "Included in BMT all-in $/sqm benchmark — $0 here avoids double counting"
+          : "Fixed — user assumption",
+    },
     { key: "publicDomain", label: "Public domain works", amount: a.publicDomainWorksCost, basis: "Fixed — user assumption" },
     { key: "landscaping", label: "Landscaping", amount: a.landscapingCost, basis: "Fixed — user assumption" },
     { key: "otherFixedBuild", label: "Other fixed construction", amount: a.otherFixedConstructionCost, basis: "Fixed — user assumption" },
   ];
-  const lines = items.filter((x) => x.amount > 0);
+  // Keep $0 basement/lift rows when the published all-in rate already includes them (transparency).
+  const lines = items.filter(
+    (x) => x.amount > 0 || (allIn && (x.key === "basement" || x.key === "lifts") && x.amount === 0),
+  );
   return { amount: lines.reduce((s, x) => s + x.amount, 0), lines };
 }
 
@@ -191,12 +212,13 @@ function costBreakdown(i: FeasibilityInputs) {
   const selling = grv * a.sellingCostPct;
   const preFinance = construction + demolition + consultants + statutory + contingency + marketing + selling + a.otherCosts;
   const finance = preFinance * a.financePct;
+  const buildSource = constructionCostSourceLabel(a.constructionCostPerSqm, false);
   const lines: CostLine[] = [
     {
       key: "construction",
       label: "Core construction (GFA × rate)",
       amount: coreConstruction,
-      basis: `${displayGfa.toLocaleString("en-AU")} sqm × $${a.constructionCostPerSqm.toLocaleString("en-AU")}/sqm — USER ASSUMPTION`,
+      basis: `${displayGfa.toLocaleString("en-AU")} sqm × $${a.constructionCostPerSqm.toLocaleString("en-AU")}/sqm — ${buildSource}`,
     },
     ...fixed.lines,
     { key: "demolition", label: "Demolition & site preparation", amount: demolition, basis: `${i.lotCount} lots × $${a.demolitionPerLot.toLocaleString("en-AU")}` },
@@ -248,7 +270,13 @@ const MATERIAL_COST_LABELS: Record<MaterialCostInputKey, string> = {
 
 /** Flag material cost categories that remain $0 (not confirmed zero — estimate not supplied). */
 export function materialCostInputGaps(a: FeasibilityInputs["a"]): CostInputGap[] {
-  return MATERIAL_COST_INPUT_KEYS.filter((key) => (a[key] ?? 0) <= 0).map((key) => ({
+  // BMT 4–8 unit benchmark already includes lift + basement — do not flag those as missing.
+  const includedInRate = constructionRateIncludesLiftAndBasement(a.constructionCostPerSqm);
+  return MATERIAL_COST_INPUT_KEYS.filter((key) => {
+    if ((a[key] ?? 0) > 0) return false;
+    if (includedInRate && (key === "basementParkingCost" || key === "liftsCost")) return false;
+    return true;
+  }).map((key) => ({
     key,
     label: MATERIAL_COST_LABELS[key],
   }));

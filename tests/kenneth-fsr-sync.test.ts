@@ -118,7 +118,7 @@ describe("Kenneth Road effective FSR sync", () => {
     expect(scored.factors.some((f) => /Modelled effective FSR 2\.20:1/i.test(f.text))).toBe(true);
   });
 
-  it("flags zero material cost lines and GRV cross-check discrepancy without changing GRV", () => {
+  it("does not flag lift/basement when BMT all-in rate is used; still sense-checks GRV $/sqm", () => {
     const f = computeFeasibility({
       gfa: 2700,
       saleableArea: 1545,
@@ -129,15 +129,19 @@ describe("Kenneth Road effective FSR sync", () => {
       ],
       a: {
         ...A,
+        constructionCostPerSqm: 4154,
         basementParkingCost: 0,
         liftsCost: 0,
         siteWorksCost: 0,
         remediationCost: 0,
       },
     });
-    expect(f.costInputIncomplete).toBe(true);
+    // BMT all-in includes lift + basement — only optional site lines remain.
     expect(f.costInputGaps.map((g) => g.key)).toEqual(
-      expect.arrayContaining(["basementParkingCost", "liftsCost", "siteWorksCost", "remediationCost"]),
+      expect.arrayContaining(["siteWorksCost", "remediationCost"]),
+    );
+    expect(f.costInputGaps.map((g) => g.key)).not.toEqual(
+      expect.arrayContaining(["basementParkingCost", "liftsCost"]),
     );
     expect(f.grvCrossCheckWarning).not.toBeNull();
     expect(f.grvCrossCheckWarning!.status).toBe("EXIT_VALUE_VALIDATION_REQUIRED");

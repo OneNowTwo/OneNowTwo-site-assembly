@@ -12,6 +12,8 @@ import { manualValuationProvider } from "./providers";
 import { getCachedValuation, setCachedValuation } from "./valuation-cache";
 import { publicWebComparableProvider } from "./public-web-comparable";
 import { prefetchNswSalesForParcels, type NswRegisteredSale } from "./nsw-property-sales";
+import { estimatePropertyLevelValue } from "@/lib/analysis/property-level-valuation";
+import type { CompSaleInput } from "@/lib/analysis/comparable-valuation";
 
 export type ValuationProviderName = "nsw" | "domain" | "proptrack" | "auto";
 
@@ -265,6 +267,86 @@ export async function valueParcels(
       else failed++;
     }
   }
+
+  // Shared street address → one acquisition property: re-value on combined land area
+  // (do not keep separate lot house AVMs / max-of-lot).
+  const addressGroups = new Map<string, number[]>();
+  out.forEach((p, idx) => {
+    const key = (p.address ?? "").trim().toLowerCase().replace(/\s+/g, " ").replace(/,/g, "");
+    if (!key) return;
+    const g = addressGroups.get(key) ?? [];
+    g.push(idx);
+    addressGroups.set(key, g);
+  });
+  let propertyLevelGroups = 0;
+  for (const idxs of addressGroups.values()) {
+    if (idxs.length < 2) continue;
+    const members = idxs.map((i) => out[i]!);
+    const totalArea = members.reduce((s, p) => s + p.areaSqm, 0);
+    if (!(totalArea > 0)) continue;
+    const lng = members.reduce((s, p) => s + p.centroid[0], 0) / members.length;
+    const lat = members.reduce((s, p) => s + p.centroid[1], 0) / members.length;
+    const primary = members[0]!;
+
+    // Build sales pool: prefer prefetch; else query once for the group centroid.
+    let salesPool = prefetchedSales;
+    if (!salesPool?.length) {
+      try {
+        const { queryNswUrbanSalesNear } = await import("./nsw-property-sales");
+        salesPool = await queryNswUrbanSalesNear({ lng, lat, radiusM: 1200, suburb: primary.suburb });
+      } catch {
+        salesPool = [];
+      }
+    }
+    const { haversineM } = await import("./nsw-property-sales");
+    const comps: CompSaleInput[] = (salesPool ?? []).map((s) => ({
+      id: s.dealing ?? `propid:${s.propid ?? `${s.lng},${s.lat}`}`,
+      address: s.address,
+      salePrice: s.salePrice,
+      saleDate: s.saleDate,
+      saleDateMs: s.saleDateMs,
+      landAreaSqm: s.landAreaSqm,
+      distanceM: Math.round(haversineM(lng, lat, s.lng, s.lat)),
+      strata: s.strata,
+      suburb: s.suburb,
+      source: s.source,
+      dealing: s.dealing,
+      propid: s.propid,
+    }));
+    const propEst = estimatePropertyLevelValue({
+      areaSqm: totalArea,
+      suburb: primary.suburb,
+      zone: primary.planning?.zone ?? null,
+      isStrata: members.some((p) => p.isStrata),
+      sales: comps,
+    });
+    if (propEst.mid == null) continue;
+    const stamped = toParcelValuation({
+      mid: propEst.mid,
+      low: propEst.low,
+      high: propEst.high,
+      status: "COMPARABLE_DERIVED",
+      confidence: propEst.confidence,
+      source: "COMPARABLE_DERIVED",
+      provider: "NSW",
+      method: `${propEst.method}|property_level`,
+      checkedAt: new Date().toISOString(),
+      note:
+        propEst.note ??
+        `Whole-property estimate for ${members.length} cadastral lots (combined ${Math.round(totalArea)} sqm)`,
+      numberOfComps: propEst.numberOfComps,
+      comps: propEst.comps,
+      valuationLabel: propEst.label,
+    });
+    for (const i of idxs) {
+      out[i] = { ...out[i]!, valuation: stamped };
+    }
+    propertyLevelGroups++;
+  }
+  if (propertyLevelGroups > 0) {
+    messages.push(`Property-level valuations: ${propertyLevelGroups} shared-address group(s) valued on combined land area`);
+  }
+
   const valuationMs = performance.now() - tVal0;
 
   if (valued > 0) messages.push(`Automatic valuations: ${valued} comparable-derived/AVM · ${failed} without estimate`);
