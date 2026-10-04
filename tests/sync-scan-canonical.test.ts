@@ -77,12 +77,16 @@ describe("sync scan canonical", () => {
       scanSessionId: "scan1",
       currentEffectiveFsr: 2.2,
       currentEffectiveHeightM: 22,
-      currentMaxPayable: 15_700_000,
-      currentHeadroom: 12_200_000,
-      currentScore: 98,
-      currentGrv: 42_600_000,
+      currentMaxPayable: 5_777_686,
+      currentHeadroom: 2_419_846,
+      currentScore: 77,
+      currentGrv: 26_592_730,
       currentTheoreticalGfa: 3040,
       currentAchievableGfa: 2736,
+      currentExistingValue: 3_357_840,
+      currentHeadroomPercent: 0.72,
+      currentDwellings: 25,
+      currentSaleableArea: 2244,
       originalScanFsr: 1.5,
       originalScanMaxPayable: 10_900_000,
       originalScanHeadroom: 7_340_000,
@@ -90,9 +94,11 @@ describe("sync scan canonical", () => {
       analysedAt: "2026-10-04T00:00:00.000Z",
     });
     expect(next.effectiveFsr).toBe(2.2);
-    expect(next.maxPayable).toBe(15_700_000);
-    expect(next.headroom).toBe(12_200_000);
-    expect(next.score.score).toBe(98);
+    expect(next.maxPayable).toBe(5_777_686);
+    expect(next.headroom).toBe(2_419_846);
+    expect(next.score.score).toBe(77);
+    expect(next.existingValue).toBe(3_357_840);
+    expect(next.indicativeUnits).toBe(25);
     expect(next.originalScanFsr).toBe(1.5);
     expect(next.originalScanMaxPayable).toBe(10_900_000);
     expect(next.originalScanScore).toBe(89);
@@ -115,6 +121,10 @@ describe("sync scan canonical", () => {
         currentGrv: 50_000_000,
         currentTheoreticalGfa: 3000,
         currentAchievableGfa: 2700,
+        currentExistingValue: 5_000_000,
+        currentHeadroomPercent: 3,
+        currentDwellings: 25,
+        currentSaleableArea: 2200,
         originalScanFsr: 1.5,
         originalScanMaxPayable: 10_000_000,
         originalScanHeadroom: 5_000_000,

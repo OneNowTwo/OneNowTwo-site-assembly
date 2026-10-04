@@ -57,6 +57,7 @@ export function toOpportunityLots(opp: OpportunityWithRelations): OpportunityLot
     const snapData = (snap?.data ?? {}) as { fsrStatus?: FsrMappedStatus; fsrControls?: FsrControl[] };
     return {
       id: op.id,
+      externalParcelId: op.parcel.externalParcelId,
       label: lotLabel(op.parcel),
       areaSqm: op.parcel.areaSqm,
       zone: op.parcel.zone,
@@ -70,6 +71,13 @@ export function toOpportunityLots(opp: OpportunityWithRelations): OpportunityLot
       isStrata: op.parcel.isStrata,
       planningKnown: op.parcel.planningCheckedAt != null,
       marketValue: op.marketValue ?? (op.landValuePerSqm ? op.landValuePerSqm * op.parcel.areaSqm : null),
+      marketValueLow: op.marketValueLow,
+      marketValueHigh: op.marketValueHigh,
+      marketValueSource: op.marketValueSource,
+      marketValueConfidence: op.marketValueConfidence,
+      marketValueProvider: op.marketValueProvider,
+      marketValueMethod: op.marketValueMethod,
+      marketValueCheckedAt: op.marketValueCheckedAt?.toISOString() ?? null,
       geometry: op.parcel.geometry as unknown as Polygon | MultiPolygon,
       included: op.included,
       maxAllocationOverride: op.maxAllocationOverride,
@@ -239,7 +247,7 @@ async function enrichUnitMixWithLocalExitBenchmarks(
   inputs: OpportunityInputs,
   saleableAreaHint: number,
 ): Promise<OpportunityInputs> {
-  let mix = inputs.unitMix.length
+  const mix = inputs.unitMix.length
     ? inputs.unitMix
     : autoGenerateUnitMix(Math.max(saleableAreaHint, 1), defaultUnitMix(), inputs.mixShares ?? DEFAULT_MIX_SHARES);
   const needsBenchmark = mix.some((r) => r.count > 0 && isTemplateDefaultSalePrice(r));
@@ -323,28 +331,20 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
   // After FSR pathway refresh clears unit mix, persist the regenerated mix so Yield/Feasibility stay aligned.
   const shouldPersistRegeneratedMix = (!hadPersistedMix || exitBenchmarksApplied) && analysis.unitMix.length > 0;
 
-  // Persist canonical CalculationSnapshot onto scanProvenance so map/Top Opportunities
-  // can sync without re-running suburb scan or inventing a parallel calculator.
+  // Current financial state lives on the Opportunity row written in this transaction.
+  // Historical scan figures remain in scanCalculationSnapshot; do not persist another
+  // mutable financial copy in scanProvenance.
   const scanProv = inputs.scanProvenance;
+  const scanProvWithoutCanonical = scanProv ? { ...scanProv } : null;
+  if (scanProvWithoutCanonical) delete scanProvWithoutCanonical.canonicalCalculation;
   const nextInputs = {
     ...inputs,
     ...(shouldPersistRegeneratedMix ? { unitMix: analysis.unitMix } : {}),
     exitPriceSources: inputs.exitPriceSources,
-    ...(scanProv
+    ...(scanProvWithoutCanonical
       ? {
           scanProvenance: {
-            ...scanProv,
-            canonicalCalculation: {
-              effectiveFsr: analysis.calculation.effectiveFsr,
-              effectiveHeightM: analysis.calculation.effectiveHeightM,
-              maxPayable: analysis.calculation.maxPayable,
-              headroom: analysis.calculation.headroom,
-              score: analysis.calculation.score,
-              grv: analysis.calculation.grv,
-              theoreticalGfa: analysis.calculation.theoreticalGfa,
-              achievableGfa: analysis.calculation.achievableGfa,
-              analysedAt: new Date().toISOString(),
-            },
+            ...scanProvWithoutCanonical,
           },
         }
       : {}),

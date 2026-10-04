@@ -20,11 +20,10 @@ export async function GET() {
       rows.map((o) => {
         const inc = o.parcels.filter((p) => p.included);
         const inputs = parseOpportunityInputs(o.inputs);
-        const canonical = inputs.scanProvenance?.canonicalCalculation;
         const effectiveFsr =
-          canonical?.effectiveFsr ??
           (inputs.fsrOverrideKind === "SCAN_MODELLED" || inputs.fsrOverrideKind === "USER" ? inputs.fsrOverride : null) ??
           inputs.pathwaySnapshot?.modelledFsr ??
+          inputs.scanProvenance?.canonicalCalculation?.effectiveFsr ??
           null;
         return {
           id: o.id,
@@ -35,14 +34,14 @@ export async function GET() {
           demoFinancialData: o.demoFinancialData,
           lotCount: inc.length,
           totalSiteArea: o.totalSiteArea,
-          score: canonical?.score ?? o.score,
+          score: o.score,
           effectiveFsr,
-          grv: canonical?.grv ?? o.grv,
-          maxLandBudget: canonical?.maxPayable ?? o.maxLandBudget,
+          grv: o.grv,
+          maxLandBudget: o.maxLandBudget,
           profit: o.profit,
           marginOnCost: o.marginOnCost,
           combinedMarketValue: o.combinedMarketValue,
-          acquisitionHeadroom: canonical?.headroom ?? o.acquisitionHeadroom,
+          acquisitionHeadroom: o.acquisitionHeadroom,
           acquisitionHeadroomPercent: o.acquisitionHeadroomPercent,
           unitCount: o.unitCount,
           acquisitionProgress: inc.length ? inc.reduce((s, p) => s + STAGE_PROGRESS[p.acquisitionStage], 0) / inc.length : 0,

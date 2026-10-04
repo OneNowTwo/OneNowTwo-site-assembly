@@ -38,6 +38,11 @@ export function OverviewTab() {
   const crit = new Map(analysis.critical.map((c) => [c.id, c]));
   const alloc = new Map(analysis.allocation.lots.map((l) => [l.id, l]));
   const marginal = new Map(analysis.marginal.map((m) => [m.id, m]));
+  const acquisitionPropertyByLot = new Map(
+    analysis.economicConfidence.acquisitionProperties.flatMap((property) =>
+      property.lotIds.map((lotId) => [lotId, property] as const),
+    ),
+  );
   const detailLot = detailId ? dto.lots.find((l) => l.id === detailId) ?? null : null;
   const detailVal = useMemo(() => {
     if (!detailLot) return null;
@@ -245,7 +250,30 @@ export function OverviewTab() {
           )}
         </Panel>
 
-        <Panel title="Lots in assembly" bodyClassName="p-0">
+        {analysis.economicConfidence.acquisitionProperties
+          .filter((property) => property.lotIds.length > 1)
+          .map((property) => (
+            <Panel key={property.id} title="Acquisition property">
+              <div className="grid grid-cols-4 gap-4">
+                <div className="col-span-2">
+                  <div className="font-semibold">{property.address ?? property.label}</div>
+                  <div className="mt-1 text-[11px] text-muted">
+                    {property.lotIds.length} cadastral lots · {sqm(property.areaSqm)}
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted">{property.sourceLabel}</div>
+                </div>
+                <Stat label="Estimated current property value" value={money(property.marketValue, { compact: true })} />
+                <Stat
+                  label="Acquisition headroom"
+                  value={money(analysis.acquisitionHeadroom, { compact: true })}
+                  sub={`Max payable ${money(analysis.maxPayableToOwners, { compact: true })}`}
+                  tone={(analysis.acquisitionHeadroom ?? 0) >= 0 ? "good" : "bad"}
+                />
+              </div>
+            </Panel>
+          ))}
+
+        <Panel title="Cadastral lots in assembly" bodyClassName="p-0">
           <table className="w-full text-[12px]">
             <thead className="bg-canvas text-[10.5px] uppercase tracking-wide text-muted">
               <tr>
@@ -267,6 +295,8 @@ export function OverviewTab() {
                 const m = marginal.get(l.id);
                 const al = alloc.get(l.id);
                 const status = resolveValuationStatus(l.marketValueSource, l.marketValue);
+                const acquisitionProperty = acquisitionPropertyByLot.get(l.id);
+                const sharedProperty = acquisitionProperty && acquisitionProperty.lotIds.length > 1;
                 return (
                   <tr key={l.id} className={cx("border-t border-line", selected === l.id && "bg-brand-soft/50", !l.included && "text-muted")} onClick={() => setSelected(l.id)}>
                     <td className="px-3 py-2">
@@ -278,33 +308,44 @@ export function OverviewTab() {
                     </td>
                     <td className="num px-3 py-2 text-right">{sqm(l.areaSqm)}</td>
                     <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                      <NumberField
-                        kind="money"
-                        value={l.marketValue}
-                        placeholder="VALUE REQUIRED"
-                        ariaLabel={`Est. current value ${l.label}`}
-                        className="h-7 w-[110px] text-right"
-                        onCommit={(v) =>
-                          updateLot(l.id, {
-                            marketValue: v,
-                            marketValueSource: v != null ? "USER_ESTIMATE" : "NO_VALUE",
-                            marketValueConfidence: l.marketValueConfidence ?? "UNKNOWN",
-                            marketValueNote: v != null ? "USER ENTERED EXTERNAL ESTIMATE" : null,
-                          })
-                        }
-                      />
-                      {(l.marketValueLow != null || l.marketValueHigh != null) && (
+                      {sharedProperty ? (
+                        <div className="text-[11px] text-muted">
+                          Shared property value
+                          <div className="text-[10px]">Included once above</div>
+                        </div>
+                      ) : (
+                        <NumberField
+                          kind="money"
+                          value={l.marketValue}
+                          placeholder="VALUE REQUIRED"
+                          ariaLabel={`Est. current value ${l.label}`}
+                          className="h-7 w-[110px] text-right"
+                          onCommit={(v) =>
+                            updateLot(l.id, {
+                              marketValue: v,
+                              marketValueSource: v != null ? "USER_ESTIMATE" : "NO_VALUE",
+                              marketValueConfidence: l.marketValueConfidence ?? "UNKNOWN",
+                              marketValueNote: v != null ? "USER ENTERED EXTERNAL ESTIMATE" : null,
+                            })
+                          }
+                        />
+                      )}
+                      {!sharedProperty && (l.marketValueLow != null || l.marketValueHigh != null) && (
                         <button type="button" className="mt-0.5 block w-full text-[10px] text-muted hover:underline" onClick={() => setDetailId(l.id)}>
                           {money(l.marketValueLow, { compact: true })}–{money(l.marketValueHigh, { compact: true })}
                         </button>
                       )}
                     </td>
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                      <button type="button" onClick={() => setDetailId(l.id)}>
-                        <Badge tone={status === "NO_VALUE" || status === "SUBURB_FALLBACK" ? "warn" : status === "LIVE_AVM" ? "live" : "neutral"}>
-                          {valuationSourceBadge(status, l.marketValueProvider)}
-                        </Badge>
-                      </button>
+                      {sharedProperty ? (
+                        <Badge>Shared property</Badge>
+                      ) : (
+                        <button type="button" onClick={() => setDetailId(l.id)}>
+                          <Badge tone={status === "NO_VALUE" || status === "SUBURB_FALLBACK" ? "warn" : status === "LIVE_AVM" ? "live" : "neutral"}>
+                            {valuationSourceBadge(status, l.marketValueProvider)}
+                          </Badge>
+                        </button>
+                      )}
                     </td>
                     <td className="num px-3 py-2 text-right">{l.included ? money(al?.maximumOffer, { compact: true }) : "—"}</td>
                     <td className="num px-3 py-2 text-right">{l.included && l.marketValue != null ? money(al?.negotiationHeadroom, { compact: true }) : "—"}</td>

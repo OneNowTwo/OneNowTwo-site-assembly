@@ -82,7 +82,11 @@ export function MarketTab() {
         <div className="grid grid-cols-4 gap-4 rounded-[3px] border border-line bg-white p-4">
           <Stat label="Included acquisition comps" value={num(acq.filter((c) => c.included).length)} />
           <Stat label="Suggested market value (median)" value={money(suggested, { compact: true })} sub="COMPARABLE-DERIVED — not a valuation" />
-          <Stat label="Combined existing property value" value={money(analysis.combinedExistingValue, { compact: true })} sub="Sum of lot estimates in use" />
+          <Stat
+            label="Combined existing property value"
+            value={money(analysis.combinedExistingValue, { compact: true })}
+            sub="Acquisition-property estimates counted once"
+          />
           <Stat label="Data quality" value="Manual / demo" sub="Ready for licensed provider later" />
         </div>
       )}
