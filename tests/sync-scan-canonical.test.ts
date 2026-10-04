@@ -3,11 +3,16 @@ import { applyCanonicalOverlay, syncCandidatesWithCanonical } from "@/lib/analys
 import type { ScanCandidate } from "@/lib/analysis/area-scan";
 import { groupAcquisitionProperties, acquisitionPropertyTotal } from "@/lib/analysis/acquisition-property";
 
+function stubScore(score: number): ScanCandidate["score"] {
+  return { score, components: {} as never, factors: [], weights: {} as never };
+}
+
 function stubCandidate(partial: Partial<ScanCandidate> & { key: string }): ScanCandidate {
+  const { key, ...rest } = partial;
   return {
-    key: partial.key,
+    key,
     rank: 1,
-    label: "Test",
+    locationLabel: "Test",
     lotIds: ["a", "b"],
     lotCount: 2,
     owners: 2,
@@ -33,7 +38,7 @@ function stubCandidate(partial: Partial<ScanCandidate> & { key: string }): ScanC
     lmrCentre: "Manly Vale",
     lmrBand: "INNER_0_400",
     metrics: {} as ScanCandidate["metrics"],
-    score: { score: 89, components: {} as never, factors: [] },
+    score: stubScore(89),
     calculationSnapshot: {
       version: "v1",
       calculatedAt: "2026-01-01T00:00:00.000Z",
@@ -59,7 +64,7 @@ function stubCandidate(partial: Partial<ScanCandidate> & { key: string }): ScanC
       developmentType: "rfb",
       perLot: {},
     },
-    ...partial,
+    ...rest,
   };
 }
 
@@ -96,7 +101,7 @@ describe("sync scan canonical", () => {
 
   it("reranks after sync so higher canonical score rises", () => {
     const a = stubCandidate({ key: "a", rank: 1 });
-    const b = stubCandidate({ key: "b", rank: 2, score: { score: 70, components: {} as never, factors: [] } });
+    const b = stubCandidate({ key: "b", rank: 2, score: stubScore(70) });
     const synced = syncCandidatesWithCanonical([a, b], [
       {
         opportunityId: "opp-b",

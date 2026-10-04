@@ -3,7 +3,6 @@
  * Does not recalculate — only overlays stored analysed results onto scan candidates.
  */
 import type { ScanCandidate } from "@/lib/analysis/area-scan";
-import type { CalculationSnapshot } from "@/lib/analysis/calculation-snapshot";
 import type { ScanCalculationSnapshot } from "@/lib/analysis/assembly-feasibility";
 
 export interface CanonicalScanOverlay {
@@ -31,10 +30,17 @@ export function canonicalFromOpportunity(input: {
   opportunityId: string;
   assemblyKey: string;
   scanSessionId?: string | null;
-  calculation: Pick<
-    CalculationSnapshot,
-    "effectiveFsr" | "effectiveHeightM" | "maxPayable" | "headroom" | "score" | "grv" | "theoreticalGfa" | "achievableGfa"
-  >;
+  /** Partial/nullable — overlays tolerate incomplete opportunity cache rows. */
+  calculation: {
+    effectiveFsr: number | null;
+    effectiveHeightM: number | null;
+    maxPayable: number | null;
+    headroom: number | null;
+    score: number | null;
+    grv: number | null;
+    theoreticalGfa: number | null;
+    achievableGfa: number | null;
+  };
   originalScan?: Partial<ScanCalculationSnapshot> | null;
   analysedAt?: string;
 }): CanonicalScanOverlay {
