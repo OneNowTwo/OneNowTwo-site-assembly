@@ -1,5 +1,6 @@
 import { defaultUnitMix, type Assumptions } from "./assumptions";
 import { autoGenerateUnitMix, computeUnitMix, type UnitMixRow } from "./unit-mix";
+import { applyExitBenchmarksToUnitMix, type ExitBenchmarkSet } from "./exit-benchmarks";
 import { computeYield } from "./yield";
 import { acquisitionHeadroom, computeFeasibility } from "./feasibility";
 import { type Adjacency, isConnected } from "./geometry";
@@ -128,7 +129,14 @@ export interface AssemblyMetrics {
   criticalLotCount: number;
 }
 
-export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?: Adjacency, unitMix?: UnitMixRow[]): AssemblyMetrics {
+export function computeAssemblyMetrics(
+  lots: AnalysisLot[],
+  a: Assumptions,
+  adj?: Adjacency,
+  unitMix?: UnitMixRow[],
+  /** When set, replace template-default exit prices before GRV (scan + analyse share this). */
+  exitBenchmarks?: ExitBenchmarkSet | null,
+): AssemblyMetrics {
   const totalAreaSqm = lots.reduce((s, l) => s + l.areaSqm, 0);
   const zones = [...new Set(lots.map((l) => l.zone ?? "Unknown"))];
   const fsrUnmappedLots = lots.filter((l) => l.fsr == null && !(l.fsrControls && l.fsrControls.length)).length;
@@ -167,6 +175,9 @@ export function computeAssemblyMetrics(lots: AnalysisLot[], a: Assumptions, adj?
   let resolvedMix = unitMix;
   if (!resolvedMix && a.revenueMode === "UNIT_MIX") {
     resolvedMix = autoGenerateUnitMix(yProbe.saleableArea, defaultUnitMix());
+    if (exitBenchmarks) {
+      resolvedMix = applyExitBenchmarksToUnitMix(resolvedMix, exitBenchmarks).rows;
+    }
   }
   const mixTotals = resolvedMix && a.revenueMode === "UNIT_MIX" ? computeUnitMix(resolvedMix) : null;
   const y = computeYield({

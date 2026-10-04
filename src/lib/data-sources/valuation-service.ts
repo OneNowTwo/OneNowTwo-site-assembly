@@ -205,6 +205,8 @@ export async function valueParcels(
   valued: number;
   failed: number;
   messages: string[];
+  /** Prefetched NSW sales pool for the batch (reuse for local exit benchmarks). */
+  salesPool: NswRegisteredSale[];
   timings?: { salesPrefetchMs: number; valuationMs: number; salesFetches: number; salesPoolSize: number };
 }> {
   const concurrency = opts?.concurrency ?? 12;
@@ -227,9 +229,10 @@ export async function valueParcels(
   const share = opts?.shareNswSales ?? (nswCompsConfigured() && out.length >= 3 && (opts?.prefer ?? "auto") !== "domain");
   if (share && nswCompsConfigured()) {
     const t0 = performance.now();
+    // 1500 m matches Analyse local-exit query radius so scan/analyse share the same market pool.
     const pref = await prefetchNswSalesForParcels(
       out.map((p) => ({ lng: p.centroid[0], lat: p.centroid[1], suburb: p.suburb })),
-      1000,
+      1500,
     );
     prefetchedSales = pref.pool;
     salesFetches = pref.fetchCount;
@@ -357,6 +360,7 @@ export async function valueParcels(
     valued,
     failed,
     messages,
+    salesPool: prefetchedSales ?? [],
     timings: { salesPrefetchMs, valuationMs, salesFetches, salesPoolSize },
   };
 }
