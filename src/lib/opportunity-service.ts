@@ -60,6 +60,7 @@ export function toOpportunityLots(opp: OpportunityWithRelations): OpportunityLot
       maxAllocationOverride: op.maxAllocationOverride,
       openingOfferOverride: op.openingOfferOverride,
       strategicWeight: op.strategicWeight,
+      ownerName: op.owner?.name ?? null,
     };
   });
 }
@@ -227,6 +228,7 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
     combinedMarketValue: opp.combinedMarketValue,
   };
   const inputs = parseOpportunityInputs(opp.inputs);
+  const hadPersistedMix = inputs.unitMix.length > 0 || opp.unitTypes.length > 0;
   // Prefer persisted unitTypes when inputs.unitMix is empty
   if (!inputs.unitMix.length && opp.unitTypes.length) {
     inputs.unitMix = opp.unitTypes.map((u) => ({
@@ -244,11 +246,16 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
   const f = analysis.base.feasibility;
   const alloc = new Map(analysis.allocation.lots.map((l) => [l.id, l]));
   const crit = new Map(analysis.critical.map((c) => [c.id, c]));
+  // After FSR pathway refresh clears unit mix, persist the regenerated mix so Yield/Feasibility stay aligned.
+  const shouldPersistRegeneratedMix = !hadPersistedMix && analysis.unitMix.length > 0;
 
   await prisma.$transaction([
     prisma.opportunity.update({
       where: { id },
       data: {
+        ...(shouldPersistRegeneratedMix
+          ? { inputs: { ...inputs, unitMix: analysis.unitMix } as unknown as Prisma.InputJsonValue }
+          : {}),
         score: analysis.score.score,
         scoreFactors: analysis.score as unknown as Prisma.InputJsonValue,
         totalSiteArea: analysis.site.siteAreaSqm,
@@ -311,6 +318,10 @@ export async function recomputeOpportunity(id: string, meta?: { reason?: string;
       });
     }),
   ]);
+
+  if (shouldPersistRegeneratedMix) {
+    await syncUnitTypes(id, analysis.unitMix);
+  }
 
   // Phase 2: append change-history + feed movements (never silently overwrite history).
   try {
@@ -625,6 +636,10 @@ function opportunityParcelsToData(opp: OpportunityWithRelations): ParcelData[] {
 /**
  * When LEP FSR is unmapped, apply CURRENT State pathway modelled FSR (e.g. LMR)
  * as SCAN_MODELLED override — never invent a silent 0:1.
+ *
+ * Stale SCAN_MODELLED values (e.g. scan-time 1.5:1) are superseded when the planning
+ * engine later resolves a different current modelled FSR (e.g. 2.2:1). USER overrides
+ * remain authoritative. Clearing persisted unit mix forces full yield/feasibility recalc.
  */
 export async function ensureModelledPlanningOverride(id: string): Promise<{ applied: boolean; modelledFsr: number | null; messages: string[] }> {
   const opp = await loadOpportunity(id);
@@ -644,9 +659,9 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
   }).catch(() => []);
   const modelled = resolveAssemblyModelledControls(parcels, centres);
 
-  // Backfill pathway snapshot for existing SCAN_MODELLED opportunities (FSR display fix).
-  if (inputs.fsrOverride != null) {
-    if (inputs.fsrOverrideKind === "SCAN_MODELLED" && !inputs.pathwaySnapshot && modelled.usedStatePathway) {
+  // Manual USER FSR stays authoritative — only backfill pathway snapshot for display.
+  if (inputs.fsrOverrideKind === "USER" && inputs.fsrOverride != null) {
+    if (!inputs.pathwaySnapshot && modelled.usedStatePathway) {
       await prisma.opportunity.update({
         where: { id },
         data: {
@@ -656,7 +671,7 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
               lepFsr: modelled.lepFsr,
               statePathwayFsr: modelled.statePathwayFsr,
               statePathwayName: modelled.statePathwayName,
-              modelledFsr: inputs.fsrOverride,
+              modelledFsr: modelled.modelledFsr,
               certainty: modelled.certainty,
               lmrCentre: modelled.lmrCentre,
               nearestDistanceM: modelled.nearestDistanceM,
@@ -667,14 +682,14 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
           } as unknown as Prisma.InputJsonValue,
         },
       });
-      return { applied: true, modelledFsr: inputs.fsrOverride, messages: ["Backfilled LEP vs State pathway snapshot for display"] };
+      return { applied: true, modelledFsr: inputs.fsrOverride, messages: ["Backfilled pathway snapshot; USER FSR left unchanged"] };
     }
-    return { applied: false, modelledFsr: inputs.fsrOverride, messages: ["FSR override already set"] };
+    return { applied: false, modelledFsr: inputs.fsrOverride, messages: ["USER FSR override left authoritative"] };
   }
 
   const needsPathway = parcels.some((p) => p.planning?.fsr == null);
   if (!needsPathway) {
-    return { applied: false, modelledFsr: null, messages: ["LEP FSR already mapped on included lots"] };
+    return { applied: false, modelledFsr: inputs.fsrOverride, messages: ["LEP FSR already mapped on included lots"] };
   }
 
   if (modelled.modelledFsr == null || modelled.modelledFsr <= 0) {
@@ -701,12 +716,43 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
     };
   }
 
+  const current = inputs.fsrOverride;
+  const fsrChanged =
+    current == null ||
+    inputs.fsrOverrideKind !== "SCAN_MODELLED" ||
+    Math.abs(current - modelled.modelledFsr) > 0.0005;
+  const heightChanged =
+    modelled.modelledHeightM != null &&
+    (inputs.heightOverrideM == null || Math.abs(inputs.heightOverrideM - modelled.modelledHeightM) > 0.05);
+  const snap = inputs.pathwaySnapshot;
+  const snapshotStale =
+    !snap ||
+    snap.modelledFsr !== modelled.modelledFsr ||
+    snap.statePathwayFsr !== modelled.statePathwayFsr ||
+    snap.proximityScreen !== modelled.proximityScreen ||
+    snap.nearestDistanceM !== modelled.nearestDistanceM;
+
+  if (!fsrChanged && !heightChanged && !snapshotStale) {
+    return { applied: false, modelledFsr: modelled.modelledFsr, messages: ["Current modelled pathway FSR already applied"] };
+  }
+
+  const originalScanFsr =
+    inputs.originalScanFsr ??
+    (inputs.fsrOverrideKind === "SCAN_MODELLED" && current != null && fsrChanged ? current : null);
+  const recalculated = fsrChanged && current != null && inputs.fsrOverrideKind === "SCAN_MODELLED";
+
   const next = {
     ...inputs,
     fsrOverride: modelled.modelledFsr,
     fsrOverrideKind: "SCAN_MODELLED" as const,
     fsrOverrideCertainty: modelled.certainty,
-    heightOverrideM: inputs.heightOverrideM ?? modelled.modelledHeightM,
+    heightOverrideM: modelled.modelledHeightM ?? inputs.heightOverrideM,
+    originalScanFsr,
+    fsrRecalculationStatus: recalculated
+      ? "RECALCULATED_FROM_UPDATED_PLANNING_PATHWAY"
+      : inputs.fsrRecalculationStatus,
+    // Drop stale mix so dwellings / GRV rebuild from the new saleable area.
+    ...(fsrChanged ? { unitMix: [] } : {}),
     pathwaySnapshot: {
       lepFsr: modelled.lepFsr,
       statePathwayFsr: modelled.statePathwayFsr,
@@ -720,21 +766,36 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
       proximityLabel: modelled.proximityLabel,
     },
   };
+
+  if (fsrChanged) {
+    await prisma.unitType.deleteMany({ where: { opportunityId: id } });
+  }
+
   await prisma.opportunity.update({
     where: { id },
     data: { inputs: next as unknown as Prisma.InputJsonValue },
   });
-  return {
-    applied: true,
-    modelledFsr: modelled.modelledFsr,
-    messages: [
+
+  const messages: string[] = [];
+  if (recalculated) {
+    messages.push(
+      `RECALCULATED FROM UPDATED PLANNING PATHWAY — original scan FSR ${originalScanFsr}:1 superseded by current modelled FSR ${modelled.modelledFsr}:1` +
+        (modelled.lmrCentre ? ` near ${modelled.lmrCentre}` : "") +
+        ` · ${modelled.proximityLabel ?? "PASS — ESTIMATED"}.`,
+    );
+  } else if (fsrChanged) {
+    messages.push(
       `Applied CURRENT State pathway modelled FSR ${modelled.modelledFsr}:1` +
         (modelled.lmrCentre ? ` near ${modelled.lmrCentre}` : "") +
         ` · 800 m proximity ${modelled.proximityLabel ?? "PASS — ESTIMATED"}` +
         ` (${modelled.certainty.replaceAll("_", " ")}). NOT a silent LEP invent.`,
-      ...modelled.notes.slice(0, 4),
-    ],
-  };
+    );
+  } else {
+    messages.push("Refreshed LEP vs State pathway snapshot for display");
+  }
+  messages.push(...modelled.notes.slice(0, 4));
+
+  return { applied: true, modelledFsr: modelled.modelledFsr, messages };
 }
 
 /**

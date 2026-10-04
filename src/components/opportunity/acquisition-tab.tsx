@@ -143,7 +143,7 @@ export function AcquisitionTab() {
               </tbody>
             </table>
             <p className="border-t border-line px-3 py-2 text-[11px] text-muted">
-              Critical when removal fragments the site, leaves less than {sqm(a.minViableSiteAreaSqm)}, cuts area/GFA ≥30%, or the remaining budget cannot cover the other lots&apos; value.
+              Critical when removal fragments the site, leaves less than the preferred scanner site-size threshold ({sqm(a.minViableSiteAreaSqm)}), cuts area/GFA ≥30%, or the remaining budget cannot cover the other lots&apos; value.
             </p>
           </Panel>
           <Panel title="Indicative acquisition sequence">

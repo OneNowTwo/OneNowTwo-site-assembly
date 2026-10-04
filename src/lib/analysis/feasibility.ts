@@ -47,6 +47,28 @@ export interface CostLine {
   basis: string;
 }
 
+/** Material fixed-cost inputs that must not silently read as confirmed $0. */
+export const MATERIAL_COST_INPUT_KEYS = [
+  "basementParkingCost",
+  "liftsCost",
+  "siteWorksCost",
+  "remediationCost",
+] as const;
+
+export type MaterialCostInputKey = (typeof MATERIAL_COST_INPUT_KEYS)[number];
+
+export interface CostInputGap {
+  key: MaterialCostInputKey;
+  label: string;
+}
+
+export interface GrvCrossCheckWarning {
+  unitMixImpliedRatePerSqm: number;
+  crossCheckRatePerSqm: number;
+  differencePct: number;
+  status: "EXIT_VALUE_VALIDATION_REQUIRED";
+}
+
 export interface FeasibilityResult {
   grv: number;
   salesRevenue: number;
@@ -82,6 +104,11 @@ export interface FeasibilityResult {
     gfa: number;
   };
   viable: boolean;
+  /** True when material fixed-cost categories are still $0 (not confirmed no-cost). */
+  costInputIncomplete: boolean;
+  costInputGaps: CostInputGap[];
+  /** Present when unit-mix implied $/sqm diverges materially from the $/sqm cross-check rate. */
+  grvCrossCheckWarning: GrvCrossCheckWarning | null;
   steps: { label: string; formula: string; value: number; kind: "money" | "pct" | "ratio" }[];
 }
 
@@ -212,6 +239,41 @@ function costBreakdown(i: FeasibilityInputs) {
  *  - Margin on revenue: GRV − (C + L) = m·GRV  ⇒  L = GRV(1 − m) − C
  *  - Maximum Payable to Owners P = L ÷ k
  */
+const MATERIAL_COST_LABELS: Record<MaterialCostInputKey, string> = {
+  basementParkingCost: "Basement parking",
+  liftsCost: "Lifts",
+  siteWorksCost: "Site works",
+  remediationCost: "Remediation",
+};
+
+/** Flag material cost categories that remain $0 (not confirmed zero — estimate not supplied). */
+export function materialCostInputGaps(a: FeasibilityInputs["a"]): CostInputGap[] {
+  return MATERIAL_COST_INPUT_KEYS.filter((key) => (a[key] ?? 0) <= 0).map((key) => ({
+    key,
+    label: MATERIAL_COST_LABELS[key],
+  }));
+}
+
+/** Material unit-mix vs $/sqm cross-check divergence (does not alter GRV). */
+export function grvCrossCheckDiscrepancy(
+  grv: number,
+  saleableArea: number,
+  crossCheckRatePerSqm: number,
+  opts?: { materialPct?: number },
+): GrvCrossCheckWarning | null {
+  const materialPct = opts?.materialPct ?? 0.1;
+  if (!(saleableArea > 0) || !(crossCheckRatePerSqm > 0) || !(grv > 0)) return null;
+  const unitMixImpliedRatePerSqm = grv / saleableArea;
+  const differencePct = (unitMixImpliedRatePerSqm - crossCheckRatePerSqm) / crossCheckRatePerSqm;
+  if (Math.abs(differencePct) < materialPct) return null;
+  return {
+    unitMixImpliedRatePerSqm,
+    crossCheckRatePerSqm,
+    differencePct,
+    status: "EXIT_VALUE_VALIDATION_REQUIRED",
+  };
+}
+
 export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
   const a = i.a;
   const { salesRevenue, grv, construction, lines, nonLandCosts, unitMixTotals, revenueFormula, crossCheckGrv, crossCheckLabel, blendedPricePerSqm, display } =
@@ -227,6 +289,11 @@ export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
   const marginOnCost = totalCost > 0 ? profit / totalCost : 0;
   const marginOnRevenue = grv > 0 ? profit / grv : 0;
   const target = a.targetBasis === "REVENUE" ? a.targetMarginOnRevenue : a.targetMarginOnCost;
+  const costInputGaps = materialCostInputGaps(a);
+  const grvCrossCheckWarning =
+    a.revenueMode === "UNIT_MIX"
+      ? grvCrossCheckDiscrepancy(grv, display.saleableArea, display.salePricePerSqm)
+      : null;
 
   const steps: FeasibilityResult["steps"] = [
     { label: "Gross realisation value (GRV)", formula: revenueFormula + (a.otherRevenue ? " + other revenue" : ""), value: grv, kind: "money" },
@@ -272,6 +339,9 @@ export function computeFeasibility(i: FeasibilityInputs): FeasibilityResult {
     marginOnRevenue,
     display,
     viable: maxAcquisitionBudget > 0,
+    costInputIncomplete: costInputGaps.length > 0,
+    costInputGaps,
+    grvCrossCheckWarning,
     steps,
   };
 }

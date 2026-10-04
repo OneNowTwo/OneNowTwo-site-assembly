@@ -155,7 +155,12 @@ export const ASSUMPTION_META: Record<
   marketValueWeight: { label: "Market value weight (offer allocation)", unit: "ratio", group: "Acquisition" },
   criticalityWeight: { label: "Criticality weight (offer allocation)", unit: "ratio", group: "Acquisition" },
   connectivityWeight: { label: "Connectivity weight (offer allocation)", unit: "ratio", group: "Acquisition" },
-  minViableSiteAreaSqm: { label: "Minimum viable site area", unit: "sqm", group: "Acquisition" },
+  minViableSiteAreaSqm: {
+    label: "Preferred scanner site-size threshold",
+    unit: "sqm",
+    group: "Acquisition",
+    help: "Internal scanner preference — not a statutory planning minimum unless a pathway explicitly requires it.",
+  },
   maxAssemblySize: { label: "Max lots in automatic assembly", unit: "count", group: "Acquisition" },
   fallbackFsr: { label: "Discovery-only FSR assumption where none mapped (never shown as official)", unit: "ratio", group: "Discovery", help: "Used only if allowAssumption is explicitly enabled for ranking. Official yield never silently uses this." },
   existingValuePerSqm: {
@@ -219,6 +224,13 @@ export const opportunityInputsSchema = z.object({
   /** Why fsrOverride was set — SCAN_MODELLED keeps provisional LMR; USER is manual. */
   fsrOverrideKind: z.enum(["SCAN_MODELLED", "USER", "NONE"]).default("NONE"),
   fsrOverrideCertainty: z.string().nullable().default(null),
+  /**
+   * Historical scan-time FSR kept when a later planning resolution supersedes SCAN_MODELLED.
+   * Never drives the live financial model once a newer modelled FSR is applied.
+   */
+  originalScanFsr: z.number().positive().nullable().default(null),
+  /** e.g. RECALCULATED_FROM_UPDATED_PLANNING_PATHWAY — display/metadata only. */
+  fsrRecalculationStatus: z.string().nullable().default(null),
   /** Persisted LEP vs State pathway split for consistent Analyse / Yield / Planning display. */
   pathwaySnapshot: z
     .object({

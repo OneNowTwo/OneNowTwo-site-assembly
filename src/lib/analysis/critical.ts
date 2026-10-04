@@ -82,7 +82,7 @@ export function analyseCriticalLots(
     if (!remainingConnected) reasons.push(`Removing it splits the site into ${frags} disconnected parts`);
     if (belowMinViable)
       reasons.push(
-        `Remaining site ${Math.round(e.areaSqm).toLocaleString("en-AU")} sqm is below the ${opts.minViableSiteAreaSqm.toLocaleString("en-AU")} sqm minimum viable area`,
+        `Remaining site ${Math.round(e.areaSqm).toLocaleString("en-AU")} sqm is below preferred scanner site-size threshold (${opts.minViableSiteAreaSqm.toLocaleString("en-AU")} sqm)`,
       );
     if (!viableWithout) reasons.push(e.budget <= 0 ? "Project has no residual land value without it" : "Remaining budget cannot cover market value of the other lots");
     if (areaReductionPct >= major) reasons.push(`Site area falls ${(areaReductionPct * 100).toFixed(0)}%`);

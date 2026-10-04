@@ -25,6 +25,8 @@ export interface OpportunityLot extends AnalysisLot {
   marketValueProvider?: string | null;
   marketValueMethod?: string | null;
   marketValueCheckedAt?: string | null;
+  /** Manual / researched owner name when known — never inferred from lot count. */
+  ownerName?: string | null;
 }
 
 export type ScenarioKey = "BASE" | "UPSIDE" | "DOWNSIDE";
@@ -278,8 +280,20 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   const site = siteBasis(lots, a, inputs);
   const combinedMarketValue = lots.reduce((s, l) => s + (l.marketValue ?? 0), 0);
   const marketValueComplete = lots.length > 0 && lots.every((l) => (l.marketValue ?? 0) > 0);
-  const metricsProbe = computeAssemblyMetrics(lots, a, adj);
-  const unitMix = resolveUnitMix(inputs, metricsProbe.saleableArea);
+  // Probe saleable area from the SAME effective FSR used by yield/feasibility (not stale LEP-only metrics).
+  const mixProbe = computeYield({
+    siteAreaSqm: site.siteAreaSqm,
+    fsr: site.fsr,
+    efficiency: a.efficiency,
+    siteCoverage: a.siteCoverage,
+    floorToFloorM: a.floorToFloorM,
+    avgDwellingSizeSqm: a.avgDwellingSizeSqm,
+    carSpacesPerDwelling: a.carSpacesPerDwelling,
+    heightLimitM: site.heightLimitM,
+    planningAdjustment: a.planningAdjustment,
+    achievableGfaOverride: inputs.achievableGfaOverride,
+  });
+  const unitMix = resolveUnitMix(inputs, site.yieldStatus === "CALCULABLE" ? mixProbe.saleableArea : 0);
   const metrics = computeAssemblyMetrics(lots, a, adj, a.revenueMode === "UNIT_MIX" ? unitMix : undefined);
 
   // Max payable comes from development feasibility — independent of existing property values.
@@ -406,8 +420,31 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   metrics.combinedValue = existingValue ?? 0;
   metrics.combinedValueEstimated = !marketValueComplete;
   metrics.upliftRatio = existingValue != null && existingValue > 0 ? budget / existingValue : 0;
+  // One effective FSR for scoring / capacity — never leave stale LEP-only 0:1 after pathway apply.
+  if (feasibilityCalculable) {
+    metrics.weightedFsr = site.fsr;
+    metrics.theoreticalGfa = base.yield.theoreticalGfa;
+  }
+  if (site.heightLimitM != null) {
+    metrics.heightMinM = site.heightLimitM;
+    metrics.heightMaxM = site.heightLimitM;
+  }
 
-  const score = scoreAssembly(metrics, a);
+  const ownerNames = lots
+    .map((l) => l.ownerName?.trim() ?? "")
+    .filter((n) => n.length > 0 && !/^unknown$/i.test(n) && !/^demo\s*[—-]\s*unknown$/i.test(n));
+  const ownerCountKnown = ownerNames.length === lots.length && lots.length > 0;
+  const ownerCount = ownerCountKnown ? new Set(ownerNames.map((n) => n.toLowerCase())).size : null;
+
+  const score = scoreAssembly(metrics, a, {
+    effectiveFsr: site.fsr,
+    fsrSource: site.fsrSource,
+    statePathwayName: site.statePathwayName,
+    lepFsr: site.lepFsr,
+    proximityLabel: site.lmrProximityLabel,
+    ownerCountKnown,
+    ownerCount,
+  });
   const allocById = new Map(allocation.lots.map((l) => [l.id, l]));
   const strategy = buildAcquisitionSequence(
     lots.map((l) => ({ id: l.id, label: l.label, areaSqm: l.areaSqm, maximumPremium: allocById.get(l.id)?.maximumPremium ?? null })),
