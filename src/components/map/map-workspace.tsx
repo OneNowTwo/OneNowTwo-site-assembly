@@ -25,11 +25,22 @@ import {
 } from "@/lib/map-state";
 import { SCAN_CALCULATION_VERSION } from "@/lib/analysis/assembly-feasibility";
 import { ApiJsonError, fetchApiJson, fetchApiJsonWithRetry, isTransientHttpError } from "@/lib/api-json";
+import {
+  POST_SCAN_PARCEL_COOLDOWN_MS,
+  POST_SCAN_PARCEL_REFRESH_DELAY_MS,
+  scanReturnedSufficientParcels,
+  shouldSilentSoftFailTransient,
+} from "@/lib/map-parcel-refresh";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
 const MIN_PARCEL_ZOOM = 17;
 const DEFAULT_START = { lat: -33.8362, lng: 151.2176, zoom: 18 };
+
+/** Wall clock outside the component so React Compiler does not treat map handlers as impure render. */
+function nowMs(): number {
+  return Date.now();
+}
 
 /** Client-side stage labels while /api/scan is in flight (server returns final progress). */
 const SCAN_STAGE_LABELS = [
@@ -221,11 +232,11 @@ export function MapWorkspace({
   const fetchParcels = useCallback(async (bbox: BBox, opts?: { soft?: boolean }) => {
     // soft !== false means automatic refresh; soft === false is an explicit Retry (bypass cooldown).
     const explicitRetry = opts?.soft === false;
-    if (!explicitRetry && Date.now() < parcelCooldownUntilRef.current) return;
+    if (!explicitRetry && nowMs() < parcelCooldownUntilRef.current) return;
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    setLoad((s) => ({ ...s, loading: true, messages: opts?.soft ? [] : s.messages }));
+    setLoad((s) => ({ ...s, loading: true }));
     try {
       const body = await fetchApiJsonWithRetry<{
         parcels: ParcelData[];
@@ -250,16 +261,23 @@ export function MapWorkspace({
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       const transient = isTransientHttpError(err);
-      // After a successful scan the map already has valued parcels — don't replace results with a 502 toast.
-      if (transient && !explicitRetry && parcelsCountRef.current > 0) {
+      // Silent only when usable parcel data already exists — never hide an empty/broken map.
+      if (
+        shouldSilentSoftFailTransient({
+          transient,
+          explicitRetry,
+          usableParcelCount: parcelsCountRef.current,
+        })
+      ) {
         setLoad((s) => ({ ...s, loading: false }));
         return;
       }
-      if (transient && opts?.soft) {
-        setLoad((s) => ({ ...s, loading: false }));
-        return;
-      }
-      setLoad((s) => ({ ...s, loading: false, messages: [(err as Error).message] }));
+      const base = (err as Error).message;
+      const msg =
+        transient && parcelsCountRef.current === 0
+          ? `${base} Map parcels could not be loaded — retry when the server recovers.`
+          : base;
+      setLoad((s) => ({ ...s, loading: false, messages: [msg] }));
     }
   }, []);
 
@@ -273,7 +291,7 @@ export function MapWorkspace({
       };
       setLoad((s) => ({ ...s, zoom }));
       if (zoom < MIN_PARCEL_ZOOM) return;
-      if (Date.now() < parcelCooldownUntilRef.current) {
+      if (nowMs() < parcelCooldownUntilRef.current) {
         persistClientState();
         return;
       }
@@ -375,7 +393,7 @@ export function MapWorkspace({
     setZoneFill(true);
     setZoningWms(false);
     mapViewRef.current = { ...DEFAULT_START };
-    setFlyTo({ ...DEFAULT_START, nonce: Date.now() });
+    setFlyTo({ ...DEFAULT_START, nonce: nowMs() });
     saveMapState({
       ...DEFAULT_START,
       query: "",
@@ -409,7 +427,7 @@ export function MapWorkspace({
     setResults(null);
     setQuery(r.label.split(",")[0]);
     const zoom = r.kind === "address" ? 19 : 17;
-    setFlyTo({ lat: r.lat, lng: r.lng, zoom, bbox: r.kind === "address" ? undefined : r.bbox, nonce: Date.now() });
+    setFlyTo({ lat: r.lat, lng: r.lng, zoom, bbox: r.kind === "address" ? undefined : r.bbox, nonce: nowMs() });
   }
 
   async function findAssemblies(p: ParcelData) {
@@ -490,10 +508,12 @@ export function MapWorkspace({
         error?: string;
       }>("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) }, { retries: 1, delayMs: 3500 });
       // Merge scan parcels/valuations first so the map stays useful even if /api/parcels 502s.
-      if (Array.isArray(body.valuedParcels)) {
+      const valuedParcels = Array.isArray(body.valuedParcels) ? (body.valuedParcels as ParcelData[]) : [];
+      const rankedCandidates = body.candidates ?? [];
+      if (valuedParcels.length) {
         setParcels((prev) => {
           const next = new Map(prev);
-          for (const p of body.valuedParcels as ParcelData[]) {
+          for (const p of valuedParcels) {
             const existing = next.get(p.externalParcelId);
             next.set(p.externalParcelId, existing ? { ...existing, valuation: p.valuation ?? existing.valuation } : p);
           }
@@ -502,8 +522,12 @@ export function MapWorkspace({
         });
       }
       if (Array.isArray(body.centres)) setCentres(body.centres);
-      // Cool down parcel refreshes — heavy scans often leave Render returning HTML 502 briefly.
-      parcelCooldownUntilRef.current = Date.now() + 10_000;
+
+      const candidateLotIds = rankedCandidates.flatMap((c) => c.lotIds ?? []);
+      const parcelsSufficient = scanReturnedSufficientParcels({ valuedParcels, candidateLotIds });
+      // Block viewport-driven /api/parcels storms while Render recovers from the scan.
+      parcelCooldownUntilRef.current = nowMs() + POST_SCAN_PARCEL_COOLDOWN_MS;
+
       if (body.bbox) {
         lastBBox.current = body.bbox;
         setFlyTo({
@@ -511,14 +535,18 @@ export function MapWorkspace({
           lng: (body.bbox.west + body.bbox.east) / 2,
           bbox: body.bbox,
           zoom: 16,
-          nonce: Date.now(),
+          nonce: nowMs(),
         });
         if (postScanRefreshTimer.current) clearTimeout(postScanRefreshTimer.current);
-        const refreshBbox = body.bbox;
-        postScanRefreshTimer.current = setTimeout(() => {
-          parcelCooldownUntilRef.current = 0;
-          void fetchParcels(refreshBbox, { soft: true });
-        }, 4000);
+        // Prefer scan-returned parcels — only schedule a delayed refresh when map data is incomplete.
+        if (!parcelsSufficient) {
+          const refreshBbox = body.bbox;
+          postScanRefreshTimer.current = setTimeout(() => {
+            // Only clear cooldown after the full delay has elapsed (not at 4s).
+            parcelCooldownUntilRef.current = 0;
+            void fetchParcels(refreshBbox, { soft: true });
+          }, POST_SCAN_PARCEL_REFRESH_DELAY_MS);
+        }
       }
       const next: ScanState = {
         scanning: false,
@@ -555,14 +583,16 @@ export function MapWorkspace({
     }
   }
 
+  const assemblyKey = assembly.join("|");
   const assemblyParcels = assembly.map((id) => parcels.get(id)).filter((p): p is ParcelData => !!p);
   const manualMetrics = useMemo(() => {
     if (assemblyParcels.length < 1) return null;
     const adj = buildAdjacency(assemblyParcels.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })));
     const m = computeAssemblyMetrics(assemblyParcels.map(parcelToAnalysisLot), assumptions, adj);
     return { metrics: m, score: scoreAssembly(m, assumptions) };
+    // assemblyParcels is derived from assemblyKey + parcels
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assembly.join("|"), assumptions, parcels]);
+  }, [assemblyKey, assumptions, parcels]);
 
   const visibleScanCandidates = useMemo(() => {
     const hidden = new Set(scan.hiddenKeys);
@@ -700,19 +730,40 @@ export function MapWorkspace({
   }
 
   useEffect(() => {
-    setSaveName(assembly.length ? defaultName(assembly) : "");
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setSaveName(assembly.length ? defaultName(assembly) : "");
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assembly.join("|")]);
+  }, [assemblyKey]);
 
+  // Bootstrap from ?scan= once — never re-trigger when AppShell keeps MapWorkspace mounted across tabs.
+  const bootstrappedScanQueryRef = useRef<string | null>(null);
   useEffect(() => {
     if (!initialScanQuery || initialScanQuery.length < 2) return;
-    // Don't re-scan if we already restored a matching session.
-    if (restoredScan?.query && restoredScan.candidates.length && restoredScan.query.toLowerCase() === initialScanQuery.toLowerCase()) {
-      setQuery(initialScanQuery);
+    if (bootstrappedScanQueryRef.current === initialScanQuery) return;
+    // Live or restored session already covers this query — keep state, do not start a duplicate scan.
+    if (scan.scanning || scan.candidates.length > 0) {
+      bootstrappedScanQueryRef.current = initialScanQuery;
       return;
     }
-    setQuery(initialScanQuery);
-    void scanThisArea(initialScanQuery);
+    if (restoredScan?.query && restoredScan.candidates.length && restoredScan.query.toLowerCase() === initialScanQuery.toLowerCase()) {
+      bootstrappedScanQueryRef.current = initialScanQuery;
+      return;
+    }
+    bootstrappedScanQueryRef.current = initialScanQuery;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setQuery(initialScanQuery);
+      void scanThisArea(initialScanQuery);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialScanQuery]);
 
