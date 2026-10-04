@@ -818,7 +818,7 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
       lmrBand: modelled.lmrBand !== "OUTSIDE" ? modelled.lmrBand : planningReconcile.effectiveControls.proximityBand,
       nearestDistanceM: modelled.nearestDistanceM ?? planningReconcile.effectiveControls.proximityDistanceM,
       furthestDistanceM: modelled.furthestDistanceM ?? planningReconcile.effectiveControls.proximityDistanceMaxM,
-      proximityScreen: modelled.proximityScreen !== "NONE" ? modelled.proximityScreen : "PASS",
+      proximityScreen: modelled.proximityScreen,
       proximityLabel: modelled.proximityLabel ?? "PASS — ESTIMATED",
     },
   };
