@@ -12,6 +12,17 @@ export const watchFiltersSchema = z.object({
   pathway: z.enum(["LMR", "TOD", "ANY_STATE", "NONE"]).optional(),
   maxExistingValue: z.number().optional(),
   minMaxPayableUplift: z.number().optional(),
+  /** Phase 2 — proposed planning Find fields (Source Watcher). */
+  insidePlanningChangeArea: z.boolean().optional(),
+  planningChangeStatus: z.string().optional(),
+  proposedZone: z.string().optional(),
+  proposedFsr: z.number().optional(),
+  minProposedFsr: z.number().optional(),
+  proposedHeight: z.number().optional(),
+  minProposedHeight: z.number().optional(),
+  keySiteId: z.string().optional(),
+  requiredParcelCount: z.number().int().optional(),
+  minRequiredParcelCount: z.number().int().optional(),
 });
 
 export type WatchFilters = z.infer<typeof watchFiltersSchema>;

@@ -4,6 +4,7 @@ import { publishFeedItem } from "@/lib/monitoring/feed";
 import { SOURCE_DEFINITIONS } from "./registry";
 import { runSourceOnce, type InMemorySnapshot, type SourceRunResult } from "./pipeline";
 import type { DiffEvent, NormalisedSourcePayload, PlanningChangeAreaFact } from "./types";
+import { linkEventsToWatches } from "./watch-link";
 
 /** Ensure SourceRegistry rows exist for all definitions. */
 export async function ensureSourceRegistry(): Promise<number> {
@@ -91,7 +92,11 @@ async function persistRun(result: SourceRunResult): Promise<{ snapshotId: string
     await upsertPlanningAreas(result.normalised);
   }
 
-  const eventsCreated = await persistEvents(result.sourceId, snapshotId, result.events);
+  const linkedEvents =
+    result.events.length && result.normalised
+      ? await linkEventsToWatches(result.events, result.normalised)
+      : result.events;
+  const eventsCreated = await persistEvents(result.sourceId, snapshotId, linkedEvents);
 
   await prisma.sourceRun.create({
     data: {
@@ -184,6 +189,10 @@ async function persistEvents(sourceId: string, snapshotId: string | null, events
   let created = 0;
   for (const event of events) {
     try {
+      const watchIds =
+        event.payload && typeof event.payload === "object" && "watchItemIds" in (event.payload as object)
+          ? ((event.payload as { watchItemIds?: string[] }).watchItemIds ?? [])
+          : [];
       await prisma.intelChangeEvent.create({
         data: {
           kind: event.kind as IntelChangeKind,
@@ -196,6 +205,7 @@ async function persistEvents(sourceId: string, snapshotId: string | null, events
           newValue: (event.newValue ?? undefined) as Prisma.InputJsonValue | undefined,
           geometry: (event.geometry ?? undefined) as Prisma.InputJsonValue | undefined,
           affectedParcelHints: (event.affectedParcelHints ?? undefined) as Prisma.InputJsonValue | undefined,
+          watchItemIds: watchIds.length ? (watchIds as unknown as Prisma.InputJsonValue) : undefined,
           href: event.href,
           importance: event.importance ?? 0,
           payload: (event.payload ?? undefined) as Prisma.InputJsonValue | undefined,
@@ -213,6 +223,7 @@ async function persistEvents(sourceId: string, snapshotId: string | null, events
           sourceId,
           changeKey: event.changeKey,
           affectedParcelHints: event.affectedParcelHints,
+          watchItemIds: watchIds,
         },
       });
     } catch (err) {
@@ -229,9 +240,18 @@ export async function runPersistedSourceWatcher(opts?: { sourceIds?: string[] })
   await ensureSourceRegistry();
   const ids =
     opts?.sourceIds ??
-    SOURCE_DEFINITIONS.filter((s) => s.enabled !== false && (s.sourceType === "FIXTURE" || s.id.startsWith("nsw-hda") || s.id.includes("major") || s.id.includes("da-cdc") || s.id.includes("planning-proposal-register") || s.id.startsWith("fixture"))).map(
-      (s) => s.id,
-    );
+    SOURCE_DEFINITIONS.filter(
+      (s) =>
+        s.enabled !== false &&
+        (s.id.startsWith("live-") ||
+          s.id === "nsw-spatial-lmr-viewer" ||
+          s.sourceType === "FIXTURE" ||
+          s.id.startsWith("nsw-hda") ||
+          s.id.includes("major") ||
+          s.id.includes("da-cdc") ||
+          s.id.includes("planning-proposal-register") ||
+          s.id.startsWith("fixture")),
+    ).map((s) => s.id);
 
   const results: SourceRunResult[] = [];
   let eventsCreated = 0;

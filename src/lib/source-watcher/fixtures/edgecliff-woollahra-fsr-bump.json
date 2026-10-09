@@ -9,7 +9,7 @@
       "authority": "NSW DPHI",
       "lgas": ["WOOLLAHRA"],
       "suburbs": ["Edgecliff", "Woollahra", "Paddington", "Double Bay", "Darling Point"],
-      "sourceUrl": "https://www.planningportal.nsw.gov.au/",
+      "sourceUrl": "https://www.planningportal.nsw.gov.au/ppr/under-exhibition/edgecliff-woollahra-precinct",
       "exhibitionEnd": "2026-10-30",
       "bbox": { "west": 151.225, "south": -33.885, "east": 151.255, "north": -33.868 },
       "proposedControls": {

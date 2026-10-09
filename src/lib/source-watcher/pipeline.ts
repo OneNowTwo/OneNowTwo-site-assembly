@@ -3,6 +3,9 @@ import { diffNormalisedPayloads } from "./diff";
 import { SOURCE_DEFINITIONS } from "./registry";
 import type { DiffEvent, FetchResult, NormalisedSourcePayload, SourceAdapter, SourceDefinition } from "./types";
 import { edgecliffFixtureAdapter, innerWestFixtureAdapter } from "./adapters/fixtures";
+import { edgecliffLiveAdapter } from "./adapters/edgecliff-live";
+import { innerWestLiveAdapter } from "./adapters/inner-west-live";
+import { nswSpatialLmrAdapter } from "./adapters/nsw-spatial-lmr";
 import {
   daCdcPccAdapter,
   existingServiceAdapter,
@@ -27,6 +30,9 @@ export interface SourceRunResult {
 }
 
 const adapters: Record<string, SourceAdapter> = {
+  "live-edgecliff-woollahra": edgecliffLiveAdapter,
+  "live-inner-west-fairer-future": innerWestLiveAdapter,
+  "nsw-spatial-lmr-viewer": nswSpatialLmrAdapter,
   "fixture-edgecliff-woollahra": edgecliffFixtureAdapter,
   "fixture-inner-west-fairer-future": innerWestFixtureAdapter,
   "nsw-planning-proposal-register": planningProposalRegisterAdapter,

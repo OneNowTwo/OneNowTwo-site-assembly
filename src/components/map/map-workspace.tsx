@@ -149,6 +149,8 @@ export function MapWorkspace({
   const [activeKey, setActiveKey] = useState<string | null>(restoredScan?.activeKey ?? null);
   const [zoneFill, setZoneFill] = useState(() => loadMapState()?.zoneFill ?? true);
   const [zoningWms, setZoningWms] = useState(() => loadMapState()?.zoningWms ?? false);
+  const [proposedPlanning, setProposedPlanning] = useState(false);
+  const [proposedPlanningData, setProposedPlanningData] = useState<GeoJSON.FeatureCollection | null>(null);
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
   const [query, setQuery] = useState(() => initialScanQuery ?? loadMapState()?.query ?? restoredScan?.query ?? "");
   const [results, setResults] = useState<GeocodeResult[] | null>(null);
@@ -194,6 +196,22 @@ export function MapWorkspace({
   useEffect(() => {
     if (find || scan.candidates.length) candidatesRef.current?.scrollIntoView({ block: "start" });
   }, [find, scan.candidates.length]);
+
+  useEffect(() => {
+    if (!proposedPlanning) return;
+    let cancelled = false;
+    void fetch("/api/planning/proposed-areas")
+      .then((r) => r.json())
+      .then((j: GeoJSON.FeatureCollection) => {
+        if (!cancelled) setProposedPlanningData(j);
+      })
+      .catch(() => {
+        if (!cancelled) setProposedPlanningData(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [proposedPlanning]);
 
   const persistClientState = useCallback(
     (opts?: { activeKey?: string | null; scanOverride?: ScanState }) => {
@@ -896,6 +914,8 @@ export function MapWorkspace({
           neighbourIds={find && selectedId === find.startId && !highlightIds.length ? find.neighbours : []}
           zoneFill={zoneFill}
           zoningWms={zoningWms}
+          proposedPlanning={proposedPlanning}
+          proposedPlanningData={proposedPlanningData}
           flyTo={flyTo}
           initial={start}
           onParcelClick={onParcelClick}
@@ -957,6 +977,14 @@ export function MapWorkspace({
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
               <input type="checkbox" checked={zoningWms} onChange={(e) => setZoningWms(e.target.checked)} /> LEP zoning layer
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
+              <input
+                type="checkbox"
+                checked={proposedPlanning}
+                onChange={(e) => setProposedPlanning(e.target.checked)}
+              />{" "}
+              Proposed planning
             </label>
           </div>
           <div className="pointer-events-auto ml-auto flex items-center gap-2 rounded-[3px] border border-line bg-white px-2.5 py-1.5 shadow-sm">

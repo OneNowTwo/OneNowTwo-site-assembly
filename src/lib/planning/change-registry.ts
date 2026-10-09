@@ -42,12 +42,12 @@ export const CURATED_PLANNING_CHANGES: PlanningChangeRecord[] = [
     id: "nsw:edgecliff-woollahra-draft-rezoning-2026",
     title: "Edgecliff–Woollahra draft rezoning proposal",
     description:
-      "NSW Government draft Edgecliff–Woollahra rezoning on public exhibition. Substantial proposed housing uplift (reported ~9,400 homes) with towers up to ~34 storeys near Edgecliff and affordable-housing contributions (reported from ~3% rising toward ~15% on certain sites). Exhibition to 30 October 2026. NOT current law. Machine-readable proposed layers + key sites via Source Watcher fixture (zoning, incentive HOB/FSR, key sites, non-residential FSR, AH, active street frontage).",
+      "NSW Government draft Edgecliff–Woollahra rezoning on public exhibition. Substantial proposed housing uplift (reported ~9,400 homes) with towers up to ~34 storeys near Edgecliff and affordable-housing contributions (reported from ~3% rising toward ~15% on certain sites). Exhibition to 30 October 2026. NOT current law. Machine-readable proposed layers + key sites via Source Watcher live adapter (portal + structured map pack).",
     status: "EXHIBITED",
     instrumentName: "Draft Edgecliff–Woollahra rezoning (State-led)",
     planningProposalNumber: null,
     authority: "NSW DPHI",
-    sourceUrl: "https://www.planning.nsw.gov.au/",
+    sourceUrl: "https://www.planningportal.nsw.gov.au/ppr/under-exhibition/edgecliff-woollahra-precinct",
     sourceAuthority: "NSW Department of Planning, Housing and Infrastructure",
     announcementDate: "2026-09-01",
     exhibitionEndDate: "2026-10-30",
@@ -75,12 +75,12 @@ export const CURATED_PLANNING_CHANGES: PlanningChangeRecord[] = [
     id: "council:inner-west-our-fairer-future",
     title: "Inner West — Our Fairer Future Plan",
     description:
-      "Council strategic plan with current vs draft/adopted proposed zoning/FSR/height on interactive ArcGIS map. Source Watcher fixture registers the area; live FeatureServer ingest preferred over scraping. NOT current LEP law until gazetted.",
+      "Council strategic plan with current vs draft/adopted proposed zoning/FSR/height on interactive ArcGIS Experience. Source Watcher live adapter resolves Experience → WebMap → Adopted_Planning_Layers FeatureServer (no screenshot scrape). NOT current LEP law until gazetted.",
     status: "PROPOSED",
     instrumentName: "Our Fairer Future (Inner West) — draft/adopted proposed controls",
     planningProposalNumber: null,
     authority: "Inner West Council",
-    sourceUrl: "https://www.innerwest.nsw.gov.au/",
+    sourceUrl: "https://experience.arcgis.com/experience/2b5ffd9da4f44cd7b7886b632a180556/page/Page",
     sourceAuthority: "Inner West Council",
     announcementDate: "2026-01-01",
     effectiveDate: null,
@@ -90,7 +90,7 @@ export const CURATED_PLANNING_CHANGES: PlanningChangeRecord[] = [
     bbox: { west: 151.12, south: -33.925, east: 151.2, north: -33.87 },
     proposedControls: {
       machineReadable: true,
-      notes: "PROPOSED — prefer ArcGIS Experience → FeatureServer. See Source Watcher fixture-inner-west-fairer-future.",
+      notes: "PROPOSED — live ArcGIS Experience → Adopted_Planning_Layers FeatureServer. See Source Watcher live-inner-west-fairer-future.",
     },
     timeline: [
       { date: "2026", label: "Draft / adopted proposed controls published on council map" },

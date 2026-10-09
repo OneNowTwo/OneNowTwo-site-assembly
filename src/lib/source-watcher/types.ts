@@ -80,18 +80,47 @@ export interface ProposedControls {
   machineReadable?: boolean;
 }
 
+export type GeometrySource =
+  | "OFFICIAL_FEATURE_SERVICE"
+  | "OFFICIAL_GEOJSON"
+  | "OFFICIAL_MAP_DERIVED"
+  | "MANUALLY_STRUCTURED_FIXTURE";
+
+export type KeySiteConditionType =
+  | "AFFORDABLE_HOUSING"
+  | "COMMUNITY_FACILITY"
+  | "THROUGH_SITE_LINK"
+  | "PUBLIC_VEHICLE_ACCESS"
+  | "ROAD_WIDENING"
+  | "DRAINAGE_CORRIDOR"
+  | "OPEN_SPACE"
+  | "ACTIVE_STREET_FRONTAGE"
+  | "NON_RESIDENTIAL_FSR"
+  | "OTHER";
+
+export interface KeySiteCondition {
+  type: KeySiteConditionType;
+  value?: string | null;
+  description?: string | null;
+}
+
 export interface KeySiteFact {
   externalKeySiteId: string;
   name: string;
   bbox?: BBox | null;
   geometry?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+  geometrySource?: GeometrySource | null;
   requiredParcelHints?: string[];
+  /** Resolved cadastral externalParcelIds when linked. */
+  requiredParcelIds?: string[];
   optionalParcelHints?: string[];
   currentControls?: ProposedControls | null;
   proposedControls?: ProposedControls | null;
   incentiveControls?: ProposedControls | null;
   requirements?: string[];
+  /** Legacy string conditions — prefer structuredConditions. */
   conditions?: string[];
+  structuredConditions?: KeySiteCondition[];
 }
 
 export interface PlanningChangeAreaFact {
@@ -152,4 +181,17 @@ export interface KeySiteHit {
   keySite: KeySiteFact;
   yourPropertyIndex: number | null;
   requiredCount: number;
+  requiredParcelIds?: string[];
+  requiredAddresses?: string[];
+}
+
+/** Queryable Find / scanner fields for proposed planning (Phase 2 minimal). */
+export interface ProposedPlanningFindFields {
+  insidePlanningChangeArea: boolean;
+  planningChangeStatus: string | null;
+  proposedZone: string | null;
+  proposedFsr: number | null;
+  proposedHeight: number | null;
+  keySiteId: string | null;
+  requiredParcelCount: number | null;
 }

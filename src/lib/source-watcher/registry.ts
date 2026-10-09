@@ -99,6 +99,53 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
     },
   },
   {
+    id: "live-edgecliff-woollahra",
+    name: "Edgecliff–Woollahra state-led rezoning (live portal + map pack)",
+    authority: "NSW DPHI",
+    category: "STATE_LED_REZONING",
+    sourceType: "HTML",
+    pollFrequency: "every_6_hours",
+    parserVersion: "edgecliff-live-2",
+    config: {
+      adapter: "live-edgecliff",
+      legalStatus: "UNDER_EXHIBITION",
+      exhibitionEnd: "2026-10-30",
+      portalUrl: "https://www.planningportal.nsw.gov.au/ppr/under-exhibition/edgecliff-woollahra-precinct",
+      geometrySource: "MANUALLY_STRUCTURED_FIXTURE",
+    },
+  },
+  {
+    id: "live-inner-west-fairer-future",
+    name: "Inner West Our Fairer Future (live ArcGIS Experience)",
+    authority: "Inner West Council",
+    category: "COUNCIL_STRATEGIC",
+    sourceType: "ARCGIS",
+    pollFrequency: "daily",
+    parserVersion: "iwff-live-2",
+    config: {
+      adapter: "live-inner-west",
+      legalStatus: "PROPOSED",
+      experienceUrl: "https://experience.arcgis.com/experience/2b5ffd9da4f44cd7b7886b632a180556/page/Page",
+      featureServer:
+        "https://services-ap1.arcgis.com/dp2UIID5MUpTUFVA/arcgis/rest/services/Adopted_Planning_Layers/FeatureServer",
+    },
+  },
+  {
+    id: "nsw-spatial-lmr-viewer",
+    name: "NSW Spatial Portal LMR Viewer (Experience audit)",
+    authority: "NSW DPHI / Spatial Services",
+    category: "CURRENT_CONTROLS",
+    sourceType: "ARCGIS",
+    pollFrequency: "daily",
+    parserVersion: "nsw-spatial-lmr-1",
+    config: {
+      adapter: "nsw-spatial-lmr",
+      experienceUrl:
+        "https://spatialportal.dpie.nsw.gov.au/portal/apps/experiencebuilder/experience/?id=c53d5767b677454c8a26d6790a296bc2",
+      note: "Resolve + audit only — do not duplicate EPI current controls.",
+    },
+  },
+  {
     id: "fixture-edgecliff-woollahra",
     name: "Edgecliff–Woollahra proposed map pack (fixture)",
     authority: "NSW DPHI",
@@ -106,10 +153,12 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
     sourceType: "FIXTURE",
     pollFrequency: "daily",
     parserVersion: "edgecliff-1",
+    enabled: true,
     config: {
       adapter: "fixture-edgecliff",
       legalStatus: "UNDER_EXHIBITION",
       exhibitionEnd: "2026-10-30",
+      note: "Kept for unit tests / offline diff; production poll prefers live-edgecliff-woollahra.",
     },
   },
   {
@@ -120,10 +169,12 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
     sourceType: "FIXTURE",
     pollFrequency: "daily",
     parserVersion: "iwff-1",
+    enabled: true,
     config: {
       adapter: "fixture-inner-west",
       legalStatus: "PROPOSED",
       preferredIngestion: "ArcGIS Experience → FeatureServer",
+      note: "Kept for unit tests; production poll prefers live-inner-west-fairer-future.",
     },
   },
   {

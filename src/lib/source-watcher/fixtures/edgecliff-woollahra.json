@@ -9,7 +9,7 @@
       "authority": "NSW DPHI",
       "lgas": ["WOOLLAHRA"],
       "suburbs": ["Edgecliff", "Woollahra", "Paddington", "Double Bay", "Darling Point"],
-      "sourceUrl": "https://www.planningportal.nsw.gov.au/",
+      "sourceUrl": "https://www.planningportal.nsw.gov.au/ppr/under-exhibition/edgecliff-woollahra-precinct",
       "exhibitionEnd": "2026-10-30",
       "bbox": { "west": 151.225, "south": -33.885, "east": 151.255, "north": -33.868 },
       "proposedControls": {
@@ -24,6 +24,7 @@
           "externalKeySiteId": "ED1.2",
           "name": "Edgecliff key site ED 1.2",
           "bbox": { "west": 151.234, "south": -33.8795, "east": 151.2375, "north": -33.8775 },
+          "geometrySource": "MANUALLY_STRUCTURED_FIXTURE",
           "requiredParcelHints": ["Lot A ED1.2", "Lot B ED1.2", "Lot C ED1.2"],
           "proposedControls": {
             "legalStatus": "UNDER_EXHIBITION",
@@ -40,12 +41,17 @@
             "machineReadable": true
           },
           "requirements": ["minimum assembled site", "community facility or affordable housing contribution"],
-          "conditions": ["community-facility/affordable-housing condition on ED 1.2"]
+          "conditions": ["community-facility/affordable-housing condition on ED 1.2"],
+          "structuredConditions": [
+            { "type": "COMMUNITY_FACILITY", "description": "Community facility or affordable housing contribution on ED 1.2" },
+            { "type": "AFFORDABLE_HOUSING", "value": "10%" }
+          ]
         },
         {
           "externalKeySiteId": "CS7.2",
           "name": "Commercial core key site CS.7.2",
           "bbox": { "west": 151.236, "south": -33.881, "east": 151.24, "north": -33.8785 },
+          "geometrySource": "MANUALLY_STRUCTURED_FIXTURE",
           "requiredParcelHints": [
             "1 New South Head Road",
             "3 New South Head Road",
@@ -69,7 +75,13 @@
             "machineReadable": true
           },
           "requirements": ["assemble 4 parcels", "active street frontage", "non-residential FSR"],
-          "conditions": ["through-site link", "active street frontage"]
+          "conditions": ["through-site link", "active street frontage"],
+          "structuredConditions": [
+            { "type": "THROUGH_SITE_LINK", "description": "Through-site link required" },
+            { "type": "ACTIVE_STREET_FRONTAGE", "description": "Active street frontage" },
+            { "type": "NON_RESIDENTIAL_FSR", "value": "1.0:1" },
+            { "type": "AFFORDABLE_HOUSING", "value": "5%" }
+          ]
         }
       ]
     }
