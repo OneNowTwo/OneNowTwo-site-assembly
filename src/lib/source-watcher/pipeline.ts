@@ -3,7 +3,7 @@ import { diffNormalisedPayloads } from "./diff";
 import { SOURCE_DEFINITIONS } from "./registry";
 import type { DiffEvent, FetchResult, NormalisedSourcePayload, SourceAdapter, SourceDefinition } from "./types";
 import { edgecliffFixtureAdapter, innerWestFixtureAdapter } from "./adapters/fixtures";
-import { edgecliffLiveAdapter } from "./adapters/edgecliff-live";
+import { edgecliffLiveAdapter, type EdgecliffLiveAdapter } from "./adapters/edgecliff-live";
 import { innerWestLiveAdapter } from "./adapters/inner-west-live";
 import { nswSpatialLmrAdapter } from "./adapters/nsw-spatial-lmr";
 import {
@@ -66,6 +66,18 @@ export async function runSourceOnce(
     return { sourceId, status: "SKIPPED", events: [], error: "No adapter registered" };
   }
   try {
+    if (sourceId === "live-edgecliff-woollahra" && previous?.normalised?.meta) {
+      const meta = previous.normalised.meta as {
+        documentHash?: string;
+        livePortal?: { bodyHash?: string | null };
+      };
+      if (adapter && "previousMeta" in adapter) {
+        (adapter as EdgecliffLiveAdapter).previousMeta = {
+          documentHash: meta.documentHash ?? null,
+          portalBodyHash: meta.livePortal?.bodyHash ?? null,
+        };
+      }
+    }
     const fetched: FetchResult = await adapter.fetch();
     const hash = contentHash(fetched.normalised);
     if (previous && previous.contentHash === hash) {

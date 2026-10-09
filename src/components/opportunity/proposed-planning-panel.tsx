@@ -10,6 +10,8 @@ import { modelProposedScenario, type ProposedScenarioResult } from "@/lib/source
 
 interface ProposedApi {
   legalDisclaimer: string;
+  dataSource?: "persisted" | "fixture_fallback";
+  structuredDataStatus?: string | null;
   planningChangeAreas: Array<{
     id: string;
     title: string;
@@ -25,6 +27,7 @@ interface ProposedApi {
       affordableHousingContributionPct?: number | null;
       activeStreetFrontage?: boolean | null;
       legalStatus?: string;
+      structuredDataStatus?: string;
     };
   }>;
   keySites: Array<{
@@ -34,10 +37,13 @@ interface ProposedApi {
     legalStatus: string;
     requiredCount: number;
     yourPropertyIndex: number | null;
+    requiredParcelIds?: string[];
+    requiredAddresses?: string[];
     keySite: {
       externalKeySiteId: string;
       name: string;
       requiredParcelHints?: string[];
+      requiredParcelIds?: string[];
       proposedControls?: {
         zone?: string | null;
         fsr?: number | null;
@@ -79,6 +85,8 @@ export function ProposedPlanningPanel() {
   const [loading, setLoading] = useState(false);
   const [scenario, setScenario] = useState<ProposedScenarioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [assemblyBusy, setAssemblyBusy] = useState(false);
+  const [assemblyMsg, setAssemblyMsg] = useState<string | null>(null);
 
   const centroid = useMemo(() => siteCentroid(dto), [dto]);
 
@@ -185,6 +193,9 @@ export function ProposedPlanningPanel() {
     >
       <p className="mb-3 text-[11px] text-amber-900">
         {data?.legalDisclaimer ?? "PROPOSED only — not current LEP law. CURRENT PlanningSnapshot unchanged."}
+        {data?.dataSource === "fixture_fallback" && " · Showing fixture fallback (no persisted Source Watcher rows yet)."}
+        {data?.structuredDataStatus === "NEEDS_RE_EXTRACTION" &&
+          " · Structured map-pack data NEEDS RE-EXTRACTION after official document change."}
       </p>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -237,8 +248,16 @@ export function ProposedPlanningPanel() {
             <div>
               <div className="mb-1 text-[10.5px] uppercase tracking-wide text-muted">Required assembly</div>
               <ul className="list-inside list-disc space-y-0.5">
-                {(ks.keySite.requiredParcelHints ?? []).map((h) => (
-                  <li key={h}>{h}</li>
+                {(ks.requiredAddresses?.length
+                  ? ks.requiredAddresses
+                  : ks.keySite.requiredParcelHints ?? []
+                ).map((h, i) => (
+                  <li key={`${h}-${i}`}>
+                    {h}
+                    {ks.requiredParcelIds?.[i] ? (
+                      <span className="ml-1 text-[10.5px] text-muted">({ks.requiredParcelIds[i]})</span>
+                    ) : null}
+                  </li>
                 ))}
               </ul>
             </div>
@@ -273,31 +292,65 @@ export function ProposedPlanningPanel() {
             Model proposed scenario
           </Button>
         )}
-        {ks && (ks.keySite.requiredParcelHints?.length ?? 0) > 0 && (
+        {ks && (
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => {
-              const q = (ks.keySite.requiredParcelHints ?? []).join(" | ");
-              window.open(`/map?query=${encodeURIComponent(q)}&highlightKeySite=${encodeURIComponent(ks.keySite.externalKeySiteId)}`, "_blank");
+            disabled={assemblyBusy}
+            onClick={async () => {
+              setAssemblyBusy(true);
+              setAssemblyMsg(null);
+              try {
+                const parcelIds =
+                  ks.requiredParcelIds?.filter((id) => /^nsw-cadid:\d+$/.test(id)) ??
+                  ks.keySite.requiredParcelIds?.filter((id) => /^nsw-cadid:\d+$/.test(id)) ??
+                  [];
+                const res = await fetch("/api/planning/analyse-assembly", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    planningChangeAreaId: ks.planningChangeAreaId,
+                    keySiteId: ks.keySite.externalKeySiteId,
+                    parcelIds: parcelIds.length ? parcelIds : undefined,
+                    name: `Key site ${ks.keySite.externalKeySiteId} — required assembly`,
+                  }),
+                });
+                const j = (await res.json()) as { id?: string; href?: string; error?: string; parcelCount?: number };
+                if (!res.ok) throw new Error(j.error ?? "Analyse assembly failed");
+                setAssemblyMsg(`Created assembly opportunity (${j.parcelCount ?? "?"} lots).`);
+                if (j.href) window.open(j.href, "_blank", "noopener");
+              } catch (e) {
+                setAssemblyMsg(e instanceof Error ? e.message : String(e));
+              } finally {
+                setAssemblyBusy(false);
+              }
             }}
           >
-            Analyse required assembly
+            {assemblyBusy ? "Creating…" : "Analyse required assembly"}
           </Button>
         )}
       </div>
+      {assemblyMsg && <p className="mt-2 text-[11px] text-muted">{assemblyMsg}</p>}
 
       {scenario && (
         <div className="mt-4 grid gap-3 border-t border-line pt-3 md:grid-cols-3 text-[12px]">
           <div>
             <div className="text-[10.5px] uppercase tracking-wide text-muted">Current</div>
             <div className="font-medium">FSR {scenario.current.effectiveFsr != null ? fmtFsr(scenario.current.effectiveFsr) : "—"}</div>
+            <div className="num">GFA {Math.round(scenario.currentOutputs.theoreticalGfa)} m² · {scenario.currentOutputs.dwellings} dw</div>
+            <div className="num">GRV {money(scenario.currentOutputs.grv)}</div>
+            <div className="num">Cost {money(scenario.currentOutputs.totalCost)}</div>
             <div className="num">Max payable {money(scenario.current.maxPayable)}</div>
+            <div className="num">Score {scenario.currentOutputs.score}</div>
           </div>
           <div>
             <div className="text-[10.5px] uppercase tracking-wide text-muted">Proposed scenario</div>
             <div className="font-medium">FSR {fmtFsr(scenario.proposedFsr)}</div>
+            <div className="num">GFA {Math.round(scenario.proposedOutputs.theoreticalGfa)} m² · {scenario.proposedOutputs.dwellings} dw</div>
+            <div className="num">GRV {money(scenario.proposedOutputs.grv)}</div>
+            <div className="num">Cost {money(scenario.proposedOutputs.totalCost)}</div>
             <div className="num">Max payable {money(scenario.proposed.maxPayable)}</div>
+            <div className="num">Score {scenario.proposedOutputs.score}</div>
           </div>
           <div>
             <div className="text-[10.5px] uppercase tracking-wide text-muted">Uplift</div>
@@ -305,7 +358,10 @@ export function ProposedPlanningPanel() {
               {scenario.uplift.maxPayable >= 0 ? "+" : ""}
               {money(scenario.uplift.maxPayable)}
             </div>
-            <div className="text-[11px] text-muted">FSR Δ {scenario.uplift.fsr.toFixed(2)}</div>
+            <div className="text-[11px] text-muted">
+              FSR Δ {scenario.uplift.fsr.toFixed(2)} · GRV Δ {money(scenario.uplift.grv)} · GFA Δ{" "}
+              {Math.round(scenario.uplift.theoreticalGfa)} m²
+            </div>
           </div>
           <p className="md:col-span-3 text-[11px] text-amber-900">{scenario.disclaimer}</p>
         </div>

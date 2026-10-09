@@ -2,6 +2,9 @@
  * MODEL PROPOSED SCENARIO — runs proposed FSR/height through the existing
  * CalculationSnapshot pipeline WITHOUT overwriting CURRENT opportunity inputs
  * or the live PlanningSnapshot-backed analysis.
+ *
+ * Recalculates dependent outputs via analyseOpportunity (GFA, yield/unit mix,
+ * GRV, costs, max payable, headroom, score) — not a display-only FSR swap.
  */
 
 import {
@@ -20,6 +23,26 @@ export interface ProposedScenarioInput {
   source?: string;
 }
 
+/** Dependent financial / yield outputs from the engine (not display-only). */
+export interface ProposedScenarioEngineOutputs {
+  theoreticalGfa: number;
+  achievableGfa: number;
+  saleableArea: number;
+  dwellings: number;
+  grv: number;
+  totalCost: number;
+  maxPayable: number;
+  headroom: number | null;
+  headroomPercent: number | null;
+  score: number;
+  effectiveFsr: number | null;
+  effectiveHeightM: number | null;
+  calculable: boolean;
+  unitMixRows: number;
+  yieldSaleableArea: number;
+  yieldDwellingCount: number;
+}
+
 export interface ProposedScenarioResult {
   label: string;
   source: string;
@@ -28,13 +51,42 @@ export interface ProposedScenarioResult {
   proposedHeightM: number | null;
   current: CalculationSnapshot;
   proposed: CalculationSnapshot;
+  currentOutputs: ProposedScenarioEngineOutputs;
+  proposedOutputs: ProposedScenarioEngineOutputs;
   uplift: {
     maxPayable: number;
     headroom: number | null;
     fsr: number;
+    grv: number;
+    dwellings: number;
+    theoreticalGfa: number;
+    score: number;
   };
   /** Disclaimer for UI. */
   disclaimer: string;
+}
+
+function engineOutputs(analysis: OpportunityAnalysis): ProposedScenarioEngineOutputs {
+  const c = analysis.calculation;
+  const y = analysis.base.yield;
+  return {
+    theoreticalGfa: c.theoreticalGfa,
+    achievableGfa: c.achievableGfa,
+    saleableArea: c.saleableArea,
+    dwellings: c.dwellings,
+    grv: c.grv,
+    totalCost: c.totalCost,
+    maxPayable: c.maxPayable,
+    headroom: c.headroom,
+    headroomPercent: c.headroomPercent,
+    score: c.score,
+    effectiveFsr: c.effectiveFsr,
+    effectiveHeightM: c.effectiveHeightM,
+    calculable: c.calculable,
+    unitMixRows: analysis.unitMix?.length ?? 0,
+    yieldSaleableArea: y?.saleableArea ?? c.saleableArea,
+    yieldDwellingCount: y?.dwellings ?? c.dwellings,
+  };
 }
 
 /**
@@ -56,7 +108,6 @@ export function modelProposedScenario(input: {
     fsrOverrideKind: "USER",
     fsrOverrideCertainty: "PROPOSED_SCENARIO_ONLY",
     heightOverrideM: input.proposed.proposedHeightM ?? input.opportunityInputs.heightOverrideM,
-    // Keep pathwaySnapshot for display of CURRENT; overrides drive the scenario run.
   };
 
   const scenarioAnalysis = analyseOpportunity(
@@ -68,6 +119,8 @@ export function modelProposedScenario(input: {
 
   const current = input.currentAnalysis.calculation;
   const proposed = scenarioAnalysis.calculation;
+  const currentOutputs = engineOutputs(input.currentAnalysis);
+  const proposedOutputs = engineOutputs(scenarioAnalysis);
   const currentFsr = current.effectiveFsr ?? 0;
 
   return {
@@ -77,6 +130,8 @@ export function modelProposedScenario(input: {
     proposedHeightM: input.proposed.proposedHeightM ?? null,
     current,
     proposed,
+    currentOutputs,
+    proposedOutputs,
     uplift: {
       maxPayable: proposed.maxPayable - current.maxPayable,
       headroom:
@@ -84,8 +139,12 @@ export function modelProposedScenario(input: {
           ? proposed.headroom - current.headroom
           : null,
       fsr: input.proposed.proposedFsr - currentFsr,
+      grv: proposed.grv - current.grv,
+      dwellings: proposed.dwellings - current.dwellings,
+      theoreticalGfa: proposed.theoreticalGfa - current.theoreticalGfa,
+      score: proposed.score - current.score,
     },
     disclaimer:
-      "PROPOSED SCENARIO only — does not overwrite CURRENT feasibility or PlanningSnapshot. Not current LEP law.",
+      "PROPOSED SCENARIO only — full engine recalculation (GFA / yield / GRV / costs / max payable / headroom / score). Does not overwrite CURRENT feasibility or PlanningSnapshot. Not current LEP law.",
   };
 }

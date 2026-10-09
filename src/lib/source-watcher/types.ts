@@ -42,6 +42,7 @@ export type IntelChangeKind =
   | "COUNCIL_RESOLUTION"
   | "ENVIRONMENTAL_LAYER_CHANGED"
   | "SOURCE_REFRESHED"
+  | "SOURCE_DOCUMENT_CHANGED"
   | "OTHER";
 
 export interface SourceDefinition {

@@ -124,7 +124,17 @@ async function persistRun(result: SourceRunResult): Promise<{ snapshotId: string
 }
 
 async function upsertPlanningAreas(normalised: NormalisedSourcePayload) {
+  const meta = (normalised.meta ?? {}) as Record<string, unknown>;
   for (const area of normalised.planningChangeAreas ?? []) {
+    const proposedControls = {
+      ...area.proposedControls,
+      geometrySource: meta.geometrySource ?? area.proposedControls?.notes?.includes("MANUALLY_STRUCTURED")
+        ? "MANUALLY_STRUCTURED_FIXTURE"
+        : undefined,
+      structuredDataStatus: meta.structuredDataStatus ?? undefined,
+      documentHash: meta.documentHash ?? undefined,
+      provenance: meta.provenance ?? undefined,
+    };
     await prisma.planningChangeArea.upsert({
       where: { id: area.id },
       create: {
@@ -138,7 +148,7 @@ async function upsertPlanningAreas(normalised: NormalisedSourcePayload) {
         exhibitionEnd: area.exhibitionEnd ? new Date(area.exhibitionEnd) : undefined,
         bbox: (area.bbox ?? undefined) as Prisma.InputJsonValue | undefined,
         geometry: (area.geometry ?? undefined) as Prisma.InputJsonValue | undefined,
-        proposedControls: area.proposedControls as unknown as Prisma.InputJsonValue,
+        proposedControls: proposedControls as unknown as Prisma.InputJsonValue,
         lastCheckedAt: new Date(),
       },
       update: {
@@ -150,12 +160,25 @@ async function upsertPlanningAreas(normalised: NormalisedSourcePayload) {
         sourceUrl: area.sourceUrl ?? undefined,
         exhibitionEnd: area.exhibitionEnd ? new Date(area.exhibitionEnd) : undefined,
         bbox: (area.bbox ?? undefined) as Prisma.InputJsonValue | undefined,
-        proposedControls: area.proposedControls as unknown as Prisma.InputJsonValue,
+        geometry: (area.geometry ?? undefined) as Prisma.InputJsonValue | undefined,
+        proposedControls: proposedControls as unknown as Prisma.InputJsonValue,
         lastCheckedAt: new Date(),
       },
     });
     for (const site of area.keySites ?? []) {
       const id = `${area.id}:${site.externalKeySiteId}`;
+      const hintsPayload = {
+        hints: site.requiredParcelHints ?? [],
+        ids: site.requiredParcelIds ?? [],
+      };
+      const conditionsPayload =
+        site.structuredConditions?.length
+          ? site.structuredConditions
+          : (site.conditions ?? []);
+      const siteProposed = {
+        ...(site.proposedControls ?? {}),
+        geometrySource: site.geometrySource ?? meta.geometrySource ?? null,
+      };
       await prisma.keySite.upsert({
         where: { id },
         create: {
@@ -165,20 +188,23 @@ async function upsertPlanningAreas(normalised: NormalisedSourcePayload) {
           name: site.name,
           geometry: (site.geometry ?? undefined) as Prisma.InputJsonValue | undefined,
           bbox: (site.bbox ?? undefined) as Prisma.InputJsonValue | undefined,
-          requiredParcelHints: (site.requiredParcelHints ?? undefined) as Prisma.InputJsonValue | undefined,
-          proposedControls: (site.proposedControls ?? undefined) as Prisma.InputJsonValue | undefined,
+          requiredParcelHints: hintsPayload as unknown as Prisma.InputJsonValue,
+          optionalParcelHints: (site.optionalParcelHints ?? undefined) as Prisma.InputJsonValue | undefined,
+          proposedControls: siteProposed as unknown as Prisma.InputJsonValue,
           incentiveControls: (site.incentiveControls ?? undefined) as Prisma.InputJsonValue | undefined,
           requirements: (site.requirements ?? undefined) as Prisma.InputJsonValue | undefined,
-          conditions: (site.conditions ?? undefined) as Prisma.InputJsonValue | undefined,
+          conditions: conditionsPayload as unknown as Prisma.InputJsonValue,
         },
         update: {
           name: site.name,
+          geometry: (site.geometry ?? undefined) as Prisma.InputJsonValue | undefined,
           bbox: (site.bbox ?? undefined) as Prisma.InputJsonValue | undefined,
-          requiredParcelHints: (site.requiredParcelHints ?? undefined) as Prisma.InputJsonValue | undefined,
-          proposedControls: (site.proposedControls ?? undefined) as Prisma.InputJsonValue | undefined,
+          requiredParcelHints: hintsPayload as unknown as Prisma.InputJsonValue,
+          optionalParcelHints: (site.optionalParcelHints ?? undefined) as Prisma.InputJsonValue | undefined,
+          proposedControls: siteProposed as unknown as Prisma.InputJsonValue,
           incentiveControls: (site.incentiveControls ?? undefined) as Prisma.InputJsonValue | undefined,
           requirements: (site.requirements ?? undefined) as Prisma.InputJsonValue | undefined,
-          conditions: (site.conditions ?? undefined) as Prisma.InputJsonValue | undefined,
+          conditions: conditionsPayload as unknown as Prisma.InputJsonValue,
         },
       });
     }

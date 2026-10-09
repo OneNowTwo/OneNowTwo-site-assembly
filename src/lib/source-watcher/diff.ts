@@ -14,6 +14,8 @@ export function diffNormalisedPayloads(
   }
 
   const events: DiffEvent[] = [];
+  events.push(...diffSourceDocuments(sourceId, previous, next));
+
   const prevAreas = indexById(previous.planningChangeAreas ?? []);
   const nextAreas = indexById(next.planningChangeAreas ?? []);
 
@@ -96,6 +98,58 @@ export function diffNormalisedPayloads(
     }
   }
 
+  return events;
+}
+
+/** Portal / map-pack document hash changes for manually structured sources. */
+function diffSourceDocuments(
+  sourceId: string,
+  previous: NormalisedSourcePayload,
+  next: NormalisedSourcePayload,
+): DiffEvent[] {
+  const prevMeta = (previous.meta ?? {}) as Record<string, unknown>;
+  const nextMeta = (next.meta ?? {}) as Record<string, unknown>;
+  const prevDoc = typeof prevMeta.documentHash === "string" ? prevMeta.documentHash : null;
+  const nextDoc = typeof nextMeta.documentHash === "string" ? nextMeta.documentHash : null;
+  const prevPortal =
+    prevMeta.livePortal && typeof prevMeta.livePortal === "object"
+      ? ((prevMeta.livePortal as { bodyHash?: string | null }).bodyHash ?? null)
+      : null;
+  const nextPortal =
+    nextMeta.livePortal && typeof nextMeta.livePortal === "object"
+      ? ((nextMeta.livePortal as { bodyHash?: string | null }).bodyHash ?? null)
+      : null;
+
+  const events: DiffEvent[] = [];
+  if (prevDoc && nextDoc && prevDoc !== nextDoc) {
+    events.push({
+      kind: "SOURCE_DOCUMENT_CHANGED",
+      title: `SOURCE_DOCUMENT_CHANGED — structured map pack updated`,
+      summary: `Document hash ${prevDoc.slice(0, 8)}… → ${nextDoc.slice(0, 8)}…. Structured controls refreshed.`,
+      changeKey: `${sourceId}:document-hash:${prevDoc}->${nextDoc}`,
+      oldValue: { documentHash: prevDoc },
+      newValue: { documentHash: nextDoc, structuredDataStatus: nextMeta.structuredDataStatus },
+      importance: 8,
+    });
+  } else if (prevPortal && nextPortal && prevPortal !== nextPortal) {
+    const stale = nextMeta.needsReExtraction === true || nextMeta.structuredDataStatus === "NEEDS_RE_EXTRACTION";
+    events.push({
+      kind: "SOURCE_DOCUMENT_CHANGED",
+      title: `SOURCE_DOCUMENT_CHANGED — official portal document changed`,
+      summary: stale
+        ? "Portal page changed while structured map-pack hash is unchanged. Structured proposed controls marked NEEDS_RE_EXTRACTION — do not treat as freshly extracted."
+        : "Official source document / portal page changed.",
+      changeKey: `${sourceId}:portal-body:${prevPortal}->${nextPortal}`,
+      oldValue: { portalBodyHash: prevPortal, documentHash: prevDoc },
+      newValue: {
+        portalBodyHash: nextPortal,
+        documentHash: nextDoc,
+        structuredDataStatus: nextMeta.structuredDataStatus ?? null,
+        needsReExtraction: stale,
+      },
+      importance: 9,
+    });
+  }
   return events;
 }
 

@@ -1,16 +1,25 @@
 /**
  * Live Edgecliff–Woollahra state-led rezoning adapter.
- * Official portal page + structured map-pack controls (MANUALLY_STRUCTURED_FIXTURE geometry
- * until an official FeatureServer exposes the exhibition layers).
+ *
+ * LIVE: NSW Planning Portal exhibition page metadata (status / Last-Modified / title).
+ * STRUCTURED: MANUALLY_STRUCTURED_FIXTURE controls + geometry from the official map pack
+ * until an official FeatureServer exists (portal probe found PDFs only — no ArcGIS layers).
+ *
  * Never writes into PlanningSnapshot / current law.
  */
 
+import { createHash } from "node:crypto";
 import type { FetchResult, NormalisedSourcePayload, SourceAdapter } from "../types";
+import { contentHash } from "../hash";
 import edgecliff from "../fixtures/edgecliff-woollahra.json";
 import edgecliffBump from "../fixtures/edgecliff-woollahra-fsr-bump.json";
 
 const PORTAL_URL =
   "https://www.planningportal.nsw.gov.au/ppr/under-exhibition/edgecliff-woollahra-precinct";
+
+/** Stable id for the structured map-pack content we ship in-repo. */
+export const EDGECLIFF_DOCUMENT_PACK_ID = "Edgecliff-Woollahra Proposed Maps (exhibition)";
+export const EDGECLIFF_STRUCTURED_PARSER_VERSION = "edgecliff-structured-2";
 
 /** Test-only: when true, return FSR-bump structured pack with live metadata. */
 let bumpVariant = false;
@@ -23,12 +32,27 @@ export function getEdgecliffLiveBumpVariant() {
   return bumpVariant;
 }
 
+export function structuredPackDocumentHash(pack: NormalisedSourcePayload): string {
+  // Hash controls/geometry only — exclude volatile checkedAt / live portal meta.
+  const areas = (pack.planningChangeAreas ?? []).map((a) => ({
+    id: a.id,
+    status: a.status,
+    proposedControls: a.proposedControls,
+    keySites: a.keySites,
+    bbox: a.bbox,
+    geometry: a.geometry,
+  }));
+  return contentHash({ documentPack: EDGECLIFF_DOCUMENT_PACK_ID, areas });
+}
+
 async function fetchPortalMeta(): Promise<{
   ok: boolean;
   lastModified: string | null;
   etag: string | null;
   title: string | null;
   statusHint: string;
+  bodyHash: string | null;
+  pdfCount: number;
 }> {
   try {
     const res = await fetch(PORTAL_URL, {
@@ -39,15 +63,20 @@ async function fetchPortalMeta(): Promise<{
     });
     const lastModified = res.headers.get("last-modified");
     const etag = res.headers.get("etag");
-    const html = (await res.text()).slice(0, 20000);
-    const titleMatch = html.match(/<title[^>]*>([^<]+)/i);
-    const underExhibition = /under.?exhibition|public exhibition/i.test(html);
+    const html = await res.text();
+    const head = html.slice(0, 40000);
+    const titleMatch = head.match(/<title[^>]*>([^<]+)/i);
+    const underExhibition = /under.?exhibition|public exhibition/i.test(head);
+    const pdfCount = (html.match(/\.pdf/gi) ?? []).length;
+    const bodyHash = createHash("sha256").update(html).digest("hex").slice(0, 32);
     return {
       ok: res.ok,
       lastModified,
       etag,
       title: titleMatch?.[1]?.trim() ?? null,
       statusHint: underExhibition ? "UNDER_EXHIBITION" : "PROPOSED",
+      bodyHash,
+      pdfCount,
     };
   } catch {
     return {
@@ -56,6 +85,8 @@ async function fetchPortalMeta(): Promise<{
       etag: null,
       title: null,
       statusHint: "UNDER_EXHIBITION",
+      bodyHash: null,
+      pdfCount: 0,
     };
   }
 }
@@ -63,8 +94,18 @@ async function fetchPortalMeta(): Promise<{
 function applyLiveMeta(
   pack: NormalisedSourcePayload,
   portal: Awaited<ReturnType<typeof fetchPortalMeta>>,
+  opts?: { previousDocumentHash?: string | null; previousPortalBodyHash?: string | null },
 ): NormalisedSourcePayload {
   const checkedAt = new Date().toISOString();
+  // Hash structured controls/geometry only — before live notes are attached.
+  const documentHash = structuredPackDocumentHash(pack);
+  const portalChanged =
+    !!opts?.previousPortalBodyHash &&
+    !!portal.bodyHash &&
+    opts.previousPortalBodyHash !== portal.bodyHash;
+  const structuredStale = portalChanged && opts?.previousDocumentHash === documentHash;
+  const structuredDataStatus = structuredStale ? "NEEDS_RE_EXTRACTION" : "CURRENT_STRUCTURED";
+
   const areas = (pack.planningChangeAreas ?? []).map((area) => ({
     ...area,
     sourceUrl: PORTAL_URL,
@@ -73,7 +114,14 @@ function applyLiveMeta(
       ...area.proposedControls,
       legalStatus: "UNDER_EXHIBITION" as const,
       machineReadable: true,
-      notes: `${area.proposedControls.notes ?? ""} Live portal checked ${checkedAt}. Geometry source: MANUALLY_STRUCTURED_FIXTURE from official map pack until FeatureServer published.`.trim(),
+      // Stable provenance blurb — omit volatile hashes from notes (live in meta).
+      notes: [
+        area.proposedControls.notes ?? "",
+        "PROVENANCE: LIVE portal metadata + MANUALLY_STRUCTURED_FIXTURE controls/geometry from official map pack.",
+        "Not official FeatureServer vector — portal exhibition page exposes PDFs only (no ArcGIS FeatureServer discovered).",
+      ]
+        .filter(Boolean)
+        .join(" "),
     },
     keySites: (area.keySites ?? []).map((site) => ({
       ...site,
@@ -95,9 +143,15 @@ function applyLiveMeta(
     })),
   }));
 
+  // Stable checkedAt for hashing when portal + structured pack unchanged.
+  const stableCheckedAt =
+    !portalChanged && !structuredStale && opts?.previousDocumentHash === documentHash
+      ? pack.checkedAt
+      : checkedAt;
+
   return {
     ...pack,
-    checkedAt,
+    checkedAt: stableCheckedAt,
     planningChangeAreas: areas,
     meta: {
       ...pack.meta,
@@ -107,11 +161,24 @@ function applyLiveMeta(
         lastModified: portal.lastModified,
         etag: portal.etag,
         title: portal.title,
+        bodyHash: portal.bodyHash,
+        pdfCount: portal.pdfCount,
       },
       geometrySource: "MANUALLY_STRUCTURED_FIXTURE",
-      documentPack: "Edgecliff-Woollahra Proposed Maps (exhibition)",
+      documentPack: EDGECLIFF_DOCUMENT_PACK_ID,
+      documentHash,
+      documentParserVersion: EDGECLIFF_STRUCTURED_PARSER_VERSION,
+      structuredDataStatus,
+      portalDocumentChanged: portalChanged,
+      needsReExtraction: structuredStale,
+      vectorServiceAvailable: false,
       legalStatus: "UNDER_EXHIBITION",
       authority: "NSW DPHI",
+      provenance: {
+        portal: "LIVE",
+        controlsAndGeometry: "MANUALLY_STRUCTURED_FIXTURE",
+        note: "Do not describe structured controls as fully live/vector.",
+      },
     },
   };
 }
@@ -119,21 +186,32 @@ function applyLiveMeta(
 export class EdgecliffLiveAdapter implements SourceAdapter {
   readonly id = "live-edgecliff-woollahra";
 
+  /** Optional previous snapshot meta for invalidation (injected by pipeline/tests). */
+  previousMeta: {
+    documentHash?: string | null;
+    portalBodyHash?: string | null;
+  } | null = null;
+
   async fetch(): Promise<FetchResult> {
     const portal = await fetchPortalMeta();
     const base = structuredClone(
       (bumpVariant ? edgecliffBump : edgecliff) as NormalisedSourcePayload,
     );
-    const normalised = applyLiveMeta(base, portal);
+    const normalised = applyLiveMeta(base, portal, {
+      previousDocumentHash: this.previousMeta?.documentHash,
+      previousPortalBodyHash: this.previousMeta?.portalBodyHash,
+    });
     return {
       raw: {
         portal,
-        documentPack: "Edgecliff-Woollahra Proposed Maps",
+        documentPack: EDGECLIFF_DOCUMENT_PACK_ID,
+        documentHash: normalised.meta?.documentHash,
         geometrySource: "MANUALLY_STRUCTURED_FIXTURE",
+        vectorServiceAvailable: false,
       },
       normalised,
       sourceModifiedAt: portal.lastModified,
-      etag: portal.etag,
+      etag: portal.etag ?? portal.bodyHash,
     };
   }
 }
