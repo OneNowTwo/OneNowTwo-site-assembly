@@ -13,6 +13,7 @@ export {
   extractExperienceItemId,
   clearArcGisExperienceCache,
   pickDeveloperRelevantLayers,
+  portalHostFromUrl,
 } from "./arcgis-experience";
 export { setEdgecliffFixtureVariant, getEdgecliffFixtureVariant } from "./adapters/fixtures";
 export { setEdgecliffLiveBumpVariant, getEdgecliffLiveBumpVariant } from "./adapters/edgecliff-live";
