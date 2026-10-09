@@ -57,7 +57,8 @@ describe("planning change registry", () => {
     expect(hits.some((h) => h.id.includes("woollahra"))).toBe(true);
     const w = hits.find((h) => h.id.includes("woollahra"))!;
     expect(w.status).toBe("EXHIBITED");
-    expect(w.proposedControls?.machineReadable).toBe(false);
+    expect(w.proposedControls?.machineReadable).toBe(true);
+    expect(w.exhibitionEndDate).toBe("2026-10-30");
   });
 
   it("pointInBBox works", () => {

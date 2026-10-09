@@ -1,0 +1,49 @@
+{
+  "kind": "council_strategic_plan",
+  "checkedAt": "2026-10-09T00:00:00.000Z",
+  "planningChangeAreas": [
+    {
+      "id": "council:inner-west-our-fairer-future",
+      "title": "Inner West — Our Fairer Future Plan",
+      "status": "DRAFT_ADOPTED_CONTROLS",
+      "authority": "Inner West Council",
+      "lgas": ["INNER WEST"],
+      "suburbs": ["Marrickville", "Dulwich Hill", "Petersham", "Lewisham", "Ashfield", "Summer Hill"],
+      "sourceUrl": "https://www.innerwest.nsw.gov.au/",
+      "exhibitionEnd": null,
+      "bbox": { "west": 151.12, "south": -33.925, "east": 151.2, "north": -33.87 },
+      "proposedControls": {
+        "legalStatus": "PROPOSED",
+        "machineReadable": true,
+        "notes": "Council interactive map exposes current vs draft/adopted proposed zoning/FSR/height. Adapter target: ArcGIS Experience → FeatureServer. NOT CURRENT LEP LAW until gazetted."
+      },
+      "keySites": [
+        {
+          "externalKeySiteId": "IWF-MARRICKVILLE-STATION",
+          "name": "Marrickville station precinct draft uplift",
+          "bbox": { "west": 151.153, "south": -33.912, "east": 151.16, "north": -33.907 },
+          "requiredParcelHints": [],
+          "proposedControls": {
+            "legalStatus": "PROPOSED",
+            "fsr": 2.5,
+            "heightM": 28,
+            "machineReadable": true
+          },
+          "incentiveControls": {
+            "legalStatus": "PROPOSED",
+            "incentiveFsr": 3.0,
+            "incentiveHeightM": 35,
+            "machineReadable": true
+          },
+          "requirements": ["minimum frontage", "amalgamation preferred for mid-block sites"],
+          "conditions": ["draft controls — verify on council map"]
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "layers": ["current_controls", "draft_proposed_controls"],
+    "ingestionPath": "ArcGIS Experience Builder → web map → FeatureServer (preferred over screenshot scrape)",
+    "legalStatus": "PROPOSED"
+  }
+}

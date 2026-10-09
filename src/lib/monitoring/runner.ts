@@ -5,6 +5,7 @@ import { monitorPlanningForUser } from "./planning-monitor";
 import { generateMorningReport } from "./morning-report";
 import { queueDueScans, processQueuedScans } from "./scan-schedule";
 import { publishFeedItem } from "./feed";
+import { runPersistedSourceWatcher } from "@/lib/source-watcher/persist";
 
 /** Resolve the primary workspace user (single-tenant MVP). */
 export async function resolveWorkspaceUserId(preferredUserId?: string | null): Promise<string | null> {
@@ -36,6 +37,17 @@ export async function runDailyMonitoring(opts?: { userId?: string | null; runSca
 
   const sales = await monitorSalesForUser(userId);
   const planning = await monitorPlanningForUser(userId);
+  let sourceWatcher: { ok: boolean; sourcesRun: number; eventsCreated: number; error?: string } | null = null;
+  try {
+    sourceWatcher = await runPersistedSourceWatcher();
+  } catch (err) {
+    sourceWatcher = {
+      ok: false,
+      sourcesRun: 0,
+      eventsCreated: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 
   let scanJobs: string[] = [];
   let scanResults: unknown[] = [];
@@ -59,9 +71,10 @@ export async function runDailyMonitoring(opts?: { userId?: string | null; runSca
     userId,
     sales,
     planning,
+    sourceWatcher,
     scanJobsQueued: scanJobs.length,
     scanResults,
     morningReportId: report.id,
-    note: "Proposed planning controls remain separate from current-law feasibility. Upstream NSW calls use TTL cache.",
+    note: "Proposed planning controls remain separate from current-law feasibility. Source Watcher diffs feed TODAY; they never rewrite PlanningSnapshot current law.",
   };
 }
