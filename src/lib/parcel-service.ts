@@ -116,6 +116,147 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
   return { parcels, cadastreStatus, planningStatus, messages, bbox };
 }
 
+/**
+ * Load parcels by external ids (nsw-cadid:N).
+ * Prefers stored rows; hydrates missing lots from NSW cadastre by cadid.
+ */
+export async function getParcelsByExternalIds(externalParcelIds: string[]): Promise<ParcelData[]> {
+  const ids = [...new Set(externalParcelIds.filter((id) => /^nsw-cadid:\d+$/.test(id)))];
+  if (!ids.length) return [];
+
+  const stored = await prisma.parcel.findMany({ where: { externalParcelId: { in: ids } } });
+  const byId = new Map(stored.map((r) => [r.externalParcelId, parcelFromRow(r)]));
+  const missing = ids.filter((id) => !byId.has(id));
+
+  if (missing.length) {
+    const cadids = missing.map((id) => id.replace("nsw-cadid:", "")).join(",");
+    try {
+      const { buildUrl, fetchJson } = await import("@/lib/data-sources/http");
+      const { NSW_CADASTRE_BASE, splitNswAddress } = await import("@/lib/data-sources/nsw-cadastre");
+      const { esriToGeoJSON } = await import("@/lib/data-sources/esri");
+      const area = (await import("@turf/area")).default;
+      const centroid = (await import("@turf/centroid")).default;
+      const booleanPointInPolygon = (await import("@turf/boolean-point-in-polygon")).default;
+      const pointOnFeature = (await import("@turf/point-on-feature")).default;
+      type LotAttrs = {
+        cadid: number;
+        lotnumber: string | null;
+        sectionnumber: string | null;
+        planlabel: string | null;
+        lotidstring: string | null;
+        planlotarea: number | null;
+      };
+      type PropAttrs = { address: string | null; propid: number };
+      type QueryResp<A> = { features: Array<{ attributes: A; geometry?: { rings: number[][][] } }> };
+      const lotUrl = buildUrl(`${NSW_CADASTRE_BASE}/8/query`, {
+        where: `cadid IN (${cadids})`,
+        outFields: "cadid,lotnumber,sectionnumber,planlabel,lotidstring,planlotarea",
+        returnGeometry: true,
+        outSR: 4326,
+        f: "json",
+      });
+      const lots = await fetchJson<QueryResp<LotAttrs>>(lotUrl, {
+        service: "nsw-cadastre-by-id",
+        ttlMs: 5 * 60 * 1000,
+      });
+      // Property addresses via spatial match per lot bbox envelope of all lots
+      let props: QueryResp<PropAttrs> = { features: [] };
+      const geoms = (lots.features ?? [])
+        .map((f) => (f.geometry ? esriToGeoJSON(f.geometry) : null))
+        .filter(Boolean) as Array<Polygon | MultiPolygon>;
+      if (geoms.length) {
+        const xs = geoms.flatMap((g) =>
+          (g.type === "Polygon" ? g.coordinates[0]! : g.coordinates.flatMap((p) => p[0]!)).map((c) => c[0]!),
+        );
+        const ys = geoms.flatMap((g) =>
+          (g.type === "Polygon" ? g.coordinates[0]! : g.coordinates.flatMap((p) => p[0]!)).map((c) => c[1]!),
+        );
+        const propUrl = buildUrl(`${NSW_CADASTRE_BASE}/12/query`, {
+          where: "principaladdresstype=1",
+          geometry: `${Math.min(...xs)},${Math.min(...ys)},${Math.max(...xs)},${Math.max(...ys)}`,
+          geometryType: "esriGeometryEnvelope",
+          inSR: 4326,
+          spatialRel: "esriSpatialRelIntersects",
+          outFields: "address,propid",
+          returnGeometry: true,
+          outSR: 4326,
+          f: "json",
+        });
+        props = await fetchJson<QueryResp<PropAttrs>>(propUrl, {
+          service: "nsw-cadastre-props-by-id",
+          ttlMs: 5 * 60 * 1000,
+        }).catch(() => ({ features: [] }));
+      }
+      const propertyPolys = (props.features ?? [])
+        .map((f) => {
+          const g = f.geometry ? esriToGeoJSON(f.geometry) : null;
+          return g ? { address: f.attributes.address, geom: { type: "Feature" as const, properties: {}, geometry: g } } : null;
+        })
+        .filter(Boolean) as Array<{ address: string | null; geom: GeoJSON.Feature<Polygon | MultiPolygon> }>;
+
+      const retrievedAt = new Date().toISOString();
+      for (const f of lots.features ?? []) {
+        const a = f.attributes;
+        const geometry = f.geometry ? esriToGeoJSON(f.geometry) : null;
+        if (!geometry) continue;
+        const feature = { type: "Feature" as const, properties: {}, geometry };
+        const inside = pointOnFeature(feature);
+        const c = centroid(feature).geometry.coordinates as [number, number];
+        const match = propertyPolys.find((p) => booleanPointInPolygon(inside, p.geom));
+        const { address, suburb } = splitNswAddress(match?.address ?? null);
+        const id = `nsw-cadid:${a.cadid}`;
+        byId.set(id, {
+          externalParcelId: id,
+          source: "LIVE_NSW",
+          lot: a.lotnumber,
+          section: a.sectionnumber,
+          dp: a.planlabel,
+          lotIdString: a.lotidstring,
+          address,
+          suburb,
+          geometry,
+          centroid: c,
+          areaSqm: Math.round(a.planlotarea && a.planlotarea > 0 ? a.planlotarea : area(feature)),
+          isStrata: !!a.planlabel && a.planlabel.startsWith("SP"),
+          planning: null,
+          planningStatus: "unavailable",
+          retrievedAt,
+        });
+      }
+    } catch {
+      // Leave missing ids absent — caller surfaces the gap.
+    }
+  }
+
+  // Attach planning where possible
+  const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as ParcelData[];
+  if (ordered.length) {
+    try {
+      const lngs = ordered.map((p) => p.centroid[0]);
+      const lats = ordered.map((p) => p.centroid[1]);
+      const bbox: BBox = {
+        west: Math.min(...lngs),
+        east: Math.max(...lngs),
+        south: Math.min(...lats),
+        north: Math.max(...lats),
+      };
+      const controls = await nswPlanningProvider.getControlsForParcels(
+        bbox,
+        ordered.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
+      );
+      return ordered.map((p) => {
+        const live = controls.get(p.externalParcelId);
+        return live
+          ? { ...p, planning: live, planningStatus: "ok" as const }
+          : p;
+      });
+    } catch {
+      return ordered;
+    }
+  }
+  return ordered;
+}
+
 /** Refresh live planning for specific stored parcels (Planning tab "Retry"/"Refresh"). */
 export async function refreshPlanningForParcels(rows: Parcel[]) {
   if (!rows.length) return new Map<string, PlanningControls>();

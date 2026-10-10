@@ -581,3 +581,206 @@ model PlanningMonitorEvent {
   @@index([changeKey, createdAt])
   @@index([createdAt])
 }
+
+// ─── Source Watcher / development intelligence engine ───────────────────────
+
+enum SourceTransport {
+  API
+  ARCGIS
+  WFS
+  JSON
+  HTML
+  PDF
+  RSS
+  FIXTURE
+  OTHER
+}
+
+enum SourceCategory {
+  CURRENT_CONTROLS
+  PLANNING_PROPOSAL
+  STATE_LED_REZONING
+  COUNCIL_STRATEGIC
+  KEY_SITE
+  HDA
+  MAJOR_PROJECTS
+  DA_CDC_PCC
+  DCP
+  COUNCIL_AGENDA
+  ENVIRONMENT
+  TRANSPORT
+  PROPERTY_SALES
+  OTHER
+}
+
+enum SourceRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  UNCHANGED
+  FAILED
+}
+
+enum IntelChangeKind {
+  PLANNING_PROPOSAL_CREATED
+  PLANNING_STATUS_CHANGED
+  ZONE_PROPOSED_CHANGE
+  FSR_PROPOSED_CHANGE
+  HEIGHT_PROPOSED_CHANGE
+  KEY_SITE_CREATED
+  KEY_SITE_CHANGED
+  ASSEMBLY_REQUIREMENT_CHANGED
+  AFFORDABLE_HOUSING_RATE_CHANGED
+  DCP_CHANGED
+  HDA_RECORD_PUBLISHED
+  HDA_RECOMMENDATION_CHANGED
+  SSD_DECLARED
+  SSD_STATUS_CHANGED
+  DA_LODGED
+  DA_APPROVED
+  PCC_ISSUED
+  COUNCIL_RESOLUTION
+  ENVIRONMENTAL_LAYER_CHANGED
+  SOURCE_REFRESHED
+  SOURCE_DOCUMENT_CHANGED
+  OTHER
+}
+
+/// Catalog of official / fixture sources the Source Watcher polls.
+model SourceRegistry {
+  id              String         @id
+  name            String
+  authority       String
+  category        SourceCategory
+  jurisdiction    String         @default("NSW")
+  sourceType      SourceTransport
+  /// Adapter id + fetch config (URLs, layer ids, poll hints).
+  config          Json           @default("{}")
+  pollFrequency   String
+  parserVersion   String         @default("1")
+  licence         String?
+  lastCheckedAt   DateTime?
+  lastSuccessfulAt DateTime?
+  lastContentHash String?
+  etag            String?
+  enabled         Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  runs            SourceRun[]
+  snapshots       SourceSnapshot[]
+
+  @@index([category, enabled])
+  @@index([enabled, lastCheckedAt])
+}
+
+model SourceRun {
+  id             String         @id @default(cuid())
+  sourceId       String
+  source         SourceRegistry @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status         SourceRunStatus @default(QUEUED)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  contentHash    String?
+  snapshotId     String?
+  eventsCreated  Int            @default(0)
+  error          String?
+  notes          String?
+  createdAt      DateTime       @default(now())
+
+  @@index([sourceId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Immutable raw/normalised payload for a source fetch — never silently overwritten.
+model SourceSnapshot {
+  id               String         @id @default(cuid())
+  sourceId         String
+  source           SourceRegistry @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  retrievedAt      DateTime       @default(now())
+  contentHash      String
+  sourceModifiedAt DateTime?
+  parserVersion    String
+  /// Raw upstream payload or fixture pointer.
+  raw              Json?
+  /// Normalised intelligence payload used for diffing.
+  normalised       Json
+  createdAt        DateTime       @default(now())
+
+  @@index([sourceId, retrievedAt])
+  @@unique([sourceId, contentHash])
+}
+
+/// System-wide intelligence change events (feeds TODAY; proposed ≠ current law).
+model IntelChangeEvent {
+  id             String          @id @default(cuid())
+  kind           IntelChangeKind
+  title          String
+  summary        String?
+  sourceId       String?
+  snapshotId     String?
+  /// Stable dedupe key for unchanged re-runs.
+  changeKey      String
+  oldValue       Json?
+  newValue       Json?
+  /// Affected geometry GeoJSON or bbox JSON.
+  geometry       Json?
+  affectedParcelHints Json?
+  watchItemIds   Json?
+  href           String?
+  importance     Float           @default(0)
+  payload        Json?
+  createdAt      DateTime        @default(now())
+
+  @@unique([changeKey])
+  @@index([kind, createdAt])
+  @@index([createdAt])
+  @@index([sourceId, createdAt])
+}
+
+/// Proposed / pending planning change area (never treated as current LEP law).
+model PlanningChangeArea {
+  id             String   @id
+  title          String
+  status         String
+  authority      String?
+  lgas           String[] @default([])
+  suburbs        String[] @default([])
+  sourceId       String?
+  sourceUrl      String?
+  exhibitionEnd  DateTime?
+  /// Approximate envelope for screening.
+  bbox           Json?
+  geometry       Json?
+  /// Proposed controls payload (FSR/height/zone/AH/etc.) — PROPOSED only.
+  proposedControls Json   @default("{}")
+  lastCheckedAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  keySites       KeySite[]
+
+  @@index([status])
+}
+
+/// Key site / assembly rule within a PlanningChangeArea.
+model KeySite {
+  id                   String             @id
+  planningChangeAreaId String
+  planningChangeArea   PlanningChangeArea @relation(fields: [planningChangeAreaId], references: [id], onDelete: Cascade)
+  externalKeySiteId    String
+  name                 String
+  geometry             Json?
+  bbox                 Json?
+  requiredParcelHints  Json?
+  optionalParcelHints  Json?
+  currentControls      Json?
+  proposedControls     Json?
+  incentiveControls    Json?
+  requirements         Json?
+  conditions           Json?
+  sourceUrl            String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@unique([planningChangeAreaId, externalKeySiteId])
+  @@index([externalKeySiteId])
+}

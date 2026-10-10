@@ -15,6 +15,9 @@ export interface MapProps {
   neighbourIds: string[];
   zoneFill: boolean;
   zoningWms: boolean;
+  /** PROPOSED PLANNING overlay (PlanningChangeArea / KeySite) — never current LEP. */
+  proposedPlanning?: boolean;
+  proposedPlanningData?: GeoJSON.FeatureCollection | null;
   flyTo: { lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null;
   initial: { lat: number; lng: number; zoom: number };
   onParcelClick: (id: string, shift: boolean) => void;
@@ -171,6 +174,55 @@ function ParcelLayer(props: Pick<MapProps, "parcels" | "selectedId" | "assemblyI
   return null;
 }
 
+function ProposedPlanningLayer({
+  enabled,
+  data,
+}: {
+  enabled?: boolean;
+  data?: GeoJSON.FeatureCollection | null;
+}) {
+  const map = useMap();
+  const layerRef = useRef<L.GeoJSON | null>(null);
+  useEffect(() => {
+    if (!enabled || !data?.features?.length) {
+      layerRef.current?.remove();
+      layerRef.current = null;
+      return;
+    }
+    layerRef.current?.remove();
+    const layer = L.geoJSON(data as GeoJSON.GeoJsonObject, {
+      style: (feat) => {
+        const isKey = Boolean(feat?.properties && (feat.properties as { keySite?: boolean }).keySite);
+        return {
+          color: isKey ? "#b45309" : "#9a3412",
+          weight: isKey ? 2.5 : 1.5,
+          dashArray: isKey ? undefined : "6 4",
+          fillColor: isKey ? "#f59e0b" : "#fdba74",
+          fillOpacity: isKey ? 0.28 : 0.14,
+        };
+      },
+      onEachFeature: (feat, lyr) => {
+        const p = (feat.properties ?? {}) as Record<string, unknown>;
+        const title = String(p.title ?? p.id ?? "Proposed");
+        const status = String(p.status ?? "PROPOSED");
+        const fsr = p.fsr != null ? `FSR ${p.fsr}` : "";
+        const height = p.heightM != null ? `${p.heightM} m` : "";
+        const req = p.requiredParcelCount != null ? `${p.requiredParcelCount} required parcels` : "";
+        lyr.bindPopup(
+          `<strong>${title}</strong><br/>${status}<br/>${[fsr, height, req].filter(Boolean).join(" · ")}<br/><em>PROPOSED — not current law</em>`,
+        );
+      },
+    });
+    layer.addTo(map);
+    layerRef.current = layer;
+    return () => {
+      layer.remove();
+      layerRef.current = null;
+    };
+  }, [enabled, data, map]);
+  return null;
+}
+
 export default function LeafletMap(props: MapProps) {
   return (
     <MapContainer center={[props.initial.lat, props.initial.lng]} zoom={props.initial.zoom} maxZoom={20} className="h-full w-full" zoomControl={false} scrollWheelZoom={props.interactive !== false}>
@@ -182,6 +234,7 @@ export default function LeafletMap(props: MapProps) {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · Cadastre &copy; NSW Spatial Services · Planning &copy; NSW DPHI'
       />
       {props.zoningWms && <WMSTileLayer url={ZONING_WMS} params={{ layers: "2", format: "image/png", transparent: true }} opacity={0.45} maxZoom={20} />}
+      <ProposedPlanningLayer enabled={props.proposedPlanning} data={props.proposedPlanningData} />
       <ScaleControl position="bottomleft" imperial={false} />
       <ViewportEvents onViewportChange={props.onViewportChange} onBlankClick={props.onBlankClick} />
       <InvalidateOnShow visible={props.visible} />

@@ -9,6 +9,7 @@ import { date, fsr, lotDp, sqm } from "@/lib/format";
 import { formatLepFsr } from "@/lib/planning/planning-snapshot";
 import { Badge, Button, NumberField, Panel, SourceTag, TextInput } from "@/components/ui";
 import { PlanningPathwaysPanel } from "./planning-pathways-panel";
+import { ProposedPlanningPanel } from "./proposed-planning-panel";
 
 function sourceKind(l: LotDTO, field: string): "OFFICIAL" | "ASSUMPTION" | "ESTIMATE" {
   const s = l.planningSources[field];
@@ -39,7 +40,14 @@ export function PlanningTab() {
 
   return (
     <div className="space-y-4">
+      <p className="rounded-[3px] border border-line bg-canvas px-3 py-2 text-[11px] text-muted">
+        <strong className="text-ink">Current planning</strong> below is from PlanningSnapshot (official EPI).{" "}
+        <strong className="text-ink">Proposed / pending</strong> is separate Source Watcher intelligence and never
+        overwrites current law or CURRENT feasibility.
+      </p>
       <PlanningPathwaysPanel snapshot={planning} />
+
+      <ProposedPlanningPanel />
 
       <Panel
         title="Planning controls by lot"

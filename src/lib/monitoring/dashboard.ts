@@ -20,10 +20,11 @@ export async function getWorkspaceDashboard(userId: string) {
       prisma.feedItem.count({ where: { kind: "NEW_SALE", createdAt: { gte: since } } }),
       prisma.feedItem.count({ where: { kind: "PLANNING_CHANGE", createdAt: { gte: since } } }),
       prisma.alertEvent.count({ where: { rule: { userId }, createdAt: { gte: since } } }),
+      prisma.intelChangeEvent.count({ where: { createdAt: { gte: since } } }),
     ]),
   ]);
 
-  const [newOpps, changedOpps, newSales, planningChanges, alertsTriggered] = todayCounts;
+  const [newOpps, changedOpps, newSales, planningChanges, alertsTriggered, intelChanges] = todayCounts;
 
   const pipelineMap: Record<string, number> = {};
   for (const row of pipeline) pipelineMap[row.status] = row._count._all;
@@ -35,6 +36,8 @@ export async function getWorkspaceDashboard(userId: string) {
       newSales,
       planningChanges,
       alertsTriggered,
+      /** Source Watcher intelligence events (proposed ≠ current law). */
+      intelChanges,
     },
     watching: {
       areas: watching.filter((w) => w.kind === "SUBURB" || w.kind === "MAP_AREA" || w.kind === "PRECINCT"),

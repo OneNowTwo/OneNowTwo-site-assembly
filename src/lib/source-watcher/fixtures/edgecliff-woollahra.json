@@ -1,0 +1,102 @@
+{
+  "kind": "state_led_rezoning",
+  "checkedAt": "2026-10-09T00:00:00.000Z",
+  "planningChangeAreas": [
+    {
+      "id": "nsw:edgecliff-woollahra-state-led-2026",
+      "title": "Edgecliff–Woollahra state-led rezoning",
+      "status": "UNDER_EXHIBITION",
+      "authority": "NSW DPHI",
+      "lgas": ["WOOLLAHRA"],
+      "suburbs": ["Edgecliff", "Woollahra", "Paddington", "Double Bay", "Darling Point"],
+      "sourceUrl": "https://www.planningportal.nsw.gov.au/ppr/under-exhibition/edgecliff-woollahra-precinct",
+      "exhibitionEnd": "2026-10-30",
+      "bbox": { "west": 151.225, "south": -33.885, "east": 151.255, "north": -33.868 },
+      "proposedControls": {
+        "legalStatus": "UNDER_EXHIBITION",
+        "machineReadable": true,
+        "storeys": 34,
+        "affordableHousingContributionPct": 0.03,
+        "notes": "Proposed ~9,400 homes; AH contributions 3%–15% by site. Separate map layers: zoning, incentive HOB, incentive FSR, key sites, non-residential FSR, AH sites, active street frontage. NOT CURRENT LAW."
+      },
+      "keySites": [
+        {
+          "externalKeySiteId": "ED1.2",
+          "name": "Edgecliff key site ED 1.2",
+          "bbox": { "west": 151.234, "south": -33.8795, "east": 151.2375, "north": -33.8775 },
+          "geometrySource": "MANUALLY_STRUCTURED_FIXTURE",
+          "requiredParcelHints": ["Lot A ED1.2", "Lot B ED1.2", "Lot C ED1.2"],
+          "proposedControls": {
+            "legalStatus": "UNDER_EXHIBITION",
+            "zone": "B4",
+            "fsr": 2.5,
+            "heightM": 46,
+            "machineReadable": true
+          },
+          "incentiveControls": {
+            "legalStatus": "UNDER_EXHIBITION",
+            "incentiveFsr": 3.5,
+            "incentiveHeightM": 65,
+            "affordableHousingContributionPct": 0.1,
+            "machineReadable": true
+          },
+          "requirements": ["minimum assembled site", "community facility or affordable housing contribution"],
+          "conditions": ["community-facility/affordable-housing condition on ED 1.2"],
+          "structuredConditions": [
+            { "type": "COMMUNITY_FACILITY", "description": "Community facility or affordable housing contribution on ED 1.2" },
+            { "type": "AFFORDABLE_HOUSING", "value": "10%" }
+          ]
+        },
+        {
+          "externalKeySiteId": "CS7.2",
+          "name": "Commercial core key site CS.7.2",
+          "bbox": { "west": 151.236, "south": -33.881, "east": 151.24, "north": -33.8785 },
+          "geometrySource": "MANUALLY_STRUCTURED_FIXTURE",
+          "requiredParcelHints": [
+            "1 New South Head Road",
+            "3 New South Head Road",
+            "5 New South Head Road",
+            "7 New South Head Road"
+          ],
+          "proposedControls": {
+            "legalStatus": "UNDER_EXHIBITION",
+            "zone": "B4",
+            "fsr": 2.5,
+            "heightM": 40,
+            "nonResidentialFsr": 1.0,
+            "activeStreetFrontage": true,
+            "machineReadable": true
+          },
+          "incentiveControls": {
+            "legalStatus": "UNDER_EXHIBITION",
+            "incentiveFsr": 2.5,
+            "incentiveHeightM": 55,
+            "affordableHousingContributionPct": 0.05,
+            "machineReadable": true
+          },
+          "requirements": ["assemble 4 parcels", "active street frontage", "non-residential FSR"],
+          "conditions": ["through-site link", "active street frontage"],
+          "structuredConditions": [
+            { "type": "THROUGH_SITE_LINK", "description": "Through-site link required" },
+            { "type": "ACTIVE_STREET_FRONTAGE", "description": "Active street frontage" },
+            { "type": "NON_RESIDENTIAL_FSR", "value": "1.0:1" },
+            { "type": "AFFORDABLE_HOUSING", "value": "5%" }
+          ]
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "layers": [
+      "proposed_land_zoning",
+      "incentive_height_of_buildings",
+      "incentive_fsr",
+      "key_sites",
+      "non_residential_fsr",
+      "affordable_housing_contribution",
+      "active_street_frontage"
+    ],
+    "documentPack": "Edgecliff-Woollahra Proposed Maps (exhibition)",
+    "legalStatus": "UNDER_EXHIBITION"
+  }
+}

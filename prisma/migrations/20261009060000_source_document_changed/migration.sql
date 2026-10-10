@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "IntelChangeKind" ADD VALUE 'SOURCE_DOCUMENT_CHANGED';
