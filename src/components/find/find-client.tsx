@@ -20,6 +20,7 @@ type FindRow = {
   planningChangeStatus: string | null;
   keySiteId: string | null;
   stationDistanceM: number | null;
+  nearestStationLabel: string | null;
   score: number;
   headroom: number | null;
   maxPayable: number | null;
@@ -187,7 +188,11 @@ export function FindClient() {
                 <span className={cx(r.proposedFsr != null ? "font-semibold text-brand" : "text-muted")}>
                   Proposed FSR {r.proposedFsr != null ? fsr(r.proposedFsr) : "—"}
                 </span>
-                {r.stationDistanceM != null && <span>{r.stationDistanceM}m from station</span>}
+                {r.stationDistanceM != null && (
+                  <span>
+                    {r.stationDistanceM}m from {r.nearestStationLabel ?? "station"}
+                  </span>
+                )}
                 {r.planningChangeStatus && <Badge tone="warn">{r.planningChangeStatus}</Badge>}
                 {r.keySiteId && <Badge tone="brand">Key Site</Badge>}
                 <span className="num">{r.headroom != null ? money(r.headroom, { compact: true }) : "—"} headroom</span>

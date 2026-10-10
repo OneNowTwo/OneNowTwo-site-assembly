@@ -71,6 +71,12 @@ export interface ScanCandidate {
   scoreFactors: { sign: "+" | "-"; text: string }[];
   lmrCentre: string | null;
   lmrBand: string;
+  /** Assembly centroid [lng, lat] for Find / proposed-planning annotation. */
+  centroid: [number, number] | null;
+  zone: string | null;
+  suburb: string | null;
+  /** True if any member lot is strata — scan seeds exclude strata, so normally false. */
+  isStrata: boolean;
   metrics: AssemblyCandidate["metrics"];
   score: AssemblyCandidate["score"];
   /** Exact snapshot used for Analyse — Opportunity must reproduce these figures. */
@@ -365,6 +371,18 @@ export function runAreaScan(input: {
     const streets = c.lotIds.map((id) => streetKey(byParcel.get(id)?.address ?? null));
     const street = streets.sort((a, b) => streets.filter((s) => s === b).length - streets.filter((s) => s === a).length)[0] ?? "Site";
     const suburb = c.lotIds.map((id) => byParcel.get(id)?.suburb).find(Boolean) ?? "NSW";
+    const centroidLng =
+      memberParcels.length > 0
+        ? memberParcels.reduce((s, p) => s + p.centroid[0], 0) / memberParcels.length
+        : null;
+    const centroidLat =
+      memberParcels.length > 0
+        ? memberParcels.reduce((s, p) => s + p.centroid[1], 0) / memberParcels.length
+        : null;
+    const zone =
+      memberParcels.map((p) => p.planning?.zone).find((z) => !!z) ??
+      null;
+    const isStrata = memberParcels.some((p) => p.isStrata);
     const constraints: string[] = [];
     if (feasibility.metrics.heritageItems) constraints.push(`${feasibility.metrics.heritageItems} heritage item(s)`);
     if (feasibility.metrics.heritageLots) constraints.push(`${feasibility.metrics.heritageLots} heritage-affected lot(s)`);
@@ -414,6 +432,11 @@ export function runAreaScan(input: {
       scoreFactors: scored.factors.slice(0, 5),
       lmrCentre: feasibility.lmrCentre,
       lmrBand: feasibility.lmrBand,
+      centroid:
+        centroidLng != null && centroidLat != null ? [centroidLng, centroidLat] : null,
+      zone,
+      suburb: suburb === "NSW" ? null : suburb,
+      isStrata,
       metrics: feasibility.metrics,
       // With trusted values + exit benchmarks: same scoreAssembly as Analyse.
       // Without values: planning potential only — no fake headroom precision.

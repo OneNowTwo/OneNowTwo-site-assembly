@@ -1,10 +1,14 @@
 /**
  * Minimal Find / scanner fields for proposed planning (Phase 2).
  * Full natural-language Find is Phase 3.
+ *
+ * Production annotation uses persisted PlanningChangeArea / KeySite
+ * (same source as /api/planning/proposed). Fixtures are test fallback only.
  */
 
-import type { ProposedPlanningFindFields } from "./types";
+import type { PlanningChangeAreaFact, ProposedPlanningFindFields } from "./types";
 import { proposedFindFieldsAtPoint } from "./parcel-link";
+import { loadProposedPlanningAreas } from "./load-persisted-areas";
 
 export type { ProposedPlanningFindFields };
 
@@ -18,11 +22,23 @@ export const PROPOSED_FIND_FIELD_KEYS = [
   "requiredParcelCount",
 ] as const;
 
+/** Sync annotation — pass `areas` from loadProposedPlanningAreas() in production. */
 export function annotateParcelWithProposedFindFields(input: {
   lng: number;
   lat: number;
+  areas?: PlanningChangeAreaFact[];
 }): ProposedPlanningFindFields {
   return proposedFindFieldsAtPoint(input);
+}
+
+/** Async annotation — loads persisted PCA/KeySite (fixture fallback only when DB empty). */
+export async function annotateParcelWithProposedFindFieldsAsync(input: {
+  lng: number;
+  lat: number;
+  areas?: PlanningChangeAreaFact[];
+}): Promise<ProposedPlanningFindFields> {
+  const areas = input.areas ?? (await loadProposedPlanningAreas()).areas;
+  return proposedFindFieldsAtPoint({ lng: input.lng, lat: input.lat, areas });
 }
 
 /** Filter predicate for scanner / watch filters. */

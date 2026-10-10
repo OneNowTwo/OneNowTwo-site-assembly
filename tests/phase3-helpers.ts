@@ -15,10 +15,13 @@ export { parseNaturalLanguageFind } from "@/lib/find/nl-parse";
 export {
   parseHdaPublishedRecordsHtml,
   diffHdaDocumentIndex,
+  parseHdaProjectsFromText,
+  extractPdfText,
 } from "@/lib/source-watcher/adapters/nsw-hda-live";
 export {
   parseMajorProjectsHtml,
   majorProjectsToDevelopmentActivities,
+  parseMajorProjectDetail,
 } from "@/lib/source-watcher/adapters/nsw-ssd-live";
 export { normaliseOnlineDaRecord } from "@/lib/source-watcher/adapters/nsw-da-live";
 export {

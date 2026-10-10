@@ -1,6 +1,7 @@
 import type { BBox, ParcelData } from "@/lib/types";
 import { clampBBox, MAX_BBOX_SPAN_DEG } from "@/lib/data-sources/nsw-cadastre";
 import { fetchNominatedCentres, bboxAround, type NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
+import { geocode } from "@/lib/data-sources/geocoder";
 import { getParcelsForBBox } from "@/lib/parcel-service";
 import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { applyValuationsToScanResult, runAreaScan, type AreaScanResult } from "@/lib/analysis/area-scan";
@@ -133,6 +134,15 @@ export async function scanArea(input: {
       centres = matched;
       const c = matched[0]!;
       bbox = bboxAround(c.lng, c.lat, 800);
+    } else if (!bbox) {
+      // Geography-neutral: any NSW suburb/centre via geocoder when not an LMR label.
+      const geo = await timer.time("geocode_centre", () => geocode(input.centreQuery ?? input.suburbHint ?? ""));
+      const hit = geo.results[0];
+      if (hit) {
+        bbox = hit.bbox
+          ? clampBBox(hit.bbox)
+          : bboxAround(hit.lng, hit.lat, 800);
+      }
     }
   }
 

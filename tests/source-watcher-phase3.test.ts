@@ -170,6 +170,8 @@ describe("Source Watcher Phase 3", () => {
     const apt = profileForStrategy("APARTMENTS");
     expect(apt.excludeStrata).toBe(true);
     expect(apt.minSiteAreaSqm).toBe(450);
+    // Must NOT hard-require proposed FSR — ordinary NSW suburbs must remain searchable.
+    expect(apt.minProposedFsr).toBeNull();
     const def = profileForStrategy("GENERAL_RESIDENTIAL");
     expect(def.requirePositiveHeadroom).toBe(false);
   });

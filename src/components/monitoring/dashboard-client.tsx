@@ -37,6 +37,8 @@ type TodayPayload = {
     headroom: number | null;
     reasons: string[];
     status: string;
+    kind?: string;
+    href?: string;
   }>;
   watchedChanges: Array<{
     id: string;
@@ -174,15 +176,20 @@ export function DashboardClient() {
               {data.sitesToLookAt.map((s) => (
                 <Link
                   key={s.id}
-                  href={`/opportunities/${s.id}`}
+                  href={"href" in s && typeof s.href === "string" ? s.href : `/opportunities/${s.id}`}
                   className="block border border-line bg-white px-4 py-3 hover:border-brand/40"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="text-[14px] font-semibold leading-snug">{s.address || s.name}</div>
-                      <div className="text-[12px] text-muted">{s.suburb ?? "NSW"} · {s.siteAreaSqm != null ? sqm(s.siteAreaSqm) : "—"}</div>
+                      <div className="text-[12px] text-muted">
+                        {s.suburb ?? "NSW"}
+                        {"kind" in s && s.kind && s.kind !== "OPPORTUNITY" ? ` · ${String(s.kind).replaceAll("_", " ")}` : ""}
+                        {s.siteAreaSqm != null ? ` · ${sqm(s.siteAreaSqm)}` : ""}
+                      </div>
                     </div>
                     {s.score != null && <Badge tone="brand">Score {Math.round(s.score)}</Badge>}
+                    {"kind" in s && s.kind && s.kind !== "OPPORTUNITY" && <Badge tone="warn">Intel</Badge>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
                     <span>Current FSR {s.currentFsr != null ? fsr(s.currentFsr) : "—"}</span>

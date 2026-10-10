@@ -98,7 +98,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     };
   });
 
-  const sitesToLookAt = opportunities.slice(0, 10).map((o) => {
+  const opportunitySites = opportunities.slice(0, 10).map((o) => {
     const parcelRows = o.parcels.map((op) => op.parcel);
     const suburb = o.suburb ?? parcelRows[0]?.suburb ?? null;
     const address = parcelRows.map((p) => p.address).filter(Boolean).slice(0, 2).join(" · ") || o.name;
@@ -121,8 +121,130 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       headroom: o.acquisitionHeadroom,
       reasons,
       status: o.status,
+      kind: "OPPORTUNITY" as const,
+      href: `/opportunities/${o.id}`,
     };
   });
+
+  // Intel-surfaced sites — do not require a pre-existing Opportunity.
+  const [keySites, planningAreas] = await Promise.all([
+    prisma.keySite.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: 8,
+      include: { planningChangeArea: { select: { id: true, title: true, status: true, suburbs: true, lgas: true } } },
+    }),
+    prisma.planningChangeArea.findMany({
+      where: { updatedAt: { gte: since } },
+      orderBy: { updatedAt: "desc" },
+      take: 6,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        suburbs: true,
+        lgas: true,
+        proposedControls: true,
+      },
+    }),
+  ]);
+
+  const intelSites = [
+    ...keySites.map((ks) => {
+      const controls = (ks.incentiveControls ?? ks.proposedControls ?? {}) as {
+        fsr?: number | null;
+        incentiveFsr?: number | null;
+      };
+      const proposedFsr = controls.incentiveFsr ?? controls.fsr ?? null;
+      const suburb =
+        ks.planningChangeArea.suburbs?.[0] ??
+        ks.planningChangeArea.lgas?.[0] ??
+        null;
+      return {
+        id: `keysite:${ks.id}`,
+        name: ks.name,
+        address: ks.name,
+        suburb,
+        siteAreaSqm: null as number | null,
+        currentFsr: null as number | null,
+        proposedFsr,
+        score: null as number | null,
+        maxPayable: null as number | null,
+        headroom: null as number | null,
+        reasons: [
+          "Key Site identified",
+          ks.planningChangeArea.title ? `Area: ${ks.planningChangeArea.title}` : "Proposed planning uplift",
+          ks.planningChangeArea.status ? `Status ${ks.planningChangeArea.status}` : null,
+        ].filter(Boolean) as string[],
+        status: "INTEL",
+        kind: "KEY_SITE" as const,
+        href: `/map?pca=${encodeURIComponent(ks.planningChangeArea.id)}&keySite=${encodeURIComponent(ks.externalKeySiteId)}`,
+      };
+    }),
+    ...planningAreas.map((area) => {
+      const controls = (area.proposedControls ?? {}) as { fsr?: number | null; incentiveFsr?: number | null };
+      const proposedFsr = controls.incentiveFsr ?? controls.fsr ?? null;
+      return {
+        id: `pca:${area.id}`,
+        name: area.title,
+        address: area.title,
+        suburb: area.suburbs?.[0] ?? area.lgas?.[0] ?? null,
+        siteAreaSqm: null as number | null,
+        currentFsr: null as number | null,
+        proposedFsr,
+        score: null as number | null,
+        maxPayable: null as number | null,
+        headroom: null as number | null,
+        reasons: [
+          "Watched planning area changed",
+          proposedFsr != null ? `Proposed FSR ${proposedFsr}` : "Proposed planning update",
+          `Status ${area.status}`,
+        ],
+        status: "INTEL",
+        kind: "PLANNING_CHANGE_AREA" as const,
+        href: `/map?pca=${encodeURIComponent(area.id)}`,
+      };
+    }),
+    ...intelEvents
+      .filter((e) => /KEY_SITE|PLANNING|HDA|SSD|DA_/i.test(e.kind) && e.importance >= 0.55)
+      .slice(0, 6)
+      .map((e) => {
+        const payload = (e.payload ?? e.newValue ?? {}) as Record<string, unknown>;
+        const why = summariseIntelEvent({
+          kind: e.kind,
+          title: e.title,
+          summary: e.summary,
+          oldValue: e.oldValue,
+          newValue: e.newValue,
+        });
+        return {
+          id: `intel:${e.id}`,
+          name: e.title,
+          address: e.summary ?? e.title,
+          suburb:
+            (payload.suburb as string | undefined) ??
+            (payload.lga as string | undefined) ??
+            (Array.isArray(payload.lgas) ? String(payload.lgas[0]) : null),
+          siteAreaSqm: null as number | null,
+          currentFsr: null as number | null,
+          proposedFsr: typeof payload.proposedFsr === "number" ? payload.proposedFsr : null,
+          score: null as number | null,
+          maxPayable: null as number | null,
+          headroom: null as number | null,
+          reasons: [why.body, e.kind.replaceAll("_", " ")],
+          status: "INTEL",
+          kind: "INTEL_EVENT" as const,
+          href: e.href ?? "/find",
+        };
+      }),
+  ];
+
+  // Dedupe by id; prefer opportunities first, then intel.
+  const seen = new Set<string>();
+  const sitesToLookAt = [...opportunitySites, ...intelSites].filter((s) => {
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  }).slice(0, 16);
 
   const developmentActivity = activityFeed
     .filter((f) => /DA|HDA|SSD|PLANNING|SALE/i.test(f.kind + (f.title ?? "") + (f.summary ?? "")))

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useOpportunity } from "./context";
 import { LotsMap } from "./lots-map";
 import { Badge, Button, Panel, cx } from "@/components/ui";
@@ -64,12 +65,15 @@ interface IntelEvent {
 
 export function SiteIntelligence() {
   const { dto, analysis, a } = useOpportunity();
+  const router = useRouter();
   const [proposed, setProposed] = useState<ProposedApi | null>(null);
   const [scenarioMode, setScenarioMode] = useState<"CURRENT" | "PROPOSED">("CURRENT");
   const [scenario, setScenario] = useState<ProposedScenarioResult | null>(null);
   const [activity, setActivity] = useState<DevelopmentActivity[]>([]);
   const [intel, setIntel] = useState<IntelEvent[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [assemblyBusy, setAssemblyBusy] = useState(false);
+  const [assemblyError, setAssemblyError] = useState<string | null>(null);
 
   const centroid = useMemo(() => {
     const c = dto.lots[0]?.centroid;
@@ -326,20 +330,35 @@ export function SiteIntelligence() {
             <Button
               size="sm"
               variant="accent"
+              disabled={assemblyBusy}
               onClick={() => {
+                setAssemblyBusy(true);
+                setAssemblyError(null);
                 void fetch("/api/planning/analyse-assembly", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
-                    opportunityId: dto.id,
                     keySiteId: keyHit.keySite.externalKeySiteId,
                     planningChangeAreaId: keyHit.planningChangeAreaId,
+                    parcelIds: keyHit.requiredParcelIds?.filter((id) => /^nsw-cadid:\d+$/.test(id)),
+                    name: `Key site ${keyHit.keySite.externalKeySiteId} — required assembly`,
                   }),
-                });
+                })
+                  .then(async (res) => {
+                    const j = (await res.json()) as { href?: string; error?: string };
+                    if (!res.ok) throw new Error(j.error ?? "Analyse assembly failed");
+                    if (!j.href) throw new Error("Assembly created but no navigation href returned");
+                    router.push(j.href);
+                  })
+                  .catch((e: unknown) => {
+                    setAssemblyError(e instanceof Error ? e.message : String(e));
+                  })
+                  .finally(() => setAssemblyBusy(false));
               }}
             >
-              Analyse required assembly
+              {assemblyBusy ? "Creating assembly…" : "Analyse required assembly"}
             </Button>
+            {assemblyError && <p className="mt-2 text-[12px] text-bad">{assemblyError}</p>}
           </div>
         </Panel>
       )}

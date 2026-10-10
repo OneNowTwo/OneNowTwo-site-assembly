@@ -1,34 +1,29 @@
 /**
  * LIVE statewide NSW Planning Proposal Register adapter.
- * Uses official Planning Proposal Agency ArcGIS layers (machine-readable statewide).
- * Portal HTML register remains a secondary index when available.
+ * Paginates official Planning Proposal Agency ArcGIS layers (no sample envelopes).
+ * Retains proposal geometry where the service provides it.
  * Proposed ≠ current law.
  */
 
 import { buildUrl, fetchJson } from "@/lib/data-sources/http";
-import type { EsriQueryResponse } from "@/lib/data-sources/esri";
+import { esriToGeoJSON, type EsriQueryResponse } from "@/lib/data-sources/esri";
 import { NSW_PLANNING_PROPOSAL_BASE } from "@/lib/data-sources/nsw-planning-proposals";
-import type { FetchResult, NormalisedSourcePayload, PlanningChangeAreaFact, SourceAdapter } from "../types";
+import type { BBox, FetchResult, NormalisedSourcePayload, PlanningChangeAreaFact, SourceAdapter } from "../types";
 
 const SOURCE_ID = "nsw-planning-proposal-register";
 const PORTAL_URL = "https://www.planningportal.nsw.gov.au/";
 const LAYERS = { fsr: 3013, height: 3020, zone: 3029 } as const;
-
-/** Sample envelopes across Greater Sydney + regional NSW for statewide crawl. */
-const SAMPLE_ENVELOPES = [
-  // Sydney metro
-  "150.6,-34.1,151.4,-33.5",
-  // Illawarra
-  "150.6,-34.6,151.1,-34.2",
-  // Newcastle / Hunter
-  "151.4,-33.1,151.9,-32.7",
-  // Central Coast
-  "151.2,-33.55,151.55,-33.2",
-  // Western Sydney
-  "150.6,-34.0,151.0,-33.6",
-];
+const PAGE_SIZE = 1000;
+/** Hard safety cap — Agency FSR layer is ~6–7k open features statewide. */
+const MAX_OFFSET = 50_000;
 
 type Attrs = Record<string, string | number | null | undefined>;
+
+interface EsriGeom {
+  rings?: number[][][];
+  x?: number;
+  y?: number;
+}
 
 function str(v: unknown): string | null {
   if (v == null) return null;
@@ -46,7 +41,6 @@ function mapStage(statusId: number | null, versionStatus: string | null): string
   if (versionStatus && /withdrawn/i.test(versionStatus)) return "WITHDRAWN";
   if (versionStatus && /finalis|made|gazett/i.test(versionStatus)) return "FINALISATION";
   if (statusId === 207) return "WITHDRAWN";
-  // Observed agency status ids are sparse — keep a readable statewide stage label.
   if (versionStatus && /exhibit/i.test(versionStatus)) return "UNDER_EXHIBITION";
   if (versionStatus && /gateway|pre.?exhibit/i.test(versionStatus)) return "PRE-EXHIBITION";
   if (versionStatus && /post.?exhibit/i.test(versionStatus)) return "POST-EXHIBITION";
@@ -54,29 +48,98 @@ function mapStage(statusId: number | null, versionStatus: string | null): string
   return "UNDER_ASSESSMENT";
 }
 
-async function queryLayer(layerId: number, envelope: string): Promise<Attrs[]> {
-  const url = buildUrl(`${NSW_PLANNING_PROPOSAL_BASE}/${layerId}/query`, {
-    where: "PP_CLOSED=0 AND PLANNING_PROPOSAL_NO IS NOT NULL",
-    geometry: envelope,
-    geometryType: "esriGeometryEnvelope",
-    inSR: 4283,
-    spatialRel: "esriSpatialRelIntersects",
-    outFields:
-      "PLANNING_PROPOSAL_NO,PLANNING_PROPOSAL_STATUS_ID,PP_DATA_VERSION_STATUS,EPI_NAME,LGA_NAME,FSR,MAX_B_H,MAX_B_H_M,SYM_CODE,LAY_CLASS,AMENDMENT",
-    returnGeometry: false,
-    resultRecordCount: 500,
-    f: "json",
-  });
-  try {
-    const res = await fetchJson<EsriQueryResponse<Attrs>>(url, {
-      service: "NSW Planning Proposal Register live",
-      timeoutMs: 25000,
-      ttlMs: 10 * 60 * 1000,
-    });
-    return (res.features ?? []).map((f) => f.attributes ?? {});
-  } catch {
-    return [];
+function bboxFromGeom(geom: GeoJSON.Polygon | GeoJSON.MultiPolygon | null): BBox | null {
+  if (!geom) return null;
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  const rings =
+    geom.type === "Polygon"
+      ? geom.coordinates
+      : geom.coordinates.flatMap((poly) => poly);
+  for (const ring of rings) {
+    for (const pt of ring) {
+      const lng = pt[0]!;
+      const lat = pt[1]!;
+      if (lng < west) west = lng;
+      if (lng > east) east = lng;
+      if (lat < south) south = lat;
+      if (lat > north) north = lat;
+    }
   }
+  if (!Number.isFinite(west)) return null;
+  return { west, south, east, north };
+}
+
+function mergeBBox(a: BBox | null, b: BBox | null): BBox | null {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    west: Math.min(a.west, b.west),
+    south: Math.min(a.south, b.south),
+    east: Math.max(a.east, b.east),
+    north: Math.max(a.north, b.north),
+  };
+}
+
+function preferGeometry(
+  current: GeoJSON.Polygon | GeoJSON.MultiPolygon | null,
+  next: GeoJSON.Polygon | GeoJSON.MultiPolygon | null,
+): GeoJSON.Polygon | GeoJSON.MultiPolygon | null {
+  if (!current) return next;
+  if (!next) return current;
+  // Keep MultiPolygon if either side already is; otherwise first wins.
+  if (current.type === "MultiPolygon") return current;
+  if (next.type === "MultiPolygon") return next;
+  return current;
+}
+
+async function queryLayerPaged(input: {
+  layerId: number;
+  outFields: string;
+  returnGeometry: boolean;
+}): Promise<{ attrs: Attrs; geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null }[]> {
+  const out: { attrs: Attrs; geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null }[] = [];
+  let offset = 0;
+  while (offset <= MAX_OFFSET) {
+    const url = buildUrl(`${NSW_PLANNING_PROPOSAL_BASE}/${input.layerId}/query`, {
+      where: "PP_CLOSED=0 AND PLANNING_PROPOSAL_NO IS NOT NULL",
+      outFields: input.outFields,
+      returnGeometry: input.returnGeometry,
+      outSR: 4326,
+      resultOffset: offset,
+      resultRecordCount: PAGE_SIZE,
+      orderByFields: "PLANNING_PROPOSAL_NO ASC",
+      f: "json",
+    });
+    try {
+      const res = await fetchJson<EsriQueryResponse<Attrs> & { features?: Array<{ attributes?: Attrs; geometry?: EsriGeom }> }>(
+        url,
+        {
+          service: "NSW Planning Proposal Register live",
+          timeoutMs: 45000,
+          ttlMs: 10 * 60 * 1000,
+        },
+      );
+      const features = res.features ?? [];
+      for (const f of features) {
+        const attrs = f.attributes ?? {};
+        let geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null = null;
+        if (input.returnGeometry && f.geometry?.rings) {
+          geometry = esriToGeoJSON(f.geometry as { rings: number[][][] });
+        }
+        out.push({ attrs, geometry });
+      }
+      if (!features.length) break;
+      if (res.exceededTransferLimit === false) break;
+      if (features.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    } catch {
+      break;
+    }
+  }
+  return out;
 }
 
 interface Agg {
@@ -89,9 +152,15 @@ interface Agg {
   fsrs: number[];
   heights: number[];
   zones: string[];
+  geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+  bbox: BBox | null;
 }
 
-function upsert(map: Map<string, Agg>, attrs: Attrs): void {
+function upsert(
+  map: Map<string, Agg>,
+  attrs: Attrs,
+  geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null,
+): void {
   const ppNo = str(attrs.PLANNING_PROPOSAL_NO);
   if (!ppNo || /test/i.test(ppNo)) return;
   let row = map.get(ppNo);
@@ -106,6 +175,8 @@ function upsert(map: Map<string, Agg>, attrs: Attrs): void {
       fsrs: [],
       heights: [],
       zones: [],
+      geometry: null,
+      bbox: null,
     };
     map.set(ppNo, row);
   }
@@ -115,6 +186,10 @@ function upsert(map: Map<string, Agg>, attrs: Attrs): void {
   if (h != null) row.heights.push(h);
   const z = str(attrs.SYM_CODE) ?? str(attrs.LAY_CLASS);
   if (z) row.zones.push(z);
+  if (geometry) {
+    row.geometry = preferGeometry(row.geometry, geometry);
+    row.bbox = mergeBBox(row.bbox, bboxFromGeom(geometry));
+  }
 }
 
 function toArea(agg: Agg): PlanningChangeAreaFact {
@@ -131,13 +206,18 @@ function toArea(agg: Agg): PlanningChangeAreaFact {
     lgas: lga ? [lga] : [],
     suburbs: [],
     sourceUrl: PORTAL_URL,
+    bbox: agg.bbox,
+    geometry: agg.geometry,
     proposedControls: {
       legalStatus: stage === "UNDER_EXHIBITION" ? "UNDER_EXHIBITION" : "PROPOSED",
       zone: zones.length === 1 ? zones[0]! : null,
       fsr: fsrs.length === 1 ? fsrs[0]! : null,
       heightM: heights.length === 1 ? heights[0]! : null,
       notes:
-        "Statewide Planning Proposal Agency layers — PROPOSED / pending only, not current LEP law. Confirm against Planning Portal documents.",
+        (agg.geometry
+          ? "OFFICIAL_FEATURE_SERVICE geometry retained. "
+          : "No geometry on open features for this proposal. ") +
+        "Statewide Planning Proposal Agency layers (paginated) — PROPOSED / pending only, not current LEP law. Confirm against Planning Portal documents.",
       machineReadable: fsrs.length === 1 || heights.length === 1 || zones.length === 1,
     },
   };
@@ -148,18 +228,34 @@ export const planningProposalRegisterLiveAdapter: SourceAdapter = {
   async fetch(): Promise<FetchResult> {
     const checkedAt = new Date().toISOString();
     const byPp = new Map<string, Agg>();
-    let layerHits = 0;
-    for (const envelope of SAMPLE_ENVELOPES) {
-      const [fsrRows, heightRows, zoneRows] = await Promise.all([
-        queryLayer(LAYERS.fsr, envelope),
-        queryLayer(LAYERS.height, envelope),
-        queryLayer(LAYERS.zone, envelope),
-      ]);
-      layerHits += fsrRows.length + heightRows.length + zoneRows.length;
-      for (const a of [...fsrRows, ...heightRows, ...zoneRows]) upsert(byPp, a);
+
+    const common =
+      "PLANNING_PROPOSAL_NO,PLANNING_PROPOSAL_STATUS_ID,PP_DATA_VERSION_STATUS,EPI_NAME,LGA_NAME,AMENDMENT";
+    const [fsrRows, heightRows, zoneRows] = await Promise.all([
+      queryLayerPaged({
+        layerId: LAYERS.fsr,
+        outFields: `${common},FSR`,
+        returnGeometry: true,
+      }),
+      queryLayerPaged({
+        layerId: LAYERS.height,
+        outFields: `${common},MAX_B_H,MAX_B_H_M`,
+        returnGeometry: true,
+      }),
+      queryLayerPaged({
+        layerId: LAYERS.zone,
+        outFields: `${common},SYM_CODE,LAY_CLASS`,
+        returnGeometry: true,
+      }),
+    ]);
+
+    const layerHits = fsrRows.length + heightRows.length + zoneRows.length;
+    for (const row of [...fsrRows, ...heightRows, ...zoneRows]) {
+      upsert(byPp, row.attrs, row.geometry);
     }
 
     const planningChangeAreas = [...byPp.values()].map(toArea).sort((a, b) => a.title.localeCompare(b.title));
+    const withGeom = planningChangeAreas.filter((a) => !!a.geometry).length;
     const records = planningChangeAreas.map((a) => ({
       proposalNumber: a.id.replace(/^nsw-ppr:/, ""),
       name: a.title,
@@ -172,6 +268,7 @@ export const planningProposalRegisterLiveAdapter: SourceAdapter = {
       proposedZone: a.proposedControls.zone ?? null,
       proposedFsr: a.proposedControls.fsr ?? null,
       proposedHeight: a.proposedControls.heightM ?? null,
+      hasGeometry: !!a.geometry,
     }));
 
     const normalised: NormalisedSourcePayload = {
@@ -181,14 +278,19 @@ export const planningProposalRegisterLiveAdapter: SourceAdapter = {
       records,
       meta: {
         status: planningChangeAreas.length ? "LIVE" : layerHits === 0 ? "EMPTY" : "LIVE",
-        transport: "ARCGIS",
+        transport: "ARCGIS_PAGED",
         service: NSW_PLANNING_PROPOSAL_BASE,
         proposalCount: planningChangeAreas.length,
         layerAttributeHits: layerHits,
-        note: "Statewide Agency PP layers — geometry association via on-demand point query / PCA persistence.",
+        proposalsWithGeometry: withGeom,
+        pageSize: PAGE_SIZE,
+        note: "Statewide Agency PP layers via resultOffset pagination — geometry retained for PCA spatial intersection.",
       },
     };
 
-    return { raw: { proposalCount: planningChangeAreas.length, layerHits }, normalised };
+    return {
+      raw: { proposalCount: planningChangeAreas.length, layerHits, proposalsWithGeometry: withGeom },
+      normalised,
+    };
   },
 };

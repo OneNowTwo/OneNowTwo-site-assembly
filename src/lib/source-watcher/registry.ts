@@ -99,12 +99,14 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
     category: "DA_CDC_PCC",
     sourceType: "API",
     pollFrequency: "nightly",
-    parserVersion: "nsw-da-live-1",
+    parserVersion: "nsw-da-live-2",
     config: {
       adapter: "da-cdc-pcc-live",
-      openDataUrl: "https://api.apps1.nsw.gov.au/planning/viewApplication/v3/OnlineDA",
-      eplanningUrl: "https://api.apps1.nsw.gov.au/eplanning/data/v0/OnlineDA",
-      status: "LIVE adapter — open-data POST when available; honest probe status otherwise",
+      apimV1Url: "https://api.apps1.nsw.gov.au/eplanning/data/v1/OnlineDA",
+      eplanningV0Url: "https://api.apps1.nsw.gov.au/eplanning/data/v0/OnlineDA",
+      openDataPackage: "https://www.data.nsw.gov.au/data/dataset/online-da-data-api",
+      status:
+        "Official Online DA APIM v1 (NSW_ONLINE_DA_SUBSCRIPTION_KEY) — dictionary v2.0 filter schema",
     },
   },
   {

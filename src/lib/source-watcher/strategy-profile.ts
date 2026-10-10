@@ -57,7 +57,9 @@ export const STRATEGY_PRESETS: Record<DevelopmentStrategy, Partial<StrategyProfi
     preferredZones: ["R3", "R4", "B4", "MU1", "E1"],
     minSiteAreaSqm: 450,
     maxProperties: 6,
-    minProposedFsr: 1.5,
+    // Prefer / rank proposed density uplift — do NOT hard-require proposed FSR.
+    // Ordinary NSW suburbs without a PlanningChangeArea must remain searchable.
+    minProposedFsr: null,
     excludeStrata: true,
     excludeExistingApartmentBlocks: true,
     requirePositiveHeadroom: true,

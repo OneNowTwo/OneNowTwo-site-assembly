@@ -318,7 +318,11 @@ export function ProposedPlanningPanel() {
                 const j = (await res.json()) as { id?: string; href?: string; error?: string; parcelCount?: number };
                 if (!res.ok) throw new Error(j.error ?? "Analyse assembly failed");
                 setAssemblyMsg(`Created assembly opportunity (${j.parcelCount ?? "?"} lots).`);
-                if (j.href) window.open(j.href, "_blank", "noopener");
+                if (j.href) {
+                  window.location.assign(j.href);
+                } else {
+                  throw new Error("Assembly created but no navigation href returned");
+                }
               } catch (e) {
                 setAssemblyMsg(e instanceof Error ? e.message : String(e));
               } finally {
@@ -326,7 +330,7 @@ export function ProposedPlanningPanel() {
               }
             }}
           >
-            {assemblyBusy ? "Creating…" : "Analyse required assembly"}
+            {assemblyBusy ? "Creating assembly…" : "Analyse required assembly"}
           </Button>
         )}
       </div>
