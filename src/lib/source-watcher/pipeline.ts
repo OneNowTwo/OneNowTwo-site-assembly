@@ -6,13 +6,11 @@ import { edgecliffFixtureAdapter, innerWestFixtureAdapter } from "./adapters/fix
 import { edgecliffLiveAdapter, type EdgecliffLiveAdapter } from "./adapters/edgecliff-live";
 import { innerWestLiveAdapter } from "./adapters/inner-west-live";
 import { nswSpatialLmrAdapter } from "./adapters/nsw-spatial-lmr";
-import {
-  daCdcPccAdapter,
-  existingServiceAdapter,
-  hdaAdapter,
-  majorProjectsAdapter,
-  planningProposalRegisterAdapter,
-} from "./adapters/stubs";
+import { existingServiceAdapter } from "./adapters/stubs";
+import { planningProposalRegisterLiveAdapter } from "./adapters/nsw-ppr-live";
+import { hdaLiveAdapter } from "./adapters/nsw-hda-live";
+import { majorProjectsLiveAdapter } from "./adapters/nsw-ssd-live";
+import { daCdcPccLiveAdapter } from "./adapters/nsw-da-live";
 
 export interface InMemorySnapshot {
   contentHash: string;
@@ -35,10 +33,10 @@ const adapters: Record<string, SourceAdapter> = {
   "nsw-spatial-lmr-viewer": nswSpatialLmrAdapter,
   "fixture-edgecliff-woollahra": edgecliffFixtureAdapter,
   "fixture-inner-west-fairer-future": innerWestFixtureAdapter,
-  "nsw-planning-proposal-register": planningProposalRegisterAdapter,
-  "nsw-hda-records": hdaAdapter,
-  "nsw-major-projects": majorProjectsAdapter,
-  "nsw-da-cdc-pcc": daCdcPccAdapter,
+  "nsw-planning-proposal-register": planningProposalRegisterLiveAdapter,
+  "nsw-hda-records": hdaLiveAdapter,
+  "nsw-major-projects": majorProjectsLiveAdapter,
+  "nsw-da-cdc-pcc": daCdcPccLiveAdapter,
   "nsw-epi-primary-planning": existingServiceAdapter(
     "nsw-epi-primary-planning",
     "current_controls",

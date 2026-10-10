@@ -51,15 +51,17 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
   },
   {
     id: "nsw-planning-proposal-register",
-    name: "NSW Planning Proposal Register (portal)",
-    authority: "NSW Planning Portal",
+    name: "NSW Planning Proposal Register (statewide)",
+    authority: "NSW Planning Portal / DPHI",
     category: "PLANNING_PROPOSAL",
-    sourceType: "HTML",
+    sourceType: "ARCGIS",
     pollFrequency: "every_6_hours",
+    parserVersion: "nsw-ppr-live-1",
     config: {
-      adapter: "planning-proposal-register",
+      adapter: "planning-proposal-register-live",
       url: "https://www.planningportal.nsw.gov.au/",
-      status: "ADAPTER_STUB — ArcGIS agency layers remain primary until portal JSON feed wired",
+      arcgis: "https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/ePlanning/Planning_Proposal_Agency/MapServer",
+      status: "LIVE — statewide Agency PP layers normalised to PlanningChangeArea",
     },
   },
   {
@@ -69,9 +71,11 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
     category: "HDA",
     sourceType: "HTML",
     pollFrequency: "every_6_hours",
+    parserVersion: "nsw-hda-live-1",
     config: {
-      adapter: "hda",
-      status: "ADAPTER_STUB — document watch + structured extract",
+      adapter: "hda-live",
+      url: "https://www.planning.nsw.gov.au/the-planning-system/housing/housing-delivery-authority/published-records",
+      status: "LIVE — published Record of Briefing PDF index",
     },
   },
   {
@@ -79,11 +83,13 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
     name: "NSW Major Projects / SSD Application Tracker",
     authority: "NSW Planning Portal",
     category: "MAJOR_PROJECTS",
-    sourceType: "API",
+    sourceType: "HTML",
     pollFrequency: "every_6_hours",
+    parserVersion: "nsw-ssd-live-1",
     config: {
-      adapter: "major-projects",
-      status: "ADAPTER_STUB — tracker feed pending",
+      adapter: "major-projects-live",
+      url: "https://www.planningportal.nsw.gov.au/major-projects/projects",
+      status: "LIVE — major-projects listing scrape (Exhibition/Assessment/Determination)",
     },
   },
   {
@@ -93,9 +99,12 @@ export const SOURCE_DEFINITIONS: SourceDefinition[] = [
     category: "DA_CDC_PCC",
     sourceType: "API",
     pollFrequency: "nightly",
+    parserVersion: "nsw-da-live-1",
     config: {
-      adapter: "da-cdc-pcc",
-      status: "ADAPTER_STUB — Online DA/CDC/PCC data feeds",
+      adapter: "da-cdc-pcc-live",
+      openDataUrl: "https://api.apps1.nsw.gov.au/planning/viewApplication/v3/OnlineDA",
+      eplanningUrl: "https://api.apps1.nsw.gov.au/eplanning/data/v0/OnlineDA",
+      status: "LIVE adapter — open-data POST when available; honest probe status otherwise",
     },
   },
   {

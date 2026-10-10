@@ -6,6 +6,9 @@ export * from "./key-sites";
 export * from "./hash";
 export * from "./parcel-link";
 export * from "./find-fields";
+export * from "./development-activity";
+export * from "./why-it-matters";
+export * from "./strategy-profile";
 // proposed-scenario imports analyseOpportunity — keep out of barrel to avoid circular deps in unit tests.
 export type { ProposedScenarioInput, ProposedScenarioResult } from "./proposed-scenario";
 export {

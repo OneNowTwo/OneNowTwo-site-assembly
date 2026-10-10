@@ -26,7 +26,7 @@ export interface PrecinctRadarRowDTO {
   meanLepFsr: number | null;
   meanModelledFsr: number | null;
   meanFsrUplift: number;
-  activityStatus: "NOT_CONNECTED";
+  activityStatus: "NOT_CONNECTED" | "LIVE" | "PARTIAL";
   activityMessage: string;
   centre: {
     id: string;

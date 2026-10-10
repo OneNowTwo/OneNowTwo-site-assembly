@@ -12,6 +12,7 @@ import type { OpportunityInputs } from "@/lib/analysis/assumptions";
 import { HistoryPanel } from "./history-panel";
 import { ConceptVisualsPanel } from "./concept-visuals-panel";
 import { WatchOpportunityButton } from "./watch-opportunity-button";
+import { SiteIntelligence } from "./site-intelligence";
 
 const COMPONENT_LABELS: Record<keyof typeof SCORE_WEIGHTS, string> = {
   acquisitionHeadroom: "Acquisition headroom",
@@ -119,7 +120,23 @@ export function OverviewTab() {
     void revalueWithExcluded(excludedIds);
   }
 
+  const [showDetails, setShowDetails] = useState(false);
+
   return (
+    <div className="space-y-5">
+      <SiteIntelligence />
+
+      <div className="border-t border-line pt-2">
+        <button
+          type="button"
+          className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted hover:text-ink"
+          onClick={() => setShowDetails((v) => !v)}
+        >
+          {showDetails ? "Hide detailed breakdown" : "Details · score components, lots, valuation"}
+        </button>
+      </div>
+
+      {showDetails && (
     <div className="grid grid-cols-12 gap-4">
       <div className="col-span-7 space-y-4">
         <Panel title="Opportunity summary" actions={dto.demoFinancialData ? <DemoFinancialBadge /> : null}>
@@ -604,6 +621,8 @@ export function OverviewTab() {
         <HistoryPanel />
         <ConceptVisualsPanel />
       </div>
+    </div>
+      )}
     </div>
   );
 }

@@ -2,48 +2,90 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Badge, Panel, Stat, cx } from "@/components/ui";
-import { money } from "@/lib/format";
+import { Badge, Panel, cx } from "@/components/ui";
+import { money, sqm, fsr } from "@/lib/format";
 import { fetchApiJson } from "@/lib/api-json";
+import { StrategySelector } from "@/components/strategy-selector";
+import type { DevelopmentStrategy } from "@/lib/source-watcher/strategy-profile";
 
-type Dash = {
-  today: {
-    newOpportunities: number;
-    changedOpportunities: number;
-    newSales: number;
-    planningChanges: number;
-    alertsTriggered: number;
-  };
-  watching: {
-    areas: { id: string; label: string; kind: string; suburb?: string | null }[];
-    parcels: { id: string; label: string }[];
-    assemblies: { id: string; label: string; opportunityId?: string | null; opportunity?: { score?: number | null; acquisitionHeadroom?: number | null } | null }[];
-  };
-  pipeline: Record<string, number>;
-  feed: {
+type TodayPayload = {
+  headline: string;
+  subheading: string;
+  strategy: string;
+  whatChanged: Array<{
+    id: string;
+    type: string;
+    location: string | null;
+    title: string;
+    whatChanged: string;
+    whyItMatters: string;
+    affectedSites: number | null;
+    date: string;
+    sourceId: string | null;
+    href: string | null;
+  }>;
+  sitesToLookAt: Array<{
+    id: string;
+    name: string;
+    address: string;
+    suburb: string | null;
+    siteAreaSqm: number | null;
+    currentFsr: number | null;
+    proposedFsr: number | null;
+    score: number | null;
+    maxPayable: number | null;
+    headroom: number | null;
+    reasons: string[];
+    status: string;
+  }>;
+  watchedChanges: Array<{
+    id: string;
+    type: string;
+    title: string;
+    summary: string | null;
+    date: string;
+    href: string | null;
+  }>;
+  developmentActivity: Array<{
     id: string;
     kind: string;
     title: string;
-    summary?: string | null;
-    href?: string | null;
-    headroom?: number | null;
-    score?: number | null;
+    summary: string | null;
+    href: string | null;
     createdAt: string;
-  }[];
+  }>;
+  sourceFreshness: Array<{
+    id: string;
+    name: string;
+    lastSuccessfulAt: string | null;
+    lastCheckedAt: string | null;
+  }>;
   morningReport?: { id: string; title: string; summaryLine?: string | null } | null;
 };
 
-const PIPELINE_ORDER = ["ANALYSING", "FEASIBLE", "ACQUIRING", "CONTROLLED", "HOLD", "REJECTED", "WATCHING"] as const;
+function typeLabel(kind: string) {
+  if (kind.includes("FSR")) return "Planning change";
+  if (kind.includes("HEIGHT")) return "Planning change";
+  if (kind.includes("ZONE")) return "Planning change";
+  if (kind.includes("KEY_SITE") || kind.includes("ASSEMBLY")) return "Key site";
+  if (kind.includes("HDA")) return "HDA";
+  if (kind.includes("SSD")) return "SSD / Major project";
+  if (kind.includes("DA_")) return "Development activity";
+  if (kind.includes("PLANNING")) return "Planning change";
+  return kind.replaceAll("_", " ");
+}
 
 export function DashboardClient() {
-  const [data, setData] = useState<Dash | null>(null);
+  const [data, setData] = useState<TodayPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [strategy, setStrategy] = useState<DevelopmentStrategy>("GENERAL_RESIDENTIAL");
+  const [showSources, setShowSources] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const body = await fetchApiJson<Dash>("/api/dashboard");
+        const body = await fetchApiJson<TodayPayload>(`/api/dashboard?strategy=${strategy}`);
         if (!cancelled) setData(body);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -52,130 +94,206 @@ export function DashboardClient() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [strategy]);
 
   if (error) {
     return <div className="p-6 text-[13px] text-bad">{error}</div>;
   }
   if (!data) {
-    return <div className="p-6 text-[13px] text-muted">Loading workspace…</div>;
+    return <div className="p-6 text-[13px] text-muted">Loading development intelligence…</div>;
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="mb-5 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[19px] font-semibold">What changed · what to look at today</h1>
-          <p className="text-[12px] text-muted">Live acquisition workspace — not a one-off calculator.</p>
+    <div className="h-full overflow-y-auto">
+      <div className="border-b border-line bg-gradient-to-br from-[#0b2f49] via-[#124a6e] to-[#1a5f7a] px-6 py-7 text-white">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/70">Today</div>
+            <h1 className="mt-1 text-[26px] font-semibold tracking-tight">{data.headline}</h1>
+            <p className="mt-1 max-w-2xl text-[13.5px] text-white/80">{data.subheading}</p>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            <StrategySelector value={strategy} onChange={setStrategy} tone="dark" />
+            {data.morningReport && (
+              <Link href="/morning-report" className="text-[12px] font-semibold text-white/85 underline-offset-2 hover:underline">
+                {data.morningReport.summaryLine || data.morningReport.title} →
+              </Link>
+            )}
+          </div>
         </div>
-        {data.morningReport && (
-          <Link href="/morning-report" className="text-[12px] font-semibold text-brand hover:underline">
-            {data.morningReport.summaryLine || data.morningReport.title} →
-          </Link>
-        )}
       </div>
 
-      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Panel bodyClassName="py-3">
-          <Stat label="New opportunities" value={data.today.newOpportunities} size="md" tone="brand" />
-        </Panel>
-        <Panel bodyClassName="py-3">
-          <Stat label="Changed" value={data.today.changedOpportunities} size="md" />
-        </Panel>
-        <Panel bodyClassName="py-3">
-          <Stat label="New sales" value={data.today.newSales} size="md" />
-        </Panel>
-        <Panel bodyClassName="py-3">
-          <Stat label="Planning changes" value={data.today.planningChanges} size="md" tone="accent" />
-        </Panel>
-        <Panel bodyClassName="py-3">
-          <Stat label="Alerts triggered" value={data.today.alertsTriggered} size="md" tone={data.today.alertsTriggered ? "good" : undefined} />
-        </Panel>
-      </div>
-
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 space-y-4 lg:col-span-7">
-          <Panel title="Feed · look at these first" actions={<Link href="/feed" className="text-[11px] font-semibold text-brand hover:underline">Open feed</Link>}>
-            {!data.feed.length && <p className="text-[12px] text-muted">No movements yet. Run a scan or wait for the daily monitor.</p>}
-            <ul className="divide-y divide-line">
-              {data.feed.map((f) => (
-                <li key={f.id} className="flex items-start justify-between gap-3 py-2.5">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone={toneForKind(f.kind)}>{f.kind.replaceAll("_", " ")}</Badge>
-                      {f.href ? (
-                        <Link href={f.href} className="truncate text-[13px] font-semibold text-ink hover:text-brand">
-                          {f.title}
-                        </Link>
-                      ) : (
-                        <span className="truncate text-[13px] font-semibold">{f.title}</span>
-                      )}
-                    </div>
-                    {f.summary && <p className="mt-0.5 text-[12px] text-muted">{f.summary}</p>}
+      <div className="space-y-5 p-6">
+        <section>
+          <SectionHead title="What changed" action={<Link href="/feed" className="text-[11px] font-semibold text-brand hover:underline">Open feed</Link>} />
+          {!data.whatChanged.length ? (
+            <Empty>No intelligence events in the last 7 days. Source Watcher will populate this as monitors run.</Empty>
+          ) : (
+            <div className="space-y-3">
+              {data.whatChanged.map((ev) => (
+                <article key={ev.id} className="border border-line bg-white px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone="warn">{typeLabel(ev.type)}</Badge>
+                    {ev.location && <span className="text-[12px] font-semibold text-ink">{ev.location}</span>}
+                    <span className="text-[11px] text-muted">{ev.date.slice(0, 10)}</span>
                   </div>
-                  <div className="shrink-0 text-right text-[11px] text-muted">
-                    {f.score != null && <div className="num">Score {f.score}</div>}
-                    {f.headroom != null && <div className="num">{money(f.headroom, { compact: true })}</div>}
+                  <h3 className="mt-1.5 text-[14px] font-semibold">{ev.title}</h3>
+                  <p className="mt-1 text-[12.5px] text-ink/90">{ev.whatChanged}</p>
+                  <div className="mt-2 border-l-2 border-brand/40 pl-3">
+                    <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Why it matters</div>
+                    <p className="text-[12.5px]">{ev.whyItMatters}</p>
                   </div>
-                </li>
+                  {ev.affectedSites != null && ev.affectedSites > 0 && (
+                    <p className="mt-1 text-[11.5px] text-muted">{ev.affectedSites} watched / matching parcels affected</p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {ev.href && (
+                      <Link href={ev.href} className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas">
+                        View area
+                      </Link>
+                    )}
+                    <Link href="/opportunities" className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas">
+                      View affected sites
+                    </Link>
+                    {ev.sourceId && (
+                      <span className="rounded-[3px] bg-canvas px-2.5 py-1 text-[11px] text-muted">Source · {ev.sourceId}</span>
+                    )}
+                  </div>
+                </article>
               ))}
-            </ul>
-          </Panel>
-        </div>
+            </div>
+          )}
+        </section>
 
-        <div className="col-span-12 space-y-4 lg:col-span-5">
-          <Panel title="Watching" actions={<Link href="/watching" className="text-[11px] font-semibold text-brand hover:underline">Manage</Link>}>
-            <Section label="Areas" items={data.watching.areas.map((a) => a.label)} empty="No saved areas" />
-            <Section label="Parcels" items={data.watching.parcels.map((a) => a.label)} empty="No saved parcels" />
-            <Section
-              label="Assemblies"
-              items={data.watching.assemblies.map((a) => a.label)}
-              empty="No saved assemblies"
-            />
-          </Panel>
-
-          <Panel title="Pipeline">
-            <div className="grid grid-cols-2 gap-2">
-              {PIPELINE_ORDER.map((k) => (
+        <section>
+          <SectionHead title="Sites to look at" action={<Link href="/find" className="text-[11px] font-semibold text-brand hover:underline">Find sites</Link>} />
+          {!data.sitesToLookAt.length ? (
+            <Empty>No ranked sites yet. Run Find or an area scan on the Map.</Empty>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              {data.sitesToLookAt.map((s) => (
                 <Link
-                  key={k}
-                  href={`/opportunities?status=${k}`}
-                  className={cx("rounded-[3px] border border-line px-3 py-2 hover:bg-canvas")}
+                  key={s.id}
+                  href={`/opportunities/${s.id}`}
+                  className="block border border-line bg-white px-4 py-3 hover:border-brand/40"
                 >
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{k}</div>
-                  <div className="num text-[18px] font-semibold">{data.pipeline[k] ?? 0}</div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-[14px] font-semibold leading-snug">{s.address || s.name}</div>
+                      <div className="text-[12px] text-muted">{s.suburb ?? "NSW"} · {s.siteAreaSqm != null ? sqm(s.siteAreaSqm) : "—"}</div>
+                    </div>
+                    {s.score != null && <Badge tone="brand">Score {Math.round(s.score)}</Badge>}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
+                    <span>Current FSR {s.currentFsr != null ? fsr(s.currentFsr) : "—"}</span>
+                    {s.proposedFsr != null && <span className="text-brand">Proposed FSR {fsr(s.proposedFsr)}</span>}
+                    <span className={cx("num", s.headroom != null && s.headroom > 0 ? "text-good" : "text-muted")}>
+                      Headroom {s.headroom != null ? money(s.headroom, { compact: true }) : "—"}
+                    </span>
+                  </div>
+                  <ul className="mt-2 space-y-0.5">
+                    {s.reasons.map((r) => (
+                      <li key={r} className="text-[12px] text-muted">
+                        · {r}
+                      </li>
+                    ))}
+                  </ul>
                 </Link>
               ))}
             </div>
-          </Panel>
+          )}
+        </section>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <section>
+            <SectionHead title="Watched changes" action={<Link href="/watching" className="text-[11px] font-semibold text-brand hover:underline">Manage</Link>} />
+            <Panel>
+              {!data.watchedChanges.length ? (
+                <p className="text-[12px] text-muted">No changes affecting watched areas, sites or assemblies.</p>
+              ) : (
+                <ul className="divide-y divide-line">
+                  {data.watchedChanges.map((c) => (
+                    <li key={c.id} className="py-2.5">
+                      <div className="flex items-center gap-2">
+                        <Badge tone="live">{typeLabel(c.type)}</Badge>
+                        <span className="text-[11px] text-muted">{c.date.slice(0, 10)}</span>
+                      </div>
+                      {c.href ? (
+                        <Link href={c.href} className="mt-1 block text-[13px] font-semibold hover:text-brand">
+                          {c.title}
+                        </Link>
+                      ) : (
+                        <div className="mt-1 text-[13px] font-semibold">{c.title}</div>
+                      )}
+                      {c.summary && <p className="text-[12px] text-muted">{c.summary}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          </section>
+
+          <section>
+            <SectionHead title="Development activity" />
+            <Panel>
+              {!data.developmentActivity.length ? (
+                <p className="text-[12px] text-muted">
+                  Newest DA / HDA / SSD in watched or target areas will appear here as statewide feeds connect.
+                </p>
+              ) : (
+                <ul className="divide-y divide-line">
+                  {data.developmentActivity.map((a) => (
+                    <li key={a.id} className="py-2.5">
+                      <Badge tone="neutral">{a.kind.replaceAll("_", " ")}</Badge>
+                      {a.href ? (
+                        <Link href={a.href} className="mt-1 block text-[13px] font-semibold hover:text-brand">
+                          {a.title}
+                        </Link>
+                      ) : (
+                        <div className="mt-1 text-[13px] font-semibold">{a.title}</div>
+                      )}
+                      {a.summary && <p className="text-[12px] text-muted">{a.summary}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          </section>
+        </div>
+
+        <div className="border-t border-line pt-3">
+          <button
+            type="button"
+            className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted hover:text-ink"
+            onClick={() => setShowSources((v) => !v)}
+          >
+            {showSources ? "Hide source freshness" : "Source freshness"}
+          </button>
+          {showSources && (
+            <div className="mt-2 grid gap-1 text-[11.5px] text-muted sm:grid-cols-2 lg:grid-cols-3">
+              {data.sourceFreshness.map((s) => (
+                <div key={s.id} className="rounded-[3px] border border-line px-2 py-1.5">
+                  <div className="font-medium text-ink/80">{s.name}</div>
+                  <div>Last OK · {s.lastSuccessfulAt?.slice(0, 16) ?? "—"}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function Section({ label, items, empty }: { label: string; items: string[]; empty: string }) {
+function SectionHead({ title, action }: { title: string; action?: React.ReactNode }) {
   return (
-    <div className="mb-3 last:mb-0">
-      <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">{label}</div>
-      {!items.length ? (
-        <p className="mt-1 text-[12px] text-muted">{empty}</p>
-      ) : (
-        <ul className="mt-1 space-y-0.5 text-[12.5px]">
-          {items.slice(0, 8).map((t) => (
-            <li key={t}>{t}</li>
-          ))}
-        </ul>
-      )}
+    <div className="mb-2 flex items-end justify-between gap-3">
+      <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{title}</h2>
+      {action}
     </div>
   );
 }
 
-function toneForKind(kind: string): "good" | "bad" | "warn" | "brand" | "live" | "neutral" {
-  if (kind === "NEW" || kind === "IMPROVED" || kind === "ALERT") return "good";
-  if (kind === "DECLINED") return "bad";
-  if (kind === "PLANNING_CHANGE") return "warn";
-  if (kind === "NEW_SALE") return "live";
-  if (kind === "REPORT") return "brand";
-  return "neutral";
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div className="border border-dashed border-line bg-canvas/60 px-4 py-6 text-[12.5px] text-muted">{children}</div>;
 }

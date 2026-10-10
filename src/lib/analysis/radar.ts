@@ -155,7 +155,7 @@ export async function buildOpportunityRadar(opts?: { bbox?: BBox; limit?: number
   const sampleRadiusM = opts?.sampleRadiusM ?? 380;
   const messages: string[] = [
     "Precincts ranked from official SEPP (Housing) 2021 Town Centres Map + live EPI parcel samples.",
-    "DEVELOPMENT ACTIVITY DATA NOT CONNECTED — competition/untapped index withheld.",
+    "Development activity feeds (DA/HDA/SSD) are wired via Source Watcher — precinct competition index still reserved.",
     "LMR eligibility uses straight-line screen only; walking catchment requires confirmation.",
     "V1 samples a small set of priority centres for response time — not a full Sydney census.",
   ];

@@ -222,7 +222,7 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                   </Link>
                 ) : (
                   <Link href="/opportunities" className="hover:underline">
-                    Opportunities
+                    Sites
                   </Link>
                 )}
                 <span>/</span>
