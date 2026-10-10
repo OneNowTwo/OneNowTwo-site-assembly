@@ -254,12 +254,16 @@ export function MapWorkspace({
         });
       }
       try {
-        const params = new URLSearchParams();
-        params.set("lat", view.lat.toFixed(5));
-        params.set("lng", view.lng.toFixed(5));
-        params.set("zoom", String(Math.round(view.zoom * 10) / 10));
-        if (query.trim()) params.set("scan", query.trim());
-        window.history.replaceState(null, "", `/map?${params.toString()}`);
+        // Only rewrite the URL while the map route is active — otherwise the
+        // always-mounted MapWorkspace steals Today/Find/Sites/Pipeline deep links.
+        if (typeof window !== "undefined" && window.location.pathname === "/map") {
+          const params = new URLSearchParams();
+          params.set("lat", view.lat.toFixed(5));
+          params.set("lng", view.lng.toFixed(5));
+          params.set("zoom", String(Math.round(view.zoom * 10) / 10));
+          if (query.trim()) params.set("scan", query.trim());
+          window.history.replaceState(null, "", `/map?${params.toString()}`);
+        }
       } catch {
         // ignore
       }
