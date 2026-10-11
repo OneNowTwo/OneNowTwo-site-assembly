@@ -1,29 +1,23 @@
 /**
  * FIND — search parcels/assemblies via existing scan engine + proposed-planning fields.
- * Geography-neutral: no suburb hardcoding.
- * Proposed annotation uses persisted PlanningChangeArea / KeySite (fixtures = test fallback only).
+ * Geography-neutral: no suburb / council hardcoding.
+ * Proposed annotation uses resolveProposedPlanningForPoint (persisted + adapter enrichers).
  */
 
 import { scanArea } from "@/lib/scan-service";
 import {
-  annotateParcelWithProposedFindFields,
   matchesProposedFindFilters,
   findMatchReasons,
   profileForStrategy,
+  resolveProposedPlanningForPoint,
   type StrategyProfile,
   type ProposedPlanningFindFields,
 } from "@/lib/source-watcher";
-import { loadProposedPlanningAreas } from "@/lib/source-watcher/load-persisted-areas";
-import { queryInnerWestProposedAtPoint } from "@/lib/source-watcher/adapters/inner-west-live";
-import { pointInBBox } from "@/lib/source-watcher/geometry";
 import type { ScanCandidate } from "@/lib/analysis/area-scan";
 import { nearestLmrCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { fetchTrainStations, nearestTrainStation } from "@/lib/data-sources/nsw-train-stations";
 import { parseNaturalLanguageFind } from "./nl-parse";
 import type { FindFilters } from "./find-filters-types";
-
-/** Inner West Fairer Future envelope — same as /api/planning/proposed live enrich. */
-const IW_BBOX = { west: 151.12, south: -33.925, east: 151.2, north: -33.87 };
 
 export type { FindFilters } from "./find-filters-types";
 export { parseNaturalLanguageFind } from "./nl-parse";
@@ -32,6 +26,7 @@ export interface FindResultRow {
   key: string;
   locationLabel: string;
   suburb: string | null;
+  lga: string | null;
   siteAreaSqm: number;
   zone: string | null;
   currentFsr: number | null;
@@ -70,6 +65,19 @@ function pickValue<T>(ui: T | null | undefined, nl: T | null | undefined, fallba
   return fallback ?? null;
 }
 
+function normPlace(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Deterministic place match — filter value must appear in candidate metadata. */
+export function placeMatches(filter: string, candidate: string | null | undefined): boolean {
+  if (!candidate) return false;
+  const f = normPlace(filter);
+  const c = normPlace(candidate);
+  if (!f || !c) return false;
+  return c === f || c.includes(f) || f.includes(c);
+}
+
 function mergeFilters(input: FindFilters): { filters: FindFilters; profile: StrategyProfile } {
   const nl = input.naturalLanguage?.trim() ? parseNaturalLanguageFind(input.naturalLanguage) : {};
   const strategy = input.strategy ?? "GENERAL_RESIDENTIAL";
@@ -84,7 +92,6 @@ function mergeFilters(input: FindFilters): { filters: FindFilters; profile: Stra
     minSiteAreaSqm: pickValue(input.minSiteAreaSqm, nl.minSiteAreaSqm, profile.minSiteAreaSqm),
     maxSiteAreaSqm: pickValue(input.maxSiteAreaSqm, nl.maxSiteAreaSqm, null),
     maxOwners: pickValue(input.maxOwners, nl.maxOwners, profile.maxProperties),
-    // Strategy may prefer proposed density via ranking — never hard-require unless UI/NL set it.
     minProposedFsr: pickValue(input.minProposedFsr, nl.minProposedFsr, null),
     minCurrentFsr: pickValue(input.minCurrentFsr, nl.minCurrentFsr, profile.minCurrentFsr),
     maxCurrentFsr: pickValue(input.maxCurrentFsr, nl.maxCurrentFsr, null),
@@ -104,19 +111,10 @@ function mergeFilters(input: FindFilters): { filters: FindFilters; profile: Stra
 
 function annotateCandidate(
   c: ScanCandidate,
-  areas: Parameters<typeof annotateParcelWithProposedFindFields>[0]["areas"],
   station: { distanceM: number | null; label: string | null },
   filters: FindFilters,
-  proposedOverride?: ProposedPlanningFindFields | null,
+  proposed: ProposedPlanningFindFields,
 ): FindResultRow {
-  const centroid = c.centroid;
-  const hasPoint = !!centroid && Number.isFinite(centroid[0]) && Number.isFinite(centroid[1]);
-  const proposed =
-    proposedOverride ??
-    (hasPoint
-      ? annotateParcelWithProposedFindFields({ lng: centroid![0], lat: centroid![1], areas })
-      : EMPTY_PROPOSED);
-
   const why = findMatchReasons({
     fields: proposed,
     siteAreaSqm: c.siteAreaSqm,
@@ -163,6 +161,7 @@ function annotateCandidate(
     key: c.key,
     locationLabel: c.locationLabel,
     suburb: c.suburb,
+    lga: c.lga,
     siteAreaSqm: c.siteAreaSqm,
     zone: c.zone,
     currentFsr: c.lepFsr ?? c.effectiveFsr,
@@ -207,21 +206,15 @@ export async function findDevelopmentSites(input: FindFilters): Promise<{
     };
   }
 
-  const [{ areas, source: proposedAreasSource }, scan] = await Promise.all([
-    loadProposedPlanningAreas(),
-    scanArea({
-      bbox: hasBBox
-        ? { west: filters.west!, south: filters.south!, east: filters.east!, north: filters.north! }
-        : undefined,
-      centreQuery: centreQuery ?? undefined,
-      suburbHint: filters.suburb ?? undefined,
-      maxResults: filters.maxResults ?? 20,
-    }),
-  ]);
+  const scan = await scanArea({
+    bbox: hasBBox
+      ? { west: filters.west!, south: filters.south!, east: filters.east!, north: filters.north! }
+      : undefined,
+    centreQuery: centreQuery ?? undefined,
+    suburbHint: filters.suburb ?? undefined,
+    maxResults: filters.maxResults ?? 20,
+  });
   messages.push(...scan.messages);
-  if (proposedAreasSource === "fixture_fallback") {
-    messages.push("Proposed planning annotation using fixture fallback (no persisted PlanningChangeArea rows).");
-  }
 
   const centres = scan.centres ?? [];
   const stationPad = Math.max(filters.maxStationDistanceM ?? 800, 800) / 111_320 + 0.01;
@@ -235,44 +228,25 @@ export async function findDevelopmentSites(input: FindFilters): Promise<{
     messages.push(`Station proximity: ${stations.length} official NSW train/metro stops in search envelope.`);
   }
 
-  // Enrich proposed FSR/height from official IW Adopted_Planning_Layers when persisted
-  // area-level controls lack machine-readable FSR (same live source as /api/planning/proposed).
-  const iwEnrich = new Map<string, ProposedPlanningFindFields>();
+  const proposedByKey = new Map<string, ProposedPlanningFindFields>();
+  let proposedAreasSource: string | undefined;
   await Promise.all(
     scan.candidates.map(async (c) => {
-      if (!c.centroid) return;
-      const [lng, lat] = c.centroid;
-      const base = annotateParcelWithProposedFindFields({ lng, lat, areas });
-      if (base.proposedFsr != null && base.proposedHeight != null) {
-        iwEnrich.set(c.key, base);
+      if (!c.centroid) {
+        proposedByKey.set(c.key, EMPTY_PROPOSED);
         return;
       }
-      if (!pointInBBox(lng, lat, IW_BBOX)) {
-        iwEnrich.set(c.key, base);
-        return;
-      }
-      try {
-        const live = await queryInnerWestProposedAtPoint(lng, lat);
-        const fsr = live.incentiveFsr ?? live.fsr;
-        const height = live.incentiveHeightM ?? live.heightM;
-        if (fsr == null && height == null && !live.keySiteId) {
-          iwEnrich.set(c.key, base);
-          return;
-        }
-        iwEnrich.set(c.key, {
-          ...base,
-          insidePlanningChangeArea: true,
-          planningChangeStatus: base.planningChangeStatus ?? "PROPOSED",
-          proposedZone: live.zone ?? base.proposedZone,
-          proposedFsr: fsr ?? base.proposedFsr,
-          proposedHeight: height ?? base.proposedHeight,
-          keySiteId: live.keySiteId ?? base.keySiteId,
-        });
-      } catch {
-        iwEnrich.set(c.key, base);
-      }
+      const resolved = await resolveProposedPlanningForPoint({
+        lng: c.centroid[0],
+        lat: c.centroid[1],
+      });
+      proposedAreasSource = resolved.areasSource;
+      proposedByKey.set(c.key, resolved);
     }),
   );
+  if (proposedAreasSource === "fixture_fallback") {
+    messages.push("Proposed planning annotation using fixture fallback (no persisted PlanningChangeArea rows).");
+  }
 
   let results = scan.candidates.map((c) => {
     let stationDistanceM: number | null = null;
@@ -283,7 +257,6 @@ export async function findDevelopmentSites(input: FindFilters): Promise<{
         stationDistanceM = train.distanceM;
         nearestStationLabel = train.station.label;
       } else if (centres.length) {
-        // Fallback: LMR nominated centre distance when no FOI train stop in envelope.
         const prox = nearestLmrCentre({ type: "Point", coordinates: c.centroid }, centres);
         if (prox) {
           stationDistanceM = prox.distanceM;
@@ -294,10 +267,9 @@ export async function findDevelopmentSites(input: FindFilters): Promise<{
     if (!nearestStationLabel && c.lmrCentre) nearestStationLabel = c.lmrCentre;
     return annotateCandidate(
       c,
-      areas,
       { distanceM: stationDistanceM, label: nearestStationLabel },
       filters,
-      iwEnrich.get(c.key) ?? null,
+      proposedByKey.get(c.key) ?? EMPTY_PROPOSED,
     );
   });
 
@@ -311,20 +283,16 @@ export async function findDevelopmentSites(input: FindFilters): Promise<{
     if (filters.minScore != null && r.score < filters.minScore) return false;
     if (filters.minHeadroom != null && (r.headroom == null || r.headroom < filters.minHeadroom)) return false;
     if (filters.zone && (!r.zone || !r.zone.toUpperCase().includes(filters.zone.toUpperCase()))) return false;
+
+    // Explicit LGA filter — exclude when missing or non-matching (no silent include).
     if (filters.lga) {
-      // LGA is not carried on ScanCandidate yet — filter via suburb/label soft match only when present.
-      const hay = `${r.suburb ?? ""} ${r.locationLabel}`.toLowerCase();
-      if (!hay.includes(filters.lga.toLowerCase())) {
-        // Do not exclude when LGA metadata is absent from the scan row.
-      }
+      if (!placeMatches(filters.lga, r.lga)) return false;
     }
+    // Explicit suburb filter — exclude when missing or non-matching.
     if (filters.suburb) {
-      const sub = (r.suburb ?? "").toLowerCase();
-      const want = filters.suburb.toLowerCase();
-      if (sub && !sub.includes(want) && !want.includes(sub)) {
-        // Soft: keep if suburb blank (partial scan) but centre query drove the bbox.
-      }
+      if (!placeMatches(filters.suburb, r.suburb)) return false;
     }
+
     if (filters.excludeStrata && r.isStrata) return false;
     if (
       filters.maxStationDistanceM != null &&
@@ -357,7 +325,6 @@ export async function findDevelopmentSites(input: FindFilters): Promise<{
       return false;
     }
 
-    // Prefer strategy preferred zones in ranking later — optional soft boost tick.
     if (profile.preferredZones.length && r.zone && profile.preferredZones.some((z) => r.zone!.toUpperCase().startsWith(z.toUpperCase()))) {
       r.whyMatched = [
         ...r.whyMatched,
@@ -371,7 +338,6 @@ export async function findDevelopmentSites(input: FindFilters): Promise<{
     const au = (a.proposedFsr ?? 0) - (a.currentFsr ?? 0);
     const bu = (b.proposedFsr ?? 0) - (b.currentFsr ?? 0);
     if (bu !== au) return bu - au;
-    // Prefer closer station when strategy cares about station distance.
     if (filters.maxStationDistanceM != null || profile.maxStationDistanceM != null) {
       const ad = a.stationDistanceM ?? 99999;
       const bd = b.stationDistanceM ?? 99999;

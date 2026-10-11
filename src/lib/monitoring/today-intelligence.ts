@@ -1,5 +1,6 @@
 /**
  * TODAY development-intelligence payload — geography-neutral.
+ * Never surfaces fixture-* source IDs to end users.
  */
 
 import { prisma } from "@/lib/db";
@@ -9,6 +10,19 @@ import { getLatestMorningReport } from "./morning-report";
 import { summariseIntelEvent } from "@/lib/source-watcher/why-it-matters";
 import type { StrategyProfile } from "@/lib/source-watcher/strategy-profile";
 import { DEFAULT_STRATEGY_PROFILE } from "@/lib/source-watcher/strategy-profile";
+import {
+  isFixtureOnlySource,
+  presentPlanningEntitySource,
+  presentSourceForUser,
+} from "./source-presentation";
+
+function feedPayloadSourceId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.sourceId === "string") return p.sourceId;
+  if (typeof p.changeKey === "string" && p.changeKey.startsWith("fixture-")) return p.changeKey.split(":")[0]!;
+  return null;
+}
 
 export async function getTodayIntelligence(userId: string, profile: StrategyProfile = DEFAULT_STRATEGY_PROFILE) {
   const since = new Date();
@@ -62,15 +76,18 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       }),
     ]);
 
+  // Production Today: omit fixture-only intel (implementation IDs must not surface).
+  const productionEvents = intelEvents.filter((e) => !isFixtureOnlySource(e.sourceId));
+
   const watchIds = new Set(watching.map((w) => w.id));
-  const watchedChanges = intelEvents.filter((e) => {
+  const watchedChanges = productionEvents.filter((e) => {
     const ids = e.watchItemIds as string[] | null;
     if (Array.isArray(ids) && ids.some((id) => watchIds.has(id))) return true;
     // Also surface high-importance planning changes when user watches any area
     return watching.length > 0 && e.importance >= 0.6 && /PLANNING|KEY_SITE|HDA|SSD|DA_/i.test(e.kind);
   });
 
-  const whatChanged = intelEvents.slice(0, 12).map((e) => {
+  const whatChanged = productionEvents.slice(0, 12).map((e) => {
     const why = summariseIntelEvent({
       kind: e.kind,
       title: e.title,
@@ -79,6 +96,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       newValue: e.newValue,
     });
     const payload = (e.payload ?? e.newValue ?? {}) as Record<string, unknown>;
+    const presented = presentSourceForUser(e.sourceId);
     return {
       id: e.id,
       type: e.kind,
@@ -92,7 +110,10 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       whyItMatters: why.body,
       affectedSites: Array.isArray(e.affectedParcelHints) ? (e.affectedParcelHints as string[]).length : null,
       date: e.createdAt.toISOString(),
-      sourceId: e.sourceId,
+      /** Human provenance only — never fixture-* IDs. */
+      sourceId: presented?.label ?? null,
+      sourceLabel: presented?.label ?? null,
+      sourceHref: presented?.href ?? e.href,
       href: e.href,
       importance: e.importance,
     };
@@ -127,16 +148,21 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
   });
 
   // Intel-surfaced sites — do not require a pre-existing Opportunity.
+  // Exclude fixture-* PlanningChangeArea / KeySite rows from production Today.
   const [keySites, planningAreas] = await Promise.all([
     prisma.keySite.findMany({
       orderBy: { updatedAt: "desc" },
-      take: 8,
-      include: { planningChangeArea: { select: { id: true, title: true, status: true, suburbs: true, lgas: true } } },
+      take: 16,
+      include: {
+        planningChangeArea: {
+          select: { id: true, title: true, status: true, suburbs: true, lgas: true, sourceId: true, sourceUrl: true },
+        },
+      },
     }),
     prisma.planningChangeArea.findMany({
       where: { updatedAt: { gte: since } },
       orderBy: { updatedAt: "desc" },
-      take: 6,
+      take: 12,
       select: {
         id: true,
         title: true,
@@ -144,12 +170,24 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
         suburbs: true,
         lgas: true,
         proposedControls: true,
+        sourceId: true,
+        sourceUrl: true,
       },
     }),
   ]);
 
+  const liveKeySites = keySites.filter(
+    (ks) =>
+      !isFixtureOnlySource(ks.planningChangeArea.sourceId) &&
+      !isFixtureOnlySource(ks.planningChangeArea.id) &&
+      !ks.planningChangeArea.id.startsWith("fixture-"),
+  );
+  const livePlanningAreas = planningAreas.filter(
+    (area) => !isFixtureOnlySource(area.sourceId) && !isFixtureOnlySource(area.id) && !area.id.startsWith("fixture-"),
+  );
+
   const intelSites = [
-    ...keySites.map((ks) => {
+    ...liveKeySites.slice(0, 8).map((ks) => {
       const controls = (ks.incentiveControls ?? ks.proposedControls ?? {}) as {
         fsr?: number | null;
         incentiveFsr?: number | null;
@@ -159,6 +197,11 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
         ks.planningChangeArea.suburbs?.[0] ??
         ks.planningChangeArea.lgas?.[0] ??
         null;
+      const presented = presentPlanningEntitySource({
+        sourceId: ks.planningChangeArea.sourceId,
+        planningChangeAreaId: ks.planningChangeArea.id,
+        sourceUrl: ks.planningChangeArea.sourceUrl ?? ks.sourceUrl,
+      });
       return {
         id: `keysite:${ks.id}`,
         name: ks.name,
@@ -174,15 +217,23 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
           "Key Site identified",
           ks.planningChangeArea.title ? `Area: ${ks.planningChangeArea.title}` : "Proposed planning uplift",
           ks.planningChangeArea.status ? `Status ${ks.planningChangeArea.status}` : null,
+          presented ? `Source: ${presented.label}` : null,
         ].filter(Boolean) as string[],
         status: "INTEL",
         kind: "KEY_SITE" as const,
+        sourceLabel: presented?.label ?? null,
+        sourceHref: presented?.href ?? ks.planningChangeArea.sourceUrl ?? ks.sourceUrl ?? null,
         href: `/map?pca=${encodeURIComponent(ks.planningChangeArea.id)}&keySite=${encodeURIComponent(ks.externalKeySiteId)}`,
       };
     }),
-    ...planningAreas.map((area) => {
+    ...livePlanningAreas.slice(0, 6).map((area) => {
       const controls = (area.proposedControls ?? {}) as { fsr?: number | null; incentiveFsr?: number | null };
       const proposedFsr = controls.incentiveFsr ?? controls.fsr ?? null;
+      const presented = presentPlanningEntitySource({
+        sourceId: area.sourceId,
+        planningChangeAreaId: area.id,
+        sourceUrl: area.sourceUrl,
+      });
       return {
         id: `pca:${area.id}`,
         name: area.title,
@@ -198,13 +249,16 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
           "Watched planning area changed",
           proposedFsr != null ? `Proposed FSR ${proposedFsr}` : "Proposed planning update",
           `Status ${area.status}`,
-        ],
+          presented ? `Source: ${presented.label}` : null,
+        ].filter(Boolean) as string[],
         status: "INTEL",
         kind: "PLANNING_CHANGE_AREA" as const,
+        sourceLabel: presented?.label ?? null,
+        sourceHref: presented?.href ?? area.sourceUrl ?? null,
         href: `/map?pca=${encodeURIComponent(area.id)}`,
       };
     }),
-    ...intelEvents
+    ...productionEvents
       .filter((e) => /KEY_SITE|PLANNING|HDA|SSD|DA_/i.test(e.kind) && e.importance >= 0.55)
       .slice(0, 6)
       .map((e) => {
@@ -216,6 +270,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
           oldValue: e.oldValue,
           newValue: e.newValue,
         });
+        const presented = presentSourceForUser(e.sourceId);
         return {
           id: `intel:${e.id}`,
           name: e.title,
@@ -230,9 +285,13 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
           score: null as number | null,
           maxPayable: null as number | null,
           headroom: null as number | null,
-          reasons: [why.body, e.kind.replaceAll("_", " ")],
+          reasons: [why.body, e.kind.replaceAll("_", " "), presented ? `Source: ${presented.label}` : null].filter(
+            Boolean,
+          ) as string[],
           status: "INTEL",
           kind: "INTEL_EVENT" as const,
+          sourceLabel: presented?.label ?? null,
+          sourceHref: presented?.href ?? e.href,
           href: e.href ?? "/find",
         };
       }),
@@ -276,13 +335,18 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       href: e.href,
     })),
     developmentActivity,
-    sourceFreshness: sourceFreshness.map((s) => ({
-      id: s.id,
-      name: s.name,
-      category: s.category,
-      lastCheckedAt: s.lastCheckedAt?.toISOString() ?? null,
-      lastSuccessfulAt: s.lastSuccessfulAt?.toISOString() ?? null,
-    })),
+    sourceFreshness: sourceFreshness
+      .filter((s) => !isFixtureOnlySource(s.id))
+      .map((s) => {
+        const presented = presentSourceForUser(s.id);
+        return {
+          id: s.id,
+          name: presented?.label ?? s.name,
+          category: s.category,
+          lastCheckedAt: s.lastCheckedAt?.toISOString() ?? null,
+          lastSuccessfulAt: s.lastSuccessfulAt?.toISOString() ?? null,
+        };
+      }),
     watching: {
       areas: watching.filter((w) => w.kind === "SUBURB" || w.kind === "MAP_AREA" || w.kind === "PRECINCT"),
       parcels: watching.filter((w) => w.kind === "PARCEL"),
@@ -298,6 +362,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       WATCHING: pipelineMap.WATCHING ?? 0,
     },
     morningReport: morning,
-    feed,
+    // Strip fixture-* feed rows from production Today payload (payload may embed sourceId).
+    feed: feed.filter((f) => !isFixtureOnlySource(feedPayloadSourceId(f.payload))),
   };
 }

@@ -24,7 +24,24 @@ export interface DevelopmentActivityProvider {
   getNearby?(point: { lng: number; lat: number }, radiusM?: number): Promise<DevelopmentActivity[]>;
 }
 
-let cachedBundle: { at: number; activities: DevelopmentActivity[]; messages: string[] } | null = null;
+export type DaFeedStatus = "LIVE" | "AUTH_REQUIRED" | "ENDPOINT_MOVED" | "FAILED" | "EMPTY" | "PARTIAL" | "UNKNOWN";
+
+export interface DevelopmentActivityBundle {
+  activities: DevelopmentActivity[];
+  messages: string[];
+  /** Online DA APIM status — AUTH_REQUIRED until NSW_ONLINE_DA_SUBSCRIPTION_KEY is set. */
+  daStatus: DaFeedStatus;
+  /** HDA / SSD statuses from adapter meta (for UI honesty). */
+  sourceStatus: Record<string, DaFeedStatus>;
+}
+
+let cachedBundle: {
+  at: number;
+  activities: DevelopmentActivity[];
+  messages: string[];
+  daStatus: DaFeedStatus;
+  sourceStatus: Record<string, DaFeedStatus>;
+} | null = null;
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
 function recordsToActivities(sourceId: string, records: Array<Record<string, unknown>> | undefined, checkedAt: string): DevelopmentActivity[] {
@@ -62,15 +79,18 @@ function recordsToActivities(sourceId: string, records: Array<Record<string, unk
   return out;
 }
 
-export async function loadDevelopmentActivityBundle(opts?: { force?: boolean }): Promise<{
-  activities: DevelopmentActivity[];
-  messages: string[];
-}> {
+export async function loadDevelopmentActivityBundle(opts?: { force?: boolean }): Promise<DevelopmentActivityBundle> {
   if (!opts?.force && cachedBundle && Date.now() - cachedBundle.at < CACHE_TTL_MS) {
-    return { activities: cachedBundle.activities, messages: cachedBundle.messages };
+    return {
+      activities: cachedBundle.activities,
+      messages: cachedBundle.messages,
+      daStatus: cachedBundle.daStatus,
+      sourceStatus: cachedBundle.sourceStatus,
+    };
   }
   const messages: string[] = [];
   const activities: DevelopmentActivity[] = [];
+  const sourceStatus: Record<string, DaFeedStatus> = {};
   for (const sourceId of ["nsw-da-cdc-pcc", "nsw-hda-records", "nsw-major-projects"] as const) {
     try {
       const result = await runSourceOnce(sourceId, null);
@@ -78,18 +98,25 @@ export async function loadDevelopmentActivityBundle(opts?: { force?: boolean }):
         const checkedAt = result.normalised.checkedAt;
         activities.push(...recordsToActivities(sourceId, result.normalised.records as Array<Record<string, unknown>>, checkedAt));
         const meta = result.normalised.meta as { status?: string; note?: string } | undefined;
+        const status = (meta?.status as DaFeedStatus | undefined) ?? (result.normalised.records?.length ? "LIVE" : "EMPTY");
+        sourceStatus[sourceId] = status;
         if (meta?.status && meta.status !== "LIVE") {
           messages.push(`${sourceId}: ${meta.status}${meta.note ? ` — ${meta.note}` : ""}`);
         }
       } else if (result.error) {
+        sourceStatus[sourceId] = "FAILED";
         messages.push(`${sourceId}: ${result.error}`);
+      } else {
+        sourceStatus[sourceId] = "UNKNOWN";
       }
     } catch (err) {
+      sourceStatus[sourceId] = "FAILED";
       messages.push(`${sourceId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  cachedBundle = { at: Date.now(), activities, messages };
-  return { activities, messages };
+  const daStatus = sourceStatus["nsw-da-cdc-pcc"] ?? "UNKNOWN";
+  cachedBundle = { at: Date.now(), activities, messages, daStatus, sourceStatus };
+  return { activities, messages, daStatus, sourceStatus };
 }
 
 export function clearDevelopmentActivityCache() {
@@ -124,7 +151,12 @@ export class LiveDevelopmentActivityProvider implements DevelopmentActivityProvi
 
   async getNearby(point: { lng: number; lat: number }, radiusM = 500): Promise<DevelopmentActivity[]> {
     const bundle = await loadDevelopmentActivityBundle();
-    return filterActivitiesNear(bundle.activities, point, radiusM);
+    // When Online DA is AUTH_REQUIRED, still return HDA/SSD with geometry — never pretend DA is live.
+    const usable =
+      bundle.daStatus === "AUTH_REQUIRED"
+        ? bundle.activities.filter((a) => a.type !== "DA" && a.type !== "CDC" && a.type !== "PCC")
+        : bundle.activities;
+    return filterActivitiesNear(usable, point, radiusM);
   }
 }
 

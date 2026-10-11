@@ -75,6 +75,7 @@ export interface ScanCandidate {
   centroid: [number, number] | null;
   zone: string | null;
   suburb: string | null;
+  lga: string | null;
   /** True if any member lot is strata — scan seeds exclude strata, so normally false. */
   isStrata: boolean;
   metrics: AssemblyCandidate["metrics"];
@@ -382,6 +383,9 @@ export function runAreaScan(input: {
     const zone =
       memberParcels.map((p) => p.planning?.zone).find((z) => !!z) ??
       null;
+    const lga =
+      memberParcels.map((p) => p.planning?.lga).find((v) => !!v) ??
+      null;
     const isStrata = memberParcels.some((p) => p.isStrata);
     const constraints: string[] = [];
     if (feasibility.metrics.heritageItems) constraints.push(`${feasibility.metrics.heritageItems} heritage item(s)`);
@@ -436,6 +440,7 @@ export function runAreaScan(input: {
         centroidLng != null && centroidLat != null ? [centroidLng, centroidLat] : null,
       zone,
       suburb: suburb === "NSW" ? null : suburb,
+      lga,
       isStrata,
       metrics: feasibility.metrics,
       // With trusted values + exit benchmarks: same scoreAssembly as Analyse.

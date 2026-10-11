@@ -22,6 +22,8 @@ type TodayPayload = {
     affectedSites: number | null;
     date: string;
     sourceId: string | null;
+    sourceLabel?: string | null;
+    sourceHref?: string | null;
     href: string | null;
   }>;
   sitesToLookAt: Array<{
@@ -39,6 +41,8 @@ type TodayPayload = {
     status: string;
     kind?: string;
     href?: string;
+    sourceLabel?: string | null;
+    sourceHref?: string | null;
   }>;
   watchedChanges: Array<{
     id: string;
@@ -157,8 +161,21 @@ export function DashboardClient() {
                     <Link href="/opportunities" className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas">
                       View affected sites
                     </Link>
-                    {ev.sourceId && (
-                      <span className="rounded-[3px] bg-canvas px-2.5 py-1 text-[11px] text-muted">Source · {ev.sourceId}</span>
+                    {(ev.sourceLabel || ev.sourceId) && (
+                      ev.sourceHref ? (
+                        <a
+                          href={ev.sourceHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-[3px] bg-canvas px-2.5 py-1 text-[11px] text-muted hover:text-brand"
+                        >
+                          Source · {ev.sourceLabel || ev.sourceId}
+                        </a>
+                      ) : (
+                        <span className="rounded-[3px] bg-canvas px-2.5 py-1 text-[11px] text-muted">
+                          Source · {ev.sourceLabel || ev.sourceId}
+                        </span>
+                      )
                     )}
                   </div>
                 </article>

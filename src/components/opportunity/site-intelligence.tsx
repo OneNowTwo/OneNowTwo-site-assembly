@@ -70,6 +70,8 @@ export function SiteIntelligence() {
   const [scenarioMode, setScenarioMode] = useState<"CURRENT" | "PROPOSED">("CURRENT");
   const [scenario, setScenario] = useState<ProposedScenarioResult | null>(null);
   const [activity, setActivity] = useState<DevelopmentActivity[]>([]);
+  const [daStatus, setDaStatus] = useState<string | null>(null);
+  const [daConnected, setDaConnected] = useState<boolean | null>(null);
   const [intel, setIntel] = useState<IntelEvent[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [assemblyBusy, setAssemblyBusy] = useState(false);
@@ -93,11 +95,24 @@ export function SiteIntelligence() {
       });
     void fetch(`/api/development-activity?lng=${centroid.lng}&lat=${centroid.lat}&radiusM=500`)
       .then((r) => r.json())
-      .then((j: { activities?: DevelopmentActivity[] }) => {
-        if (!cancelled) setActivity(j.activities ?? []);
-      })
+      .then(
+        (j: {
+          activities?: DevelopmentActivity[];
+          daStatus?: string;
+          daConnected?: boolean;
+        }) => {
+          if (cancelled) return;
+          setActivity(j.activities ?? []);
+          setDaStatus(j.daStatus ?? null);
+          setDaConnected(j.daConnected ?? null);
+        },
+      )
       .catch(() => {
-        if (!cancelled) setActivity([]);
+        if (!cancelled) {
+          setActivity([]);
+          setDaStatus(null);
+          setDaConnected(null);
+        }
       });
     void fetch(`/api/intel/site?lng=${centroid.lng}&lat=${centroid.lat}`)
       .then((r) => r.json())
@@ -364,9 +379,17 @@ export function SiteIntelligence() {
       )}
 
       <Panel title="Nearby development" actions={<span className="text-[11px] text-muted">Default 500 m</span>}>
+        {daConnected === false || daStatus === "AUTH_REQUIRED" ? (
+          <p className="mb-2 text-[12.5px] text-muted">
+            DA feed not connected — set <span className="font-semibold">NSW_ONLINE_DA_SUBSCRIPTION_KEY</span> on
+            Render to enable Online DA. HDA / SSD records below still load when available.
+          </p>
+        ) : null}
         {!activity.length ? (
           <p className="text-[12.5px] text-muted">
-            No geocoded DA / HDA / SSD records within 500 m from connected statewide feeds yet.
+            {daStatus === "AUTH_REQUIRED"
+              ? "No geocoded HDA / SSD records within 500 m yet. Nearby DA omitted while the feed is not connected."
+              : "No geocoded DA / HDA / SSD records within 500 m from connected statewide feeds yet."}
           </p>
         ) : (
           <ul className="divide-y divide-line">

@@ -40,6 +40,7 @@ function stubCandidate(partial: Partial<ScanCandidate> & { key: string }): ScanC
     centroid: [151.26, -33.79] as [number, number],
     zone: "R3",
     suburb: null,
+    lga: null,
     isStrata: false,
     metrics: {} as ScanCandidate["metrics"],
     score: stubScore(89),

@@ -2,13 +2,11 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { jsonError } from "@/lib/session";
 import {
-  proposedFindFieldsAtPoint,
-  queryInnerWestProposedAtPoint,
   resolveKeySitesWithParcels,
   resolveProposedPlanningAtPoint,
+  resolveProposedPlanningForPoint,
 } from "@/lib/source-watcher";
 import { loadProposedPlanningAreas } from "@/lib/source-watcher/load-persisted-areas";
-import { pointInBBox } from "@/lib/source-watcher/geometry";
 
 export const dynamic = "force-dynamic";
 
@@ -20,29 +18,19 @@ const querySchema = z.object({
 
 /**
  * Proposed / pending planning at a point.
- * Production path: persisted PlanningChangeArea / KeySite from Source Watcher.
+ * Production path: resolveProposedPlanningForPoint (persisted PCA/KeySite + adapter enrichers).
  * Fixtures only when DB has no rows (fallback). Never CURRENT LEP law.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const parsed = querySchema.safeParse(Object.fromEntries(url.searchParams));
   if (!parsed.success) return jsonError("lng and lat required");
-  const { lng, lat, live } = parsed.data;
+  const { lng, lat } = parsed.data;
 
   const { areas, source } = await loadProposedPlanningAreas();
   const proposed = resolveProposedPlanningAtPoint({ lng, lat, areas });
-  const findFields = proposedFindFieldsAtPoint({ lng, lat, areas });
+  const findFields = await resolveProposedPlanningForPoint({ lng, lat, areas });
   const keySites = await resolveKeySitesWithParcels({ lng, lat, areas });
-
-  let liveInnerWest: Awaited<ReturnType<typeof queryInnerWestProposedAtPoint>> | null = null;
-  const inIw = pointInBBox(lng, lat, { west: 151.12, south: -33.925, east: 151.2, north: -33.87 });
-  if (live !== false && inIw) {
-    try {
-      liveInnerWest = await queryInnerWestProposedAtPoint(lng, lat);
-    } catch {
-      liveInnerWest = null;
-    }
-  }
 
   const structuredStatus = (proposed.planningChangeAreas[0]?.proposedControls as { structuredDataStatus?: string } | undefined)
     ?.structuredDataStatus;
@@ -56,6 +44,11 @@ export async function GET(req: Request) {
     keySites,
     applies: proposed.applies,
     findFields,
-    liveInnerWest,
+    /** Provenance from generic resolver (adapter enrichers included). */
+    resolution: {
+      sourceId: findFields.sourceId,
+      sourceUrl: findFields.sourceUrl,
+      areasSource: findFields.areasSource,
+    },
   });
 }

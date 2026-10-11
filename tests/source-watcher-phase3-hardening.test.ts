@@ -101,9 +101,12 @@ describe("Source Watcher Phase 3 hardening", () => {
       "src/lib/find/nl-parse.ts",
       "src/lib/source-watcher/strategy-profile.ts",
       "src/lib/source-watcher/find-fields.ts",
+      "src/lib/source-watcher/resolve-proposed-at-point.ts",
       "src/lib/monitoring/today-intelligence.ts",
     ];
     const banned = [
+      "IW_BBOX",
+      "queryInnerWestProposedAtPoint",
       "Edgecliff",
       "Woollahra",
       "Manly Vale",
@@ -111,6 +114,7 @@ describe("Source Watcher Phase 3 hardening", () => {
       "Jacaranda",
       "Ashfield",
       "Neutral Bay",
+      "Inner West",
     ];
     for (const rel of roots) {
       const text = readFileSync(join(process.cwd(), rel), "utf8");

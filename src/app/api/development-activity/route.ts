@@ -18,14 +18,32 @@ export async function GET(req: Request) {
   if (!parsed.success) return jsonError("Invalid query");
   const { lng, lat, radiusM } = parsed.data;
 
+  const bundle = await loadDevelopmentActivityBundle();
+  const daStatus = bundle.daStatus;
+  const daConnected = daStatus === "LIVE";
+
   if (lng != null && lat != null && developmentActivityProvider.getNearby) {
     const activities = await developmentActivityProvider.getNearby({ lng, lat }, radiusM ?? 500);
-    return NextResponse.json({ activities, radiusM: radiusM ?? 500 });
+    return NextResponse.json({
+      activities,
+      radiusM: radiusM ?? 500,
+      daStatus,
+      daConnected,
+      /** Render / local env var required for Online DA APIM. */
+      daEnvVar: "NSW_ONLINE_DA_SUBSCRIPTION_KEY",
+      messages: bundle.messages,
+      sourceStatus: bundle.sourceStatus,
+    });
   }
 
-  const bundle = await loadDevelopmentActivityBundle();
   return NextResponse.json({
-    activities: bundle.activities.slice(0, 50),
+    activities: bundle.activities
+      .filter((a) => (daConnected ? true : a.type !== "DA" && a.type !== "CDC" && a.type !== "PCC"))
+      .slice(0, 50),
     messages: bundle.messages,
+    daStatus,
+    daConnected,
+    daEnvVar: "NSW_ONLINE_DA_SUBSCRIPTION_KEY",
+    sourceStatus: bundle.sourceStatus,
   });
 }
