@@ -37,6 +37,11 @@ function stubCandidate(partial: Partial<ScanCandidate> & { key: string }): ScanC
     scoreFactors: [],
     lmrCentre: "Manly Vale",
     lmrBand: "INNER_0_400",
+    centroid: [151.26, -33.79] as [number, number],
+    zone: "R3",
+    suburb: null,
+    lga: null,
+    isStrata: false,
     metrics: {} as ScanCandidate["metrics"],
     score: stubScore(89),
     calculationSnapshot: {

@@ -6,6 +6,18 @@ export * from "./key-sites";
 export * from "./hash";
 export * from "./parcel-link";
 export * from "./find-fields";
+export * from "./development-activity";
+export * from "./why-it-matters";
+export * from "./strategy-profile";
+export {
+  resolveProposedPlanningForPoint,
+  type ProposedPlanningAtPoint,
+} from "./resolve-proposed-at-point";
+export {
+  registerLiveProposedPointEnricher,
+  listLiveProposedPointEnrichers,
+  type LiveProposedPointEnricher,
+} from "./live-point-enrichers";
 // proposed-scenario imports analyseOpportunity — keep out of barrel to avoid circular deps in unit tests.
 export type { ProposedScenarioInput, ProposedScenarioResult } from "./proposed-scenario";
 export {

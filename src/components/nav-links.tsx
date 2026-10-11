@@ -2,27 +2,55 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { cx } from "@/components/ui";
 
-const LINKS = [
+const PRIMARY = [
   { href: "/dashboard", label: "Today" },
+  { href: "/find", label: "Find", match: ["/find", "/radar"] },
+  { href: "/map", label: "Map" },
+  { href: "/opportunities", label: "Sites" },
+  { href: "/acquisitions", label: "Pipeline" },
+] as const;
+
+const SECONDARY = [
   { href: "/feed", label: "Feed" },
   { href: "/watching", label: "Watching" },
-  { href: "/morning-report", label: "Report" },
-  { href: "/map", label: "Map" },
-  { href: "/radar", label: "Radar" },
-  { href: "/opportunities", label: "Opportunities" },
-  { href: "/acquisitions", label: "Acquisitions" },
+  { href: "/morning-report", label: "Morning Report" },
   { href: "/alerts", label: "Alerts" },
   { href: "/assumptions", label: "Assumptions" },
-];
+  { href: "/radar", label: "Radar (legacy)" },
+] as const;
+
+function isActive(path: string, href: string, match?: readonly string[]) {
+  const prefixes = match ?? [href];
+  return prefixes.some((p) => path === p || path.startsWith(`${p}/`));
+}
 
 export function NavLinks() {
   const path = usePathname();
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [path]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (!menuRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const secondaryActive = SECONDARY.some((l) => isActive(path, l.href));
+
   return (
     <nav className="flex h-full items-stretch">
-      {LINKS.map((l) => {
-        const active = path === l.href || path.startsWith(`${l.href}/`);
+      {PRIMARY.map((l) => {
+        const active = isActive(path, l.href, "match" in l ? l.match : undefined);
         return (
           <Link
             key={l.href}
@@ -36,6 +64,43 @@ export function NavLinks() {
           </Link>
         );
       })}
+      <div className="relative flex items-stretch" ref={menuRef}>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={cx(
+            "flex items-center border-b-2 px-3 text-[11.5px] font-semibold uppercase tracking-[0.1em]",
+            secondaryActive || open ? "border-white/70 text-white" : "border-transparent text-white/65 hover:text-white",
+          )}
+          aria-expanded={open}
+          aria-haspopup="menu"
+        >
+          More
+        </button>
+        {open && (
+          <div
+            role="menu"
+            className="absolute left-0 top-full z-50 mt-0 min-w-[200px] border border-line bg-white py-1 shadow-lg"
+          >
+            {SECONDARY.map((l) => {
+              const active = isActive(path, l.href);
+              return (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  role="menuitem"
+                  className={cx(
+                    "block px-3 py-2 text-[12px] font-medium",
+                    active ? "bg-brand-soft text-brand" : "text-ink hover:bg-canvas",
+                  )}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </nav>
   );
 }

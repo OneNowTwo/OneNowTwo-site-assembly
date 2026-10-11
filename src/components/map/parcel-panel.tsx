@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { ParcelData, FieldSource, FsrControl } from "@/lib/types";
 import { date, fsr, lotDp, sqm } from "@/lib/format";
 import { Badge, Button, LiveDataBadge, SourceTag } from "@/components/ui";
@@ -8,6 +9,7 @@ import { APARTMENT_ZONES } from "@/lib/analysis/assembly";
 import type { Assumptions } from "@/lib/analysis/assumptions";
 import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { resolveEffectiveControls } from "@/lib/analysis/effective-controls";
+import type { DevelopmentActivity } from "@/lib/source-watcher/development-activity";
 
 function Row({ label, value, source, children }: { label: string; value: React.ReactNode; source?: FieldSource; children?: React.ReactNode }) {
   return (
@@ -69,9 +71,7 @@ function OfficialFsrBlock({
           <div className="text-[11px] font-semibold text-sky-950">Split mapped controls</div>
           {controls.map((c, i) => (
             <div key={`${c.fsr}-${i}`} className="flex justify-between text-[12px]">
-              <span>
-                FSR {fsr(c.fsr)}
-              </span>
+              <span>FSR {fsr(c.fsr)}</span>
               <span className="num text-muted">{Math.round(c.intersectionShare * 100)}% of parcel</span>
             </div>
           ))}
@@ -121,6 +121,47 @@ export function ParcelPanel({
   void _unusedAssumptions;
   const pl = parcel.planning;
   const effective = useMemo(() => resolveEffectiveControls(pl, parcel.centroid, centres), [pl, parcel.centroid, centres]);
+  const [proposed, setProposed] = useState<{
+    applies: boolean;
+    findFields?: {
+      proposedFsr: number | null;
+      proposedHeight: number | null;
+      proposedZone: string | null;
+      planningChangeStatus: string | null;
+      keySiteId: string | null;
+      requiredParcelCount: number | null;
+    };
+    planningChangeAreas?: Array<{ title: string; status: string }>;
+    keySites?: Array<{ keySite: { name: string }; requiredCount: number }>;
+  } | null>(null);
+  const [activityCount, setActivityCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const [lng, lat] = parcel.centroid;
+    let cancelled = false;
+    void fetch(`/api/planning/proposed?lng=${lng}&lat=${lat}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (!cancelled) setProposed(j);
+      })
+      .catch(() => {
+        if (!cancelled) setProposed(null);
+      });
+    void fetch(`/api/development-activity?lng=${lng}&lat=${lat}&radiusM=500`)
+      .then((r) => r.json())
+      .then((j: { activities?: DevelopmentActivity[] }) => {
+        if (!cancelled) setActivityCount(j.activities?.length ?? 0);
+      })
+      .catch(() => {
+        if (!cancelled) setActivityCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [parcel.centroid, parcel.externalParcelId]);
+
+  const analyseHref = `/map?analyse=${encodeURIComponent(parcel.externalParcelId)}`;
+
   return (
     <div>
       <div className="flex items-start justify-between gap-2">
@@ -130,19 +171,36 @@ export function ParcelPanel({
         </div>
         <LiveDataBadge cached={parcel.source === "CACHED_NSW"} />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <Button variant="primary" onClick={onAdd}>
+          Analyse
+        </Button>
+        <Link
+          href="/watching"
+          className="inline-flex items-center justify-center rounded-[3px] border border-line px-2 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+        >
+          Watch
+        </Link>
+        <Button variant="accent" onClick={onFind} disabled={finding}>
+          {finding ? "…" : "Find adjoining lots"}
+        </Button>
+      </div>
+      <div className="mt-2 flex gap-2">
         {inAssembly ? (
-          <Button variant="secondary" onClick={onRemove}>
+          <Button variant="secondary" className="flex-1" onClick={onRemove}>
             Remove from assembly
           </Button>
         ) : (
-          <Button variant="primary" onClick={onAdd}>
+          <Button variant="secondary" className="flex-1" onClick={onAdd}>
             + Add to assembly
           </Button>
         )}
-        <Button variant="accent" onClick={onFind} disabled={finding}>
-          {finding ? "Searching…" : "Find assemblies"}
-        </Button>
+        <Link
+          href={analyseHref}
+          className="inline-flex flex-1 items-center justify-center rounded-[3px] border border-line px-2 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+        >
+          Open assembly
+        </Link>
       </div>
 
       <div className="mt-4">
@@ -164,6 +222,7 @@ export function ParcelPanel({
           </div>
         ) : (
           <>
+            <div className="my-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Current planning</div>
             <Row label="Zoning" value={pl.zone ? `${pl.zone} ${pl.zoneName ?? ""}` : "Not mapped"} source={pl.sources.zone} />
             <OfficialFsrBlock
               value={pl.fsr}
@@ -172,24 +231,63 @@ export function ParcelPanel({
               controls={pl.fsrControls ?? []}
               status={pl.fsrStatus ?? (pl.fsr != null ? "MAPPED" : "NO_MAPPED")}
             />
+            <Row label="Height of buildings (LEP)" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
+
+            <div className="my-3 rounded-[3px] border border-amber-200 bg-amber-50/50 p-3">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-amber-950">Proposed planning</div>
+              {!proposed?.applies && !proposed?.findFields?.proposedFsr && !proposed?.keySites?.length ? (
+                <p className="mt-1 text-[12px] text-muted">
+                  No active proposed planning change from monitored sources intersects this site.
+                </p>
+              ) : (
+                <dl className="mt-2 space-y-1 text-[12px]">
+                  {proposed.planningChangeAreas?.[0] && (
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-muted">Proposal</dt>
+                      <dd className="text-right font-semibold">{proposed.planningChangeAreas[0].title}</dd>
+                    </div>
+                  )}
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-muted">Status</dt>
+                    <dd>{proposed.findFields?.planningChangeStatus ?? proposed.planningChangeAreas?.[0]?.status ?? "—"}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-muted">Proposed FSR</dt>
+                    <dd className="num font-semibold">{proposed.findFields?.proposedFsr != null ? fsr(proposed.findFields.proposedFsr) : "—"}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-muted">Proposed height</dt>
+                    <dd className="num">{proposed.findFields?.proposedHeight != null ? `${proposed.findFields.proposedHeight} m` : "—"}</dd>
+                  </div>
+                </dl>
+              )}
+            </div>
+
+            <div className="my-2 rounded-[3px] border border-line p-3">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Key site / activity</div>
+              <div className="mt-2 space-y-1 text-[12px]">
+                <div className="flex justify-between gap-2">
+                  <span className="text-muted">Key site</span>
+                  <span className="font-semibold">
+                    {proposed?.keySites?.[0]?.keySite.name ??
+                      (proposed?.findFields?.keySiteId ? proposed.findFields.keySiteId : "None intersecting")}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-muted">Development activity (500 m)</span>
+                  <span className="num font-semibold">{activityCount != null ? activityCount : "—"}</span>
+                </div>
+              </div>
+            </div>
+
             <div className="my-2 rounded-[3px] border border-line p-3">
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Effective development controls</div>
               <dl className="mt-2 space-y-1.5 text-[11.5px]">
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted">LEP control</dt>
-                  <dd className="num font-semibold">{effective.lep.fsr != null ? fsr(effective.lep.fsr) : "—"}{effective.lep.heightM != null ? ` · ${effective.lep.heightM} m` : ""}</dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-muted">State policy control</dt>
-                  <dd className="num text-right font-semibold">
-                    {effective.statePolicy ? (
-                      <>
-                        {effective.statePolicy.fsr != null ? fsr(effective.statePolicy.fsr) : "—"}
-                        {effective.statePolicy.heightM != null ? ` · ${effective.statePolicy.heightM} m` : ""}
-                      </>
-                    ) : (
-                      "Not applicable"
-                    )}
+                  <dd className="num font-semibold">
+                    {effective.lep.fsr != null ? fsr(effective.lep.fsr) : "—"}
+                    {effective.lep.heightM != null ? ` · ${effective.lep.heightM} m` : ""}
                   </dd>
                 </div>
                 <div className="flex justify-between gap-2">
@@ -200,22 +298,7 @@ export function ParcelPanel({
                   </dd>
                 </div>
               </dl>
-              {effective.modelled.certainty === "REQUIRES_PLANNING_CONFIRMATION" && (
-                <div className="mt-2">
-                  <Badge tone="warn">Requires planning confirmation</Badge>
-                  <p className="mt-1 text-[10.5px] text-muted">
-                    {effective.lmr.centreName ?? "Nominated centre"} · ~{effective.lmr.distanceM} m straight-line ({effective.lmr.band.replaceAll("_", " ")}). Housing SEPP LMR uses walking distance — not confirmed here.
-                  </p>
-                </div>
-              )}
-              {effective.fsrUplift > 0 && (
-                <p className="mt-1 text-[10.5px] text-good">Modelled FSR uplift vs LEP: +{effective.fsrUplift.toFixed(2)}</p>
-              )}
             </div>
-            <Row label="Height of buildings (LEP)" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
-            <Row label="Minimum lot size" value={pl.minLotSizeSqm != null ? sqm(pl.minLotSizeSqm) : "Not mapped"} source={pl.sources.minLotSizeSqm} />
-            <Row label="Heritage" value={pl.heritage ?? "Unknown"} source={pl.sources.heritage} />
-            <Row label="Planning instrument" value={<span className="text-[12px] font-medium">{pl.planningInstrument ?? "—"}</span>} />
             <Row label="Local government area" value={pl.lga ?? "—"} />
             <div className="mt-2 flex flex-wrap gap-1.5">
               {pl.zone && !APARTMENT_ZONES.test(pl.zone) && <Badge tone="warn">Zone generally excludes apartments under LEP alone</Badge>}

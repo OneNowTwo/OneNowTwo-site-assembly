@@ -151,6 +151,9 @@ export function MapWorkspace({
   const [zoningWms, setZoningWms] = useState(() => loadMapState()?.zoningWms ?? false);
   const [proposedPlanning, setProposedPlanning] = useState(false);
   const [proposedPlanningData, setProposedPlanningData] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [devActivityLayer, setDevActivityLayer] = useState(false);
+  const [watchedSitesLayer, setWatchedSitesLayer] = useState(false);
+  const [moreLayersOpen, setMoreLayersOpen] = useState(false);
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
   const [query, setQuery] = useState(() => initialScanQuery ?? loadMapState()?.query ?? restoredScan?.query ?? "");
   const [results, setResults] = useState<GeocodeResult[] | null>(null);
@@ -251,12 +254,16 @@ export function MapWorkspace({
         });
       }
       try {
-        const params = new URLSearchParams();
-        params.set("lat", view.lat.toFixed(5));
-        params.set("lng", view.lng.toFixed(5));
-        params.set("zoom", String(Math.round(view.zoom * 10) / 10));
-        if (query.trim()) params.set("scan", query.trim());
-        window.history.replaceState(null, "", `/map?${params.toString()}`);
+        // Only rewrite the URL while the map route is active — otherwise the
+        // always-mounted MapWorkspace steals Today/Find/Sites/Pipeline deep links.
+        if (typeof window !== "undefined" && window.location.pathname === "/map") {
+          const params = new URLSearchParams();
+          params.set("lat", view.lat.toFixed(5));
+          params.set("lng", view.lng.toFixed(5));
+          params.set("zoom", String(Math.round(view.zoom * 10) / 10));
+          if (query.trim()) params.set("scan", query.trim());
+          window.history.replaceState(null, "", `/map?${params.toString()}`);
+        }
       } catch {
         // ignore
       }
@@ -973,10 +980,15 @@ export function MapWorkspace({
               Reset map
             </Button>
             <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
-              <input type="checkbox" checked={zoneFill} onChange={(e) => setZoneFill(e.target.checked)} /> Zone fill
-            </label>
-            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
-              <input type="checkbox" checked={zoningWms} onChange={(e) => setZoningWms(e.target.checked)} /> LEP zoning layer
+              <input
+                type="checkbox"
+                checked={zoneFill || zoningWms}
+                onChange={(e) => {
+                  setZoneFill(e.target.checked);
+                  setZoningWms(e.target.checked);
+                }}
+              />{" "}
+              Current planning
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
               <input
@@ -986,6 +998,40 @@ export function MapWorkspace({
               />{" "}
               Proposed planning
             </label>
+            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
+              <input type="checkbox" checked={devActivityLayer} onChange={(e) => setDevActivityLayer(e.target.checked)} />{" "}
+              Development activity
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
+              <input type="checkbox" checked={watchedSitesLayer} onChange={(e) => setWatchedSitesLayer(e.target.checked)} />{" "}
+              Watched sites
+            </label>
+            <div className="relative border-l border-line px-2">
+              <button
+                type="button"
+                className="text-[11.5px] font-semibold uppercase tracking-wide text-muted hover:text-ink"
+                onClick={() => setMoreLayersOpen((v) => !v)}
+              >
+                More
+              </button>
+              {moreLayersOpen && (
+                <div className="absolute right-0 top-full z-[1100] mt-1 min-w-[200px] border border-line bg-white p-2 shadow-md">
+                  <label className="flex items-center gap-1.5 py-1 text-[11.5px]">
+                    <input type="checkbox" checked={zoneFill} onChange={(e) => setZoneFill(e.target.checked)} /> Zone fill
+                  </label>
+                  <label className="flex items-center gap-1.5 py-1 text-[11.5px]">
+                    <input type="checkbox" checked={zoningWms} onChange={(e) => setZoningWms(e.target.checked)} /> LEP zoning WMS
+                  </label>
+                  <p className="mt-1 border-t border-line pt-1 text-[10.5px] text-muted">Heritage, flood, bushfire, contours — use external layers when available.</p>
+                </div>
+              )}
+            </div>
+            {devActivityLayer && (
+              <span className="border-l border-line px-2 text-[10.5px] text-muted">Activity layer: see parcel panel counts</span>
+            )}
+            {watchedSitesLayer && (
+              <span className="text-[10.5px] text-muted">Watched sites: open Watching / Sites</span>
+            )}
           </div>
           <div className="pointer-events-auto ml-auto flex items-center gap-2 rounded-[3px] border border-line bg-white px-2.5 py-1.5 shadow-sm">
             {load.cadastreStatus === "unavailable" ? <Badge tone="bad">Cadastre unavailable</Badge> : <LiveDataBadge cached={load.cadastreStatus === "cached"} />}

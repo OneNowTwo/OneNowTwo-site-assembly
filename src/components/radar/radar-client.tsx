@@ -40,9 +40,13 @@ export function RadarClient() {
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
       <div>
-        <h1 className="text-[22px] font-semibold tracking-tight">Opportunity Radar</h1>
+        <h1 className="text-[22px] font-semibold tracking-tight">Precinct radar</h1>
         <p className="mt-1 max-w-2xl text-[13px] text-muted">
-          Where should you search next? Precincts are ranked from official nominated centres (Housing SEPP Town Centres Map) and live EPI parcel samples — not vague “untapped suburb” guesses.
+          Legacy precinct ranking from nominated centres and EPI samples. For site-level search with proposed-planning filters, use{" "}
+          <Link href="/find" className="font-semibold text-brand hover:underline">
+            Find
+          </Link>
+          .
         </p>
       </div>
 
