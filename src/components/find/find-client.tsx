@@ -110,7 +110,7 @@ export function FindClient() {
             <Field label="Suburb / centre">
               <input
                 className="w-full rounded-[3px] border border-line px-2 py-1.5 text-[13px]"
-                placeholder="e.g. Ashfield, Edgecliff, Parramatta"
+                placeholder="Any Greater Sydney suburb or LGA"
                 value={suburb}
                 onChange={(e) => setSuburb(e.target.value)}
               />

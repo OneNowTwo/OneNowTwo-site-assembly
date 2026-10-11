@@ -212,14 +212,21 @@ export function aggregateIntelligenceStories(
       .replace(/\s{2,}/g, " ")
       .trim();
 
-    const matchingHint =
-      profile.strategy === "APARTMENTS"
-        ? "Ranked for apartment density / FSR / height pathways."
-        : profile.strategy === "TOWNHOUSES"
-          ? "Ranked for lower-density / townhouse pathways."
-          : profile.strategy === "CO_LIVING"
-            ? "Ranked for transport-proximate co-living pathways."
-            : "Relevant to your selected strategy.";
+    const siteCount = affected || keySiteCount || group.length;
+    let whyItMatters: string;
+    if (sk === "KEY_SITE_PROGRAM" && keySiteCount >= 2) {
+      whyItMatters = `${keySiteCount} key-site signals in ${location ?? "this area"}. ${siteCount} parcels/sites in the change cluster — review assemblies that match ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`;
+    } else if (sk === "PLANNING_UPDATE") {
+      const nv = asRecord(head.newValue);
+      const fsr = nv && typeof nv.fsr === "number" ? nv.fsr : null;
+      whyItMatters = fsr != null
+        ? `Proposed FSR now ${fsr}. Check indexed sites in ${location ?? "the area"} against your ${profile.strategy.replaceAll("_", " ").toLowerCase()} filters.`
+        : `Material planning controls changed in ${location ?? "Greater Sydney"}. ${siteCount} related signals in this cluster.`;
+    } else if (sk === "DEVELOPMENT_ACTIVITY") {
+      whyItMatters = `Development activity update near ${location ?? "Greater Sydney"} — may affect nearby acquisition timing or competition.`;
+    } else {
+      whyItMatters = `Material change with ${siteCount} related signal${siteCount === 1 ? "" : "s"} for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`;
+    }
 
     stories.push({
       id: `story:${key}`,
@@ -228,7 +235,7 @@ export function aggregateIntelligenceStories(
       summary,
       locationLabel: location,
       whatChanged: summary,
-      whyItMatters: matchingHint,
+      whyItMatters,
       affectedSiteCount: affected || (keySiteCount || null),
       eventCount: group.length,
       date: (typeof head.createdAt === "string" ? head.createdAt : head.createdAt.toISOString()).slice(0, 10),

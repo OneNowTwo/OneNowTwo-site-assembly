@@ -1,6 +1,9 @@
 /**
- * Internal Sydney source-coverage matrix (admin/diagnostics — not developer UI).
+ * Complete Greater Sydney source-coverage matrix — every LGA in the selected market.
+ * Statuses reflect actual source capability (not optimistic labels).
  */
+
+import { GREATER_SYDNEY_LGAS } from "./greater-sydney-lgas";
 
 export type CoverageStatus = "LIVE" | "PARTIAL" | "NOT_YET_CONNECTED";
 
@@ -22,148 +25,44 @@ export type LgaCoverageRow = {
   notes?: string;
 };
 
-const ALL_LIVE_BASE: Record<CoverageCategory, CoverageStatus> = {
-  CURRENT_PLANNING: "LIVE",
-  PROPOSED_PLANNING: "PARTIAL",
-  KEY_SITE_DETAIL: "PARTIAL",
-  DCP_DETAIL: "NOT_YET_CONNECTED",
-  DA: "NOT_YET_CONNECTED",
-  HDA: "PARTIAL",
-  SSD: "PARTIAL",
-  SALES: "LIVE",
-  MARKET: "PARTIAL",
-};
+/** Statewide layers available everywhere; richer proposed/key-site only where adapters exist. */
+function baseCategories(opts?: {
+  proposed?: CoverageStatus;
+  keySite?: CoverageStatus;
+  hda?: CoverageStatus;
+  ssd?: CoverageStatus;
+}): Record<CoverageCategory, CoverageStatus> {
+  return {
+    CURRENT_PLANNING: "LIVE", // NSW EPI statewide
+    PROPOSED_PLANNING: opts?.proposed ?? "PARTIAL", // statewide PPR partial geometry
+    KEY_SITE_DETAIL: opts?.keySite ?? "PARTIAL",
+    DCP_DETAIL: "NOT_YET_CONNECTED",
+    DA: "NOT_YET_CONNECTED", // needs NSW_ONLINE_DA_SUBSCRIPTION_KEY
+    HDA: opts?.hda ?? "PARTIAL",
+    SSD: opts?.ssd ?? "PARTIAL",
+    SALES: "LIVE", // NSW registered sales
+    MARKET: "PARTIAL",
+  };
+}
 
-/** Representative Greater Sydney LGAs — expand as adapters land. */
-export const SYDNEY_COVERAGE_MATRIX: LgaCoverageRow[] = [
-  {
-    lga: "Inner West",
-    region: "Inner",
-    categories: {
-      ...ALL_LIVE_BASE,
-      PROPOSED_PLANNING: "LIVE",
-      KEY_SITE_DETAIL: "LIVE",
-    },
-    notes: "Adopted planning layers + key sites enricher",
-  },
-  {
-    lga: "Woollahra",
-    region: "East",
-    categories: {
-      ...ALL_LIVE_BASE,
-      PROPOSED_PLANNING: "LIVE",
-      KEY_SITE_DETAIL: "LIVE",
-    },
-    notes: "Edgecliff corridor adapters (dataset, not product default)",
-  },
-  {
-    lga: "Northern Beaches",
-    region: "North",
-    categories: { ...ALL_LIVE_BASE },
-    notes: "Current EPI + sales; proposed via statewide PPR",
-  },
-  {
-    lga: "North Sydney",
-    region: "North",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Mosman",
-    region: "North",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "City of Sydney",
-    region: "Inner",
-    categories: { ...ALL_LIVE_BASE, SSD: "LIVE" },
-  },
-  {
-    lga: "Bayside",
-    region: "South",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Georges River",
-    region: "South",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Canterbury-Bankstown",
-    region: "South-west",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Parramatta",
-    region: "West",
-    categories: { ...ALL_LIVE_BASE, SSD: "LIVE", HDA: "LIVE" },
-  },
-  {
-    lga: "Blacktown",
-    region: "West",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Penrith",
-    region: "West",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Sutherland Shire",
-    region: "South",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Ryde",
-    region: "North-west",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Willoughby",
-    region: "North",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Canada Bay",
-    region: "Inner west",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Burwood",
-    region: "Inner west",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Strathfield",
-    region: "Inner west",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Randwick",
-    region: "East",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Waverley",
-    region: "East",
-    categories: { ...ALL_LIVE_BASE },
-  },
-  {
-    lga: "Statewide / NSW",
-    region: "NSW",
-    categories: {
-      CURRENT_PLANNING: "LIVE",
-      PROPOSED_PLANNING: "PARTIAL",
-      KEY_SITE_DETAIL: "PARTIAL",
-      DCP_DETAIL: "NOT_YET_CONNECTED",
-      DA: "NOT_YET_CONNECTED",
-      HDA: "PARTIAL",
-      SSD: "PARTIAL",
-      SALES: "LIVE",
-      MARKET: "PARTIAL",
-    },
-    notes: "EPI + PPR + HDA/SSD adapters; DA needs NSW_ONLINE_DA_SUBSCRIPTION_KEY",
-  },
-];
+const RICH_PROPOSED = new Set(["Inner West", "Woollahra"]);
+
+export const SYDNEY_COVERAGE_MATRIX: LgaCoverageRow[] = GREATER_SYDNEY_LGAS.map((lga) => {
+  const rich = RICH_PROPOSED.has(lga.name);
+  return {
+    lga: lga.name,
+    region: lga.region,
+    categories: baseCategories({
+      proposed: rich ? "LIVE" : "PARTIAL",
+      keySite: rich ? "LIVE" : "PARTIAL",
+      hda: lga.region === "Central River City" || lga.name === "City of Sydney" ? "LIVE" : "PARTIAL",
+      ssd: lga.name === "City of Sydney" || lga.name === "Parramatta" ? "LIVE" : "PARTIAL",
+    }),
+    notes: rich
+      ? "Council/state adapter provides richer proposed controls / key sites"
+      : "Current EPI + sales LIVE; proposed via statewide PPR (partial); DA not connected without API key",
+  };
+});
 
 export function coverageSummary(matrix: LgaCoverageRow[] = SYDNEY_COVERAGE_MATRIX) {
   const cats: CoverageCategory[] = [
@@ -180,9 +79,7 @@ export function coverageSummary(matrix: LgaCoverageRow[] = SYDNEY_COVERAGE_MATRI
   const summary: Record<CoverageCategory, Record<CoverageStatus, number>> = {} as never;
   for (const c of cats) {
     summary[c] = { LIVE: 0, PARTIAL: 0, NOT_YET_CONNECTED: 0 };
-    for (const row of matrix) {
-      summary[c][row.categories[c]]++;
-    }
+    for (const row of matrix) summary[c][row.categories[c]]++;
   }
   return { lgaCount: matrix.length, byCategory: summary, matrix };
 }

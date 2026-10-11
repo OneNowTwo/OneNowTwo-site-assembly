@@ -653,6 +653,28 @@ enum IntelligenceStoryKind {
   OTHER
 }
 
+enum SydneyIndexRunStatus {
+  QUEUED
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+enum SydneyIndexBatchStatus {
+  QUEUED
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+/// Provenance of a SiteCandidateIndex row — discovery universe vs enrichment.
+enum CandidateProvenance {
+  INDEX_DISCOVERY
+  USER_ANALYSED
+  KEY_SITE
+  PLANNING_CHANGE
+}
+
 enum IntelChangeKind {
   PLANNING_PROPOSAL_CREATED
   PLANNING_STATUS_CHANGED
@@ -845,6 +867,10 @@ model SiteCandidateIndex {
   strategyScores             Json?
   sourceRefs                 Json?
   opportunityId              String?
+  /// How this candidate entered the index — INDEX_DISCOVERY is the Sydney scan universe.
+  provenance                 CandidateProvenance @default(INDEX_DISCOVERY)
+  indexRunId                 String?
+  indexBatchId               String?
   lastEvaluatedAt            DateTime?
   lifecycleStatus            ProductRecordStatus @default(ACTIVE)
   createdAt                  DateTime            @default(now())
@@ -853,7 +879,55 @@ model SiteCandidateIndex {
   @@index([lifecycleStatus, quickScore])
   @@index([lga, suburb])
   @@index([kind])
+  @@index([provenance])
+  @@index([indexRunId])
   @@index([lastEvaluatedAt])
+}
+
+/// Progressive Greater Sydney indexing run (checkpointed batches).
+model SydneyIndexRun {
+  id               String               @id @default(cuid())
+  marketScope      String               @default("sydney-metro")
+  status           SydneyIndexRunStatus @default(QUEUED)
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  totalBatches     Int                  @default(0)
+  completedBatches Int                  @default(0)
+  failedBatches    Int                  @default(0)
+  parcelsProcessed Int                  @default(0)
+  candidateCount   Int                  @default(0)
+  error            String?
+  notes            Json?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  batches          SydneyIndexBatch[]
+
+  @@index([status, createdAt])
+  @@index([marketScope, status])
+}
+
+model SydneyIndexBatch {
+  id                  String                  @id @default(cuid())
+  runId               String
+  run                 SydneyIndexRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  lga                 String
+  region              String?
+  /// Tile bbox {west,south,east,north}.
+  bbox                Json
+  tileKey             String
+  status              SydneyIndexBatchStatus  @default(QUEUED)
+  attempts            Int                     @default(0)
+  parcelsLoaded       Int                     @default(0)
+  candidatesGenerated Int                     @default(0)
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  error               String?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  @@unique([runId, tileKey])
+  @@index([runId, status])
+  @@index([lga, status])
 }
 
 /// Proposed / pending planning change area (never treated as current LEP law).

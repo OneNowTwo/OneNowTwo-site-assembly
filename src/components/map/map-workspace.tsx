@@ -1105,7 +1105,7 @@ export function MapWorkspace({
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search address or suburb — e.g. Neutral Bay NSW"
+                placeholder="Search any Sydney address or suburb"
                 className="h-9 flex-1 px-3 outline-none"
                 aria-label="Search address or suburb"
               />

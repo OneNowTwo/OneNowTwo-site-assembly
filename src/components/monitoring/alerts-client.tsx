@@ -14,8 +14,8 @@ type Rule = {
 
 export function AlertsClient() {
   const [rules, setRules] = useState<Rule[]>([]);
-  const [name, setName] = useState("Manly Vale score > 75");
-  const [suburb, setSuburb] = useState("Manly Vale");
+  const [name, setName] = useState("Apartment score > 75");
+  const [suburb, setSuburb] = useState("");
   const [minScore, setMinScore] = useState("75");
   const [minHeadroom, setMinHeadroom] = useState("1000000");
   const [error, setError] = useState<string | null>(null);

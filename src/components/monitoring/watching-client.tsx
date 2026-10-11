@@ -114,7 +114,7 @@ export function WatchingClient() {
             <input
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. Manly Vale or 6–8 Pitt Street"
+              placeholder="Any Sydney suburb or address"
               className="h-8 w-full rounded-[3px] border border-line bg-white px-2 text-[12.5px] outline-none focus:border-brand"
             />
           </div>

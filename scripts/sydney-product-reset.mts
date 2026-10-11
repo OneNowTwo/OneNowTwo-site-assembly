@@ -1,30 +1,26 @@
 /**
- * Production reset helper (run AFTER DB backup):
- *   npx tsx scripts/sydney-product-reset.mts --dry-run
- *   npx tsx scripts/sydney-product-reset.mts --apply
+ * Historical cleanup helper.
+ * Default is DRY-RUN only. Apply requires --allow-apply after human review.
  *
- * Archives duplicate Opportunities, retires fixture/baseline intel noise,
- * refreshes SiteCandidateIndex. Does not delete engines or source config.
+ *   npx tsx scripts/sydney-product-reset.mts --dry-run
+ *   npx tsx scripts/sydney-product-reset.mts --allow-apply
  */
 
 import "dotenv/config";
-import { applyArchiveDedupe } from "../src/lib/intelligence/archive-dedupe";
-import { refreshSiteCandidateIndexFromKnownEntities } from "../src/lib/intelligence/site-candidate-index";
+import { applyArchiveDedupe, buildHistoricalRecordsToArchive } from "../src/lib/intelligence/archive-dedupe";
 import { prisma } from "../src/lib/db";
 
 async function main() {
-  const apply = process.argv.includes("--apply");
-  const dryRun = !apply;
+  const allowApply = process.argv.includes("--allow-apply");
+  const dryRun = !allowApply;
 
-  console.log(dryRun ? "DRY RUN — no writes" : "APPLYING archive/dedupe…");
-  const result = await applyArchiveDedupe({ dryRun });
-  console.log(JSON.stringify(result.plan, null, 2));
+  console.log(dryRun ? "DRY RUN — no writes (pass --allow-apply after human review)" : "APPLYING archive…");
+  const historical = await buildHistoricalRecordsToArchive();
+  console.log(JSON.stringify(historical.summary, null, 2));
+  console.log(`records=${historical.records.length}`);
 
-  if (!dryRun) {
-    const refreshed = await refreshSiteCandidateIndexFromKnownEntities({ includeOpportunities: true });
-    const count = await prisma.siteCandidateIndex.count({ where: { lifecycleStatus: "ACTIVE" } });
-    console.log(`SiteCandidateIndex upserts=${refreshed.upserted} active=${count}`);
-  }
+  const result = await applyArchiveDedupe({ dryRun, allowApply });
+  console.log(JSON.stringify({ applied: result.applied }, null, 2));
 }
 
 main()

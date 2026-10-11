@@ -11,6 +11,11 @@ import { profileForStrategy } from "@/lib/source-watcher/strategy-profile";
 import { canonicalParcelKey } from "@/lib/intelligence/canonical-key";
 import { coverageSummary, SYDNEY_COVERAGE_MATRIX } from "@/lib/intelligence/sydney-coverage";
 import { getMarketScope } from "@/lib/market-scope";
+import {
+  GREATER_SYDNEY_LGAS,
+  buildSydneyIndexBatchPlan,
+  GREATER_SYDNEY_LGA_COUNT,
+} from "@/lib/intelligence/greater-sydney-lgas";
 
 describe("Sydney product reset — material change rules", () => {
   it("SOURCE_DOCUMENT_CHANGED with only hash churn is not material", () => {
@@ -207,11 +212,13 @@ describe("Sydney product reset — canonical identity + coverage + market scope"
     );
   });
 
-  it("coverage matrix covers Greater Sydney LGAs with statuses", () => {
+  it("coverage matrix covers every Greater Sydney LGA", () => {
     const summary = coverageSummary();
-    expect(summary.lgaCount).toBeGreaterThanOrEqual(10);
+    expect(summary.lgaCount).toBeGreaterThanOrEqual(30);
     expect(SYDNEY_COVERAGE_MATRIX.some((r) => r.lga === "Inner West")).toBe(true);
-    expect(summary.byCategory.CURRENT_PLANNING.LIVE).toBeGreaterThan(0);
+    expect(SYDNEY_COVERAGE_MATRIX.some((r) => r.lga === "Parramatta")).toBe(true);
+    expect(SYDNEY_COVERAGE_MATRIX.some((r) => r.lga === "Northern Beaches")).toBe(true);
+    expect(summary.byCategory.CURRENT_PLANNING.LIVE).toBe(summary.lgaCount);
     expect(summary.byCategory.DA.NOT_YET_CONNECTED).toBeGreaterThan(0);
   });
 
@@ -219,5 +226,14 @@ describe("Sydney product reset — canonical identity + coverage + market scope"
     expect(getMarketScope("sydney-metro").headerLabel).toBe("NSW · Sydney metro");
     expect(getMarketScope("newcastle").headerLabel).toContain("Newcastle");
     expect(getMarketScope(null).id).toBe("sydney-metro");
+  });
+
+  it("Greater Sydney batch plan covers all LGAs with tiles", () => {
+    expect(GREATER_SYDNEY_LGA_COUNT).toBe(GREATER_SYDNEY_LGAS.length);
+    expect(GREATER_SYDNEY_LGA_COUNT).toBeGreaterThanOrEqual(30);
+    const plan = buildSydneyIndexBatchPlan();
+    expect(plan.length).toBeGreaterThan(GREATER_SYDNEY_LGA_COUNT);
+    const lgas = new Set(plan.map((p) => p.lga));
+    expect(lgas.size).toBe(GREATER_SYDNEY_LGA_COUNT);
   });
 });

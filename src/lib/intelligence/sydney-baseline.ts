@@ -1,69 +1,75 @@
 /**
- * Sydney-wide baseline job — establish Source Watcher baselines + SiteCandidateIndex batches.
- * Heavy work is background/cron; Today never crawls Sydney on page load.
+ * Sydney baseline orchestrator:
+ * PHASE A — source baseline (optional)
+ * PHASE B/C — create/continue SydneyIndexRun batches
+ * PHASE D — aggregate stats + persist IntelligenceStory
+ * PHASE E — mark ready when batches complete
+ *
+ * Archive apply is NEVER automatic — dry-run only unless allowArchiveApply.
  */
 
-import { prisma } from "@/lib/db";
 import { ensureSourceRegistry, runPersistedSourceWatcher } from "@/lib/source-watcher/persist";
-import { refreshSiteCandidateIndexFromKnownEntities } from "./site-candidate-index";
-import { applyArchiveDedupe } from "./archive-dedupe";
+import { applyArchiveDedupe, buildHistoricalRecordsToArchive } from "./archive-dedupe";
+import { runSydneyIndexCron, getSydneyIndexMetrics, type IndexCronResult } from "./sydney-index-pipeline";
+import { persistIntelligenceStories } from "./persist-stories";
+import { enrichIndexFromActiveOpportunities } from "./site-candidate-index";
 
-// Note: run purpose for SourceRun is resolved inside persist.ts (avoids circular imports).
-
-export type SydneyBaselineResult = {
-  ok: boolean;
-  archiveApplied: boolean;
+export type SydneyBaselineResult = IndexCronResult & {
+  archiveDryRunOnly: boolean;
   sourcesBaselined: number;
-  candidateUpserts: number;
-  candidateCount: number;
-  notes: string[];
+  storiesUpserted: number;
+  historicalRecordCount: number;
 };
 
-/**
- * Full baseline sequence (safe to re-run):
- * 1. Archive/dedupe historic test noise
- * 2. Ensure registry
- * 3. Run source watcher — first snapshots become BASELINE (no Today pollution)
- * 4. Refresh SiteCandidateIndex from known entities
- */
 export async function runSydneyBaseline(opts?: {
   skipWatcher?: boolean;
+  /** Default true — never apply archive without explicit human approval. */
   dryRunArchive?: boolean;
+  allowArchiveApply?: boolean;
+  batchesPerInvoke?: number;
 }): Promise<SydneyBaselineResult> {
+  const dryRunArchive = opts?.dryRunArchive !== false && !opts?.allowArchiveApply;
   const notes: string[] = [];
 
-  const archive = await applyArchiveDedupe({ dryRun: opts?.dryRunArchive ?? false });
+  // Archive: dry-run by default; never silently archive on cron.
+  const archive = await applyArchiveDedupe({
+    dryRun: dryRunArchive,
+    allowApply: opts?.allowArchiveApply === true,
+  });
+  const historical = archive.historicalRecords ?? (await buildHistoricalRecordsToArchive());
   notes.push(
-    `Archive/dedupe: ${archive.plan.duplicateOpportunityGroups.length} duplicate groups, ${archive.plan.fixtureIntelIds.length} fixture intel, ${archive.plan.baselineBootstrapIds.length} baseline events`,
+    dryRunArchive
+      ? `Archive DRY-RUN: ${historical.records.length} records listed for human review`
+      : `Archive APPLIED: ${historical.records.length} records`,
   );
-
-  await ensureSourceRegistry();
 
   let sourcesBaselined = 0;
   if (!opts?.skipWatcher) {
-    // Mark sources with no prior snapshot — their next run is baseline purpose
-    const registries = await prisma.sourceRegistry.findMany({
-      where: { enabled: true },
-      select: { id: true, lastContentHash: true },
-    });
-    const firstTimers = registries.filter((r) => !r.lastContentHash).map((r) => r.id);
-    notes.push(`${firstTimers.length} sources without prior snapshot (baseline candidates)`);
-
+    await ensureSourceRegistry();
     const watcher = await runPersistedSourceWatcher();
     sourcesBaselined = watcher.sourcesRun;
-    notes.push(`Source watcher pass: ${watcher.sourcesRun} sources, ${watcher.eventsCreated} events`);
+    notes.push(`Source watcher: ${watcher.sourcesRun} sources, ${watcher.eventsCreated} events`);
   }
 
-  const refreshed = await refreshSiteCandidateIndexFromKnownEntities({ includeOpportunities: true });
-  const candidateCount = await prisma.siteCandidateIndex.count({ where: { lifecycleStatus: "ACTIVE" } });
-  notes.push(`SiteCandidateIndex upserts=${refreshed.upserted}, active=${candidateCount}`);
+  // Progressive Sydney parcel/assembly index — NOT Opportunities/KeySites.
+  const index = await runSydneyIndexCron({ batchesPerInvoke: opts?.batchesPerInvoke ?? 5 });
+  notes.push(...index.notes);
+
+  const stories = await persistIntelligenceStories();
+  notes.push(`IntelligenceStory upserts=${stories.upserted}`);
+
+  // Enrich only — never create discovery from user analyses.
+  const enriched = await enrichIndexFromActiveOpportunities();
+  notes.push(`Opportunity enrichments on index rows=${enriched.enriched}`);
 
   return {
-    ok: true,
-    archiveApplied: archive.applied,
+    ...index,
+    notes: [...notes, ...index.notes],
+    archiveDryRunOnly: dryRunArchive,
     sourcesBaselined,
-    candidateUpserts: refreshed.upserted,
-    candidateCount,
-    notes,
+    storiesUpserted: stories.upserted,
+    historicalRecordCount: historical.records.length,
   };
 }
+
+export { getSydneyIndexMetrics, buildHistoricalRecordsToArchive };

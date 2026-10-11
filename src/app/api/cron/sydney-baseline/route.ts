@@ -5,8 +5,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * Sydney baseline + SiteCandidateIndex refresh.
- * Auth: CRON_SECRET bearer (same pattern as other crons).
+ * Sydney baseline cron — START / CONTINUE / COMPLETE.
+ * Processes a bounded number of index batches per call.
+ * Archive apply is NEVER automatic (dry-run only).
  */
 export async function POST(req: Request) {
   const secret = process.env.CRON_SECRET;
@@ -16,7 +17,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
-  const result = await runSydneyBaseline({ skipWatcher: false });
+  const url = new URL(req.url);
+  const batches = Number(url.searchParams.get("batches") ?? "5");
+  const skipWatcher = url.searchParams.get("skipWatcher") === "1";
+  const result = await runSydneyBaseline({
+    skipWatcher,
+    dryRunArchive: true,
+    batchesPerInvoke: Number.isFinite(batches) ? Math.min(Math.max(batches, 1), 15) : 5,
+  });
   return NextResponse.json(result);
 }
 
