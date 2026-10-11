@@ -16,6 +16,8 @@
     "db:seed": "tsx prisma/seed.mts",
     "db:reset-demo": "tsx prisma/seed.mts --reset",
     "demo:snapshot": "tsx scripts/snapshot-demo-parcels.mts",
+    "sydney:reset:dry": "tsx scripts/sydney-product-reset.mts --dry-run",
+    "sydney:reset:apply": "tsx scripts/sydney-product-reset.mts --apply",
     "auth:hash": "node scripts/hash-password.mjs",
     "postinstall": "prisma generate"
   },

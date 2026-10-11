@@ -32,11 +32,13 @@ import {
   scanReturnedSufficientParcels,
   shouldSilentSoftFailTransient,
 } from "@/lib/map-parcel-refresh";
+import { SYDNEY_METRO_START, type MapTarget, bboxFromGeometry } from "@/lib/map/map-target";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
 const MIN_PARCEL_ZOOM = 17;
-const DEFAULT_START = { lat: -33.8362, lng: 151.2176, zoom: 18 };
+/** Greater Sydney overview — not a historic test suburb. */
+const DEFAULT_START = { ...SYDNEY_METRO_START };
 
 /** Wall clock outside the component so React Compiler does not treat map handlers as impure render. */
 function nowMs(): number {
@@ -129,11 +131,14 @@ export function MapWorkspace({
   assumptions,
   initialScanQuery = null,
   mapVisible = true,
+  mapTarget = null,
 }: {
   assumptions: Assumptions;
   initialScanQuery?: string | null;
   /** False while the persistent shell keeps the map mounted but hidden under another tab. */
   mapVisible?: boolean;
+  /** Deep-link target from /map?... — applied via effects without remounting Leaflet. */
+  mapTarget?: MapTarget | null;
 }) {
   const router = useRouter();
   const start = useMemo(() => initialMapStart(), []);
@@ -156,6 +161,15 @@ export function MapWorkspace({
   const [moreLayersOpen, setMoreLayersOpen] = useState(false);
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
   const [query, setQuery] = useState(() => initialScanQuery ?? loadMapState()?.query ?? restoredScan?.query ?? "");
+  const [targetPanel, setTargetPanel] = useState<{
+    kind: string;
+    title: string;
+    summary?: string | null;
+    href?: string | null;
+  } | null>(null);
+  const appliedTargetKeyRef = useRef<string | null>(null);
+  const mapTargetRef = useRef<MapTarget | null>(null);
+  mapTargetRef.current = mapTarget;
   const [results, setResults] = useState<GeocodeResult[] | null>(null);
   const [geoMessage, setGeoMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -257,11 +271,13 @@ export function MapWorkspace({
         // Only rewrite the URL while the map route is active — otherwise the
         // always-mounted MapWorkspace steals Today/Find/Sites/Pipeline deep links.
         if (typeof window !== "undefined" && window.location.pathname === "/map") {
-          const params = new URLSearchParams();
+          const params = new URLSearchParams(window.location.search);
           params.set("lat", view.lat.toFixed(5));
           params.set("lng", view.lng.toFixed(5));
           params.set("zoom", String(Math.round(view.zoom * 10) / 10));
           if (query.trim()) params.set("scan", query.trim());
+          else params.delete("scan");
+          // Preserve MapTarget entity params (pca, keySite, parcelId, …) across pan/zoom.
           window.history.replaceState(null, "", `/map?${params.toString()}`);
         }
       } catch {
@@ -888,6 +904,159 @@ export function MapWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialScanQuery]);
 
+  /**
+   * Apply MapTarget deep links while MapWorkspace stays mounted across tabs.
+   * Entity targets (PCA / key site / opportunity / parcel / activity) always win over last view.
+   */
+  useEffect(() => {
+    if (!mapVisible || !mapTarget) return;
+    if (appliedTargetKeyRef.current === mapTarget.key) return;
+    appliedTargetKeyRef.current = mapTarget.key;
+
+    let cancelled = false;
+
+    const flyBBox = (bbox: BBox, zoom?: number) => {
+      const lat = (bbox.south + bbox.north) / 2;
+      const lng = (bbox.west + bbox.east) / 2;
+      setFlyTo({ lat, lng, zoom, bbox, nonce: nowMs() });
+      mapViewRef.current = { lat, lng, zoom: zoom ?? mapViewRef.current.zoom };
+    };
+
+    void (async () => {
+      if (mapTarget.kind === "POINT" && mapTarget.lat != null && mapTarget.lng != null) {
+        setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 16, nonce: nowMs() });
+        setTargetPanel({ kind: "POINT", title: "Map location" });
+        return;
+      }
+
+      if (mapTarget.kind === "BBOX" && mapTarget.bbox) {
+        flyBBox(mapTarget.bbox, mapTarget.zoom);
+        setTargetPanel({ kind: "BBOX", title: "Map area" });
+        return;
+      }
+
+      if (mapTarget.kind === "PARCEL" && mapTarget.parcelId) {
+        if (mapTarget.lat != null && mapTarget.lng != null) {
+          setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 18, nonce: nowMs() });
+        }
+        setSelectedId(mapTarget.parcelId);
+        setTargetPanel({ kind: "PARCEL", title: mapTarget.parcelId });
+        return;
+      }
+
+      if (mapTarget.kind === "DEVELOPMENT_ACTIVITY") {
+        if (mapTarget.lat != null && mapTarget.lng != null) {
+          setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 16, nonce: nowMs() });
+        }
+        setDevActivityLayer(true);
+        setTargetPanel({
+          kind: "DEVELOPMENT_ACTIVITY",
+          title: "Development activity",
+          summary: mapTarget.activityId ?? null,
+        });
+        return;
+      }
+
+      if (mapTarget.kind === "OPPORTUNITY" && mapTarget.opportunityId) {
+        try {
+          const body = await fetchApiJson<{
+            id: string;
+            name: string;
+            lots?: Array<{ externalParcelId: string; centroid: [number, number]; included?: boolean }>;
+          }>(`/api/opportunities/${mapTarget.opportunityId}`);
+          if (cancelled) return;
+          const lots = (body.lots ?? []).filter((l) => l.included !== false);
+          const ids = lots.map((l) => l.externalParcelId);
+          if (ids.length) {
+            setAssembly(ids);
+            setSelectedId(ids[0] ?? null);
+            // LotDTO.centroid is [lng, lat]
+            const lngs = lots.map((l) => l.centroid[0]);
+            const lats = lots.map((l) => l.centroid[1]);
+            if (lats.length && lngs.length) {
+              const bbox = {
+                west: Math.min(...lngs) - 0.001,
+                south: Math.min(...lats) - 0.001,
+                east: Math.max(...lngs) + 0.001,
+                north: Math.max(...lats) + 0.001,
+              };
+              flyBBox(bbox, 18);
+            }
+          } else if (mapTarget.lat != null && mapTarget.lng != null) {
+            setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 18, nonce: nowMs() });
+          }
+          setTargetPanel({
+            kind: "OPPORTUNITY",
+            title: body.name,
+            href: `/opportunities/${body.id}`,
+          });
+        } catch {
+          if (mapTarget.lat != null && mapTarget.lng != null) {
+            setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 17, nonce: nowMs() });
+          }
+          setTargetPanel({ kind: "OPPORTUNITY", title: "Site", href: `/opportunities/${mapTarget.opportunityId}` });
+        }
+        return;
+      }
+
+      if (mapTarget.kind === "PLANNING_AREA" || mapTarget.kind === "KEY_SITE") {
+        setProposedPlanning(true);
+        try {
+          const resolved = await fetchApiJson<{
+            kind: string;
+            title: string;
+            summary?: string | null;
+            sourceUrl?: string | null;
+            bbox?: BBox | null;
+            geometry?: unknown;
+            requiredParcelIds?: string[];
+            centroid?: { lat: number; lng: number } | null;
+          }>(
+            `/api/map/resolve-target?${new URLSearchParams({
+              ...(mapTarget.planningChangeAreaId ? { pca: mapTarget.planningChangeAreaId } : {}),
+              ...(mapTarget.keySiteId ? { keySite: mapTarget.keySiteId } : {}),
+            }).toString()}`,
+          );
+          if (cancelled) return;
+          const bbox = resolved.bbox ?? bboxFromGeometry(resolved.geometry);
+          if (bbox) flyBBox(bbox as BBox, mapTarget.kind === "KEY_SITE" ? 17 : 15);
+          else if (resolved.centroid) {
+            setFlyTo({
+              lat: resolved.centroid.lat,
+              lng: resolved.centroid.lng,
+              zoom: mapTarget.kind === "KEY_SITE" ? 17 : 15,
+              nonce: nowMs(),
+            });
+          } else if (mapTarget.lat != null && mapTarget.lng != null) {
+            setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 15, nonce: nowMs() });
+          }
+          if (resolved.requiredParcelIds?.length) {
+            setAssembly(resolved.requiredParcelIds);
+            setSelectedId(resolved.requiredParcelIds[0] ?? null);
+          }
+          setTargetPanel({
+            kind: resolved.kind,
+            title: resolved.title,
+            summary: resolved.summary,
+            href: resolved.sourceUrl,
+          });
+        } catch {
+          if (mapTarget.lat != null && mapTarget.lng != null) {
+            setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 15, nonce: nowMs() });
+          }
+          setTargetPanel({
+            kind: mapTarget.kind,
+            title: mapTarget.keySiteId ?? mapTarget.planningChangeAreaId ?? "Planning area",
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mapVisible, mapTarget]);
+
   const letters = "ABCDEFGH";
   const showZoomHint = load.zoom < MIN_PARCEL_ZOOM;
   const visibleFamilies = useMemo(() => {
@@ -1110,6 +1279,34 @@ export function MapWorkspace({
         )}
 
         <div className="p-4">
+          {targetPanel && !selected && (
+            <div className="mb-4 border border-brand/30 bg-brand-soft/40 px-3 py-3">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">
+                {targetPanel.kind.replaceAll("_", " ")}
+              </div>
+              <h2 className="mt-1 text-[15px] font-semibold text-ink">{targetPanel.title}</h2>
+              {targetPanel.summary && <p className="mt-1 text-[12px] text-muted">{targetPanel.summary}</p>}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {targetPanel.href && (
+                  <a
+                    href={targetPanel.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-[3px] border border-line bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+                  >
+                    Source
+                  </a>
+                )}
+                <button
+                  type="button"
+                  className="rounded-[3px] border border-line bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+                  onClick={() => setTargetPanel(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
           {selected ? (
             <ParcelPanel
               parcel={selected}

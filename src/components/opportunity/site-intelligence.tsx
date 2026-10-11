@@ -302,7 +302,10 @@ export function SiteIntelligence() {
         <Panel
           title="Assembly"
           actions={
-            <Link href={`/map?q=${encodeURIComponent(dto.name)}`} className="text-[11px] font-semibold text-brand hover:underline">
+            <Link
+              href={`/map?opportunityId=${encodeURIComponent(dto.id)}&pca=${encodeURIComponent(keyHit.planningChangeAreaId)}&keySite=${encodeURIComponent(keyHit.keySite.externalKeySiteId)}`}
+              className="text-[11px] font-semibold text-brand hover:underline"
+            >
               View on map
             </Link>
           }

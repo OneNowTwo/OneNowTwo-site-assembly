@@ -1,10 +1,18 @@
 import { prisma } from "@/lib/db";
-import type { IntelChangeKind, Prisma, SourceCategory, SourceTransport } from "@/generated/prisma/client";
+import type { IntelChangeKind, Prisma, SourceCategory, SourceRunPurpose, SourceTransport } from "@/generated/prisma/client";
 import { publishFeedItem } from "@/lib/monitoring/feed";
+import { classifyDiffMateriality } from "@/lib/intelligence/material-change";
 import { SOURCE_DEFINITIONS } from "./registry";
 import { runSourceOnce, type InMemorySnapshot, type SourceRunResult } from "./pipeline";
 import type { DiffEvent, NormalisedSourcePayload, PlanningChangeAreaFact } from "./types";
 import { linkEventsToWatches } from "./watch-link";
+
+async function resolveRunPurpose(sourceId: string): Promise<SourceRunPurpose> {
+  const prior = await prisma.sourceRun.count({
+    where: { sourceId, status: { in: ["SUCCEEDED", "UNCHANGED"] } },
+  });
+  return prior === 0 ? "BASELINE" : "REFRESH";
+}
 
 /** Ensure SourceRegistry rows exist for all definitions. */
 export async function ensureSourceRegistry(): Promise<number> {
@@ -57,11 +65,14 @@ async function loadPreviousSnapshot(sourceId: string): Promise<InMemorySnapshot 
 
 async function persistRun(result: SourceRunResult): Promise<{ snapshotId: string | null; eventsCreated: number }> {
   const startedAt = new Date();
+  const purpose = await resolveRunPurpose(result.sourceId);
+
   if (result.status === "FAILED" || result.status === "SKIPPED") {
     await prisma.sourceRun.create({
       data: {
         sourceId: result.sourceId,
         status: result.status === "FAILED" ? "FAILED" : "FAILED",
+        purpose,
         startedAt,
         finishedAt: new Date(),
         error: result.error ?? "skipped",
@@ -96,18 +107,33 @@ async function persistRun(result: SourceRunResult): Promise<{ snapshotId: string
     result.events.length && result.normalised
       ? await linkEventsToWatches(result.events, result.normalised)
       : result.events;
-  const eventsCreated = await persistEvents(result.sourceId, snapshotId, linkedEvents);
+
+  // First ingest = BASELINE — establish snapshot without flooding Today.
+  const runPurposeForEvents: SourceRunPurpose =
+    purpose === "BASELINE"
+      ? "BASELINE"
+      : linkedEvents.some((e) => classifyDiffMateriality(e).material)
+        ? "CHANGE"
+        : purpose;
+
+  const eventsCreated = await persistEvents(result.sourceId, snapshotId, linkedEvents, runPurposeForEvents);
 
   await prisma.sourceRun.create({
     data: {
       sourceId: result.sourceId,
       status: result.status === "UNCHANGED" ? "UNCHANGED" : "SUCCEEDED",
+      purpose: runPurposeForEvents,
       startedAt,
       finishedAt: new Date(),
       contentHash: result.contentHash,
       snapshotId,
       eventsCreated,
-      notes: result.status === "UNCHANGED" ? "content hash unchanged" : undefined,
+      notes:
+        runPurposeForEvents === "BASELINE"
+          ? "Sydney baseline ingest — not treated as changed-today"
+          : result.status === "UNCHANGED"
+            ? "content hash unchanged"
+            : undefined,
     },
   });
 
@@ -211,14 +237,23 @@ async function upsertPlanningAreas(normalised: NormalisedSourcePayload) {
   }
 }
 
-async function persistEvents(sourceId: string, snapshotId: string | null, events: DiffEvent[]): Promise<number> {
+async function persistEvents(
+  sourceId: string,
+  snapshotId: string | null,
+  events: DiffEvent[],
+  runPurpose: SourceRunPurpose = "REFRESH",
+): Promise<number> {
   let created = 0;
+  const fixtureSource = sourceId.startsWith("fixture-");
   for (const event of events) {
     try {
       const watchIds =
         event.payload && typeof event.payload === "object" && "watchItemIds" in (event.payload as object)
           ? ((event.payload as { watchItemIds?: string[] }).watchItemIds ?? [])
           : [];
+      const classified = classifyDiffMateriality(event);
+      const material = runPurpose === "BASELINE" ? false : classified.material;
+      const lifecycleStatus = fixtureSource ? "FIXTURE" : "ACTIVE";
       await prisma.intelChangeEvent.create({
         data: {
           kind: event.kind as IntelChangeKind,
@@ -235,23 +270,29 @@ async function persistEvents(sourceId: string, snapshotId: string | null, events
           href: event.href,
           importance: event.importance ?? 0,
           payload: (event.payload ?? undefined) as Prisma.InputJsonValue | undefined,
+          material,
+          lifecycleStatus,
+          runPurpose: runPurpose === "BASELINE" ? "BASELINE" : classified.runPurposeHint ?? runPurpose,
         },
       });
       created++;
-      await publishFeedItem({
-        kind: "PLANNING_CHANGE",
-        title: event.title,
-        summary: event.summary,
-        href: event.href ?? "/feed",
-        importance: (event.importance ?? 3) + 2,
-        payload: {
-          intelChangeKind: event.kind,
-          sourceId,
-          changeKey: event.changeKey,
-          affectedParcelHints: event.affectedParcelHints,
-          watchItemIds: watchIds,
-        },
-      });
+      // Feed: only material, non-fixture, non-baseline events
+      if (material && !fixtureSource) {
+        await publishFeedItem({
+          kind: "PLANNING_CHANGE",
+          title: event.title,
+          summary: event.summary,
+          href: event.href ?? "/feed",
+          importance: (event.importance ?? 3) + 2,
+          payload: {
+            intelChangeKind: event.kind,
+            sourceId,
+            changeKey: event.changeKey,
+            affectedParcelHints: event.affectedParcelHints,
+            watchItemIds: watchIds,
+          },
+        });
+      }
     } catch (err) {
       // Unique changeKey → duplicate suppressed on unchanged re-run races.
       const msg = err instanceof Error ? err.message : String(err);

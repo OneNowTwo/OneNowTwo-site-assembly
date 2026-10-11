@@ -7,6 +7,7 @@ import { fsr, money, sqm } from "@/lib/format";
 import { StrategySelector } from "@/components/strategy-selector";
 import type { DevelopmentStrategy } from "@/lib/source-watcher/strategy-profile";
 import { fetchApiJson } from "@/lib/api-json";
+import { buildMapHref } from "@/lib/map/map-target";
 
 type FindRow = {
   key: string;
@@ -28,6 +29,8 @@ type FindRow = {
   owners: number;
   whyMatched: Array<{ title: string; body: string }>;
   opportunityId: string | null;
+  lotIds?: string[];
+  bboxHint?: { west: number; south: number; east: number; north: number } | null;
 };
 
 export function FindClient() {
@@ -220,14 +223,20 @@ export function FindClient() {
                   >
                     View site
                   </Link>
-                ) : (
-                  <Link
-                    href={`/map?q=${encodeURIComponent(r.locationLabel)}`}
-                    className="rounded-[3px] bg-brand px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white"
-                  >
-                    View on map
-                  </Link>
-                )}
+                ) : null}
+                <Link
+                  href={buildMapHref({
+                    opportunityId: r.opportunityId,
+                    keySiteId: r.keySiteId,
+                    parcelId: r.lotIds?.[0] ?? null,
+                    bbox: r.bboxHint ?? null,
+                    scan: r.suburb || r.locationLabel,
+                    zoom: 17,
+                  })}
+                  className="rounded-[3px] bg-brand px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white"
+                >
+                  View on map
+                </Link>
                 <Link
                   href="/watching"
                   className="rounded-[3px] border border-line px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
