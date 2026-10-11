@@ -1,9 +1,24 @@
+/**
+ * DEVELOPMENT / PREVIEW ONLY.
+ * Never run as part of production deploy, cron, or Sydney baseline indexing.
+ * Guard: requires ALLOW_PREVIEW_SEED=1 and refuses NODE_ENV=production.
+ */
 import "dotenv/config";
 import { prisma } from "../src/lib/db";
 import { persistIntelligenceStories } from "../src/lib/intelligence/persist-stories";
 import { getSydneyIndexMetrics } from "../src/lib/intelligence/sydney-index-pipeline";
 
+function assertPreviewOnly() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_PREVIEW_SEED !== "1") {
+    throw new Error("seed-material-stories is preview-only — refused in production (set ALLOW_PREVIEW_SEED=1 only for local demos)");
+  }
+  if (process.env.ALLOW_PREVIEW_SEED !== "1") {
+    throw new Error("seed-material-stories refused — set ALLOW_PREVIEW_SEED=1 for local/preview use only");
+  }
+}
+
 async function main() {
+  assertPreviewOnly();
   const seeds = [
     {
       kind: "FSR_PROPOSED_CHANGE" as const,

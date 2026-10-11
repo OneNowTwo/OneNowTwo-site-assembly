@@ -16,6 +16,12 @@ import {
   buildSydneyIndexBatchPlan,
   GREATER_SYDNEY_LGA_COUNT,
 } from "@/lib/intelligence/greater-sydney-lgas";
+import { chooseScanBBox } from "@/lib/scan-service";
+import {
+  candidateBelongsToBatchLga,
+  normalizeLgaName,
+} from "@/lib/intelligence/sydney-index-pipeline";
+import { selectTopCandidatesForEnrichment } from "@/lib/intelligence/top-candidate-enrichment";
 
 describe("Sydney product reset — material change rules", () => {
   it("SOURCE_DOCUMENT_CHANGED with only hash churn is not material", () => {
@@ -235,5 +241,32 @@ describe("Sydney product reset — canonical identity + coverage + market scope"
     expect(plan.length).toBeGreaterThan(GREATER_SYDNEY_LGA_COUNT);
     const lgas = new Set(plan.map((p) => p.lga));
     expect(lgas.size).toBe(GREATER_SYDNEY_LGA_COUNT);
+  });
+});
+
+describe("Sydney index geography — lockBbox + actual LGA", () => {
+  it("lockBbox keeps Tile A even when suburbHint matches a centre elsewhere", () => {
+    const tileA = { west: 150.65, south: -33.78, east: 150.69, north: -33.74 }; // Penrith-ish tile
+    // Matched "Parramatta" nominated centre far from Tile A
+    const parramattaCentre = { lng: 151.001, lat: -33.815 };
+    const unlocked = chooseScanBBox({ bbox: tileA, matchedCentre: parramattaCentre });
+    expect(unlocked).not.toEqual(tileA);
+    const locked = chooseScanBBox({
+      bbox: tileA,
+      lockBbox: true,
+      matchedCentre: parramattaCentre,
+    });
+    expect(locked).toEqual(tileA);
+  });
+
+  it("never invents batch LGA when actual LGA is null; excludes conflicting actual LGA", () => {
+    expect(candidateBelongsToBatchLga(null, "Parramatta")).toBe(true);
+    expect(candidateBelongsToBatchLga("Cumberland", "Parramatta")).toBe(false);
+    expect(candidateBelongsToBatchLga("City of Parramatta", "Parramatta")).toBe(true);
+    expect(normalizeLgaName("CITY OF SYDNEY")).toBe("SYDNEY");
+  });
+
+  it("top-candidate enrichment selector is exported (scaffold)", () => {
+    expect(typeof selectTopCandidatesForEnrichment).toBe("function");
   });
 });

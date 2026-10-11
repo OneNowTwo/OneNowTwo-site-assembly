@@ -1,7 +1,22 @@
+/**
+ * DEVELOPMENT / PREVIEW ONLY.
+ * Never run as part of production deploy, cron, or Sydney baseline indexing.
+ * Guard: requires ALLOW_PREVIEW_SEED=1 and refuses NODE_ENV=production.
+ */
 import "dotenv/config";
 import { prisma } from "../src/lib/db";
 
+function assertPreviewOnly() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_PREVIEW_SEED !== "1") {
+    throw new Error("seed-map-entities is preview-only — refused in production (set ALLOW_PREVIEW_SEED=1 only for local demos)");
+  }
+  if (process.env.ALLOW_PREVIEW_SEED !== "1") {
+    throw new Error("seed-map-entities refused — set ALLOW_PREVIEW_SEED=1 for local/preview use only");
+  }
+}
+
 async function main() {
+  assertPreviewOnly();
   await prisma.planningChangeArea.upsert({
     where: { id: "seed-iw" },
     create: {

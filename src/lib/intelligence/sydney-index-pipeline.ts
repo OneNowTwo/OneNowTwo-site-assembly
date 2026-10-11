@@ -36,6 +36,36 @@ function asBBox(raw: unknown): BBox {
   return { west: b.west, south: b.south, east: b.east, north: b.north };
 }
 
+/** Normalize LGA labels for comparison (not for inventing geography). */
+export function normalizeLgaName(name: string | null | undefined): string {
+  if (!name) return "";
+  return name
+    .trim()
+    .toUpperCase()
+    .replace(/^CITY OF\s+/, "")
+    .replace(/\s+CITY$/, "")
+    .replace(/\s+COUNCIL$/, "")
+    .replace(/\s+SHIRE$/, "")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Batch LGA envelopes overlap — only keep candidates whose *actual* planning LGA
+ * matches the batch LGA. Null actual LGA is kept with lga=null (never invent batch.lga).
+ * Returns false when actual LGA is set and conflicts with the batch assignment.
+ */
+export function candidateBelongsToBatchLga(
+  actualLga: string | null | undefined,
+  batchLga: string,
+): boolean {
+  if (!actualLga) return true;
+  const a = normalizeLgaName(actualLga);
+  const b = normalizeLgaName(batchLga);
+  if (!a || !b) return true;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
 async function ensureActiveRun(marketScope = "sydney-metro") {
   const existing = await prisma.sydneyIndexRun.findFirst({
     where: { marketScope, status: { in: ["QUEUED", "RUNNING"] } },
@@ -79,11 +109,12 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
   try {
     const bbox = asBBox(batch.bbox);
     // Quick index: parcels + assemblies + planning attach — skip live AVM (not full feasibility).
+    // lockBbox: tile envelope is authoritative; never recentre via LGA/suburbHint.
     const scan = await scanArea({
       bbox,
-      suburbHint: batch.lga,
       maxResults: 24,
       skipValuation: true,
+      lockBbox: true,
     });
 
     let stations: Awaited<ReturnType<typeof fetchTrainStations>> = [];
@@ -103,6 +134,12 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
     for (const c of scan.candidates) {
       const key = canonicalParcelKey(c.lotIds);
       if (!key) continue;
+
+      // Actual parcel/candidate LGA only — never invent batch.lga as site geography.
+      const actualLga = c.lga?.trim() ? c.lga.trim() : null;
+      if (!candidateBelongsToBatchLga(actualLga, batch.lga)) {
+        continue;
+      }
 
       let proposedFsr: number | null = null;
       let proposedHeight: number | null = null;
@@ -172,7 +209,7 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
           parcelIds: c.lotIds as unknown as Prisma.InputJsonValue,
           address: c.locationLabel,
           suburb: c.suburb,
-          lga: c.lga ?? batch.lga,
+          lga: actualLga,
           zone: c.zone,
           siteAreaSqm: c.siteAreaSqm,
           lotCount: c.lotCount,
@@ -200,14 +237,14 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
           sourceRefs: {
             discovery: "SYDNEY_INDEX_BATCH",
             tileKey: batch.tileKey,
-            lga: batch.lga,
+            batchLga: batch.lga,
           } as unknown as Prisma.InputJsonValue,
         },
         update: {
           kind: c.lotCount > 1 ? "ASSEMBLY" : "PARCEL",
           address: c.locationLabel,
           suburb: c.suburb,
-          lga: c.lga ?? batch.lga,
+          lga: actualLga,
           zone: c.zone,
           siteAreaSqm: c.siteAreaSqm,
           lotCount: c.lotCount,
@@ -233,7 +270,7 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
           sourceRefs: {
             discovery: "SYDNEY_INDEX_BATCH",
             tileKey: batch.tileKey,
-            lga: batch.lga,
+            batchLga: batch.lga,
           } as unknown as Prisma.InputJsonValue,
         },
       });
@@ -408,6 +445,57 @@ export async function runSydneyIndexCron(opts?: {
     lgasTotal: GREATER_SYDNEY_LGA_COUNT,
     errors,
     notes,
+  };
+}
+
+/**
+ * Invalidate pre-lockBbox runs for acceptance and start a clean SydneyIndexRun.
+ * Archives prior INDEX_DISCOVERY candidates; does not hard-delete.
+ */
+export async function invalidatePriorRunsAndStartFresh(opts?: {
+  marketScope?: string;
+  reason?: string;
+}): Promise<{ invalidatedRunIds: string[]; newRunId: string; archivedCandidates: number }> {
+  const marketScope = opts?.marketScope ?? "sydney-metro";
+  const reason = opts?.reason ?? "INVALIDATED_PRE_LOCKBBOX — not for acceptance";
+
+  const prior = await prisma.sydneyIndexRun.findMany({
+    where: { marketScope, status: { in: ["QUEUED", "RUNNING", "COMPLETE"] } },
+  });
+  const invalidatedRunIds: string[] = [];
+  for (const r of prior) {
+    await prisma.sydneyIndexRun.update({
+      where: { id: r.id },
+      data: {
+        status: "FAILED",
+        finishedAt: new Date(),
+        error: reason.slice(0, 2000),
+        notes: {
+          ...(typeof r.notes === "object" && r.notes && !Array.isArray(r.notes) ? (r.notes as object) : {}),
+          invalidated: true,
+          invalidatedReason: reason,
+        } as Prisma.InputJsonValue,
+      },
+    });
+    invalidatedRunIds.push(r.id);
+  }
+
+  const archived = await prisma.siteCandidateIndex.updateMany({
+    where: {
+      provenance: "INDEX_DISCOVERY",
+      lifecycleStatus: "ACTIVE",
+      OR: invalidatedRunIds.length
+        ? [{ indexRunId: { in: invalidatedRunIds } }, { indexRunId: null }]
+        : undefined,
+    },
+    data: { lifecycleStatus: "ARCHIVED" },
+  });
+
+  const { run } = await ensureActiveRun(marketScope);
+  return {
+    invalidatedRunIds,
+    newRunId: run.id,
+    archivedCandidates: archived.count,
   };
 }
 

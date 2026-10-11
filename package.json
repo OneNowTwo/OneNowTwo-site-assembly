@@ -20,6 +20,7 @@
     "sydney:reset:apply": "tsx scripts/sydney-product-reset.mts --allow-apply",
     "sydney:historical-dry-run": "tsx scripts/sydney-historical-dry-run.mts",
     "sydney:index": "tsx scripts/sydney-index-once.mts",
+    "sydney:index:corrected": "tsx scripts/sydney-index-corrected-rerun.mts",
     "auth:hash": "node scripts/hash-password.mjs",
     "postinstall": "prisma generate"
   },
