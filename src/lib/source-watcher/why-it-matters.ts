@@ -164,7 +164,7 @@ export function findMatchReasons(input: {
     items.push({
       kind: "STATION_PROXIMITY",
       title: `<${input.maxStationDistanceM}m station`,
-      body: `${Math.round(input.stationDistanceM)}m from nominated centre / station sample.`,
+      body: `${Math.round(input.stationDistanceM)}m from nearest train/metro station.`,
       matched: true,
     });
   }
