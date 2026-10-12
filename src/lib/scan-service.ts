@@ -160,7 +160,7 @@ export async function scanArea(input: {
   if (locked) {
     if (!bbox) throw new Error("lockBbox requires a supplied bbox");
     // Preserve bbox exactly — do not geocode/recentre from suburbHint or centreQuery.
-    bbox = chooseScanBBox({ bbox, lockBbox: true });
+    bbox = chooseScanBBox({ bbox, lockBbox: true }) ?? bbox;
   } else if (input.centreQuery || input.suburbHint) {
     const q = (input.centreQuery ?? input.suburbHint ?? "").toLowerCase();
     const broad: BBox = bbox ?? { west: 150.6, south: -34.2, east: 151.4, north: -33.5 };
@@ -169,7 +169,7 @@ export async function scanArea(input: {
     if (matched.length) {
       centres = matched;
       const c = matched[0]!;
-      bbox = chooseScanBBox({ bbox, matchedCentre: c });
+      bbox = chooseScanBBox({ bbox, matchedCentre: c }) ?? undefined;
     } else if (!bbox) {
       // Geography-neutral: any NSW suburb/centre via geocoder when not an LMR label.
       const geo = await timer.time("geocode_centre", () => geocode(input.centreQuery ?? input.suburbHint ?? ""));
@@ -178,7 +178,7 @@ export async function scanArea(input: {
         bbox = chooseScanBBox({
           bbox,
           geocodeHit: { lng: hit.lng, lat: hit.lat, bbox: hit.bbox ?? undefined },
-        });
+        }) ?? undefined;
       }
     }
   }
