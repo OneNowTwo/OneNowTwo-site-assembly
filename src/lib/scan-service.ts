@@ -134,6 +134,11 @@ export async function scanArea(input: {
   /** Skip live AVM (tests / offline). */
   skipValuation?: boolean;
   /**
+   * When set, passed through to assembly generation as the min area floor
+   * (Find uses the user's minimum site area instead of the default 800 sqm).
+   */
+  minSiteAreaSqm?: number;
+  /**
    * When true, the supplied bbox is authoritative for the scan envelope.
    * Still loads nominated centres intersecting the bbox for LMR maths,
    * but never recentres/replaces bbox from suburbHint / centreQuery / geocode.
@@ -207,6 +212,7 @@ export async function scanArea(input: {
     centres,
     assumptions,
     maxResults: input.maxResults ?? 20,
+    minAreaSqm: input.minSiteAreaSqm,
   });
   timer.add("generate_assemblies_rank", performance.now() - tAsm);
   const partial = loaded.loadedCount > loaded.parcels.length;

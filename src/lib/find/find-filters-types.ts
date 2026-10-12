@@ -28,4 +28,9 @@ export interface FindFilters {
   east?: number;
   north?: number;
   maxResults?: number;
+  /**
+   * index (default) — query SiteCandidateIndex first for fast results.
+   * live — run the existing parcel/assembly deep scan on demand.
+   */
+  mode?: "index" | "live";
 }

@@ -34,6 +34,7 @@ const bodySchema = z.object({
   east: z.number().optional(),
   north: z.number().optional(),
   maxResults: z.number().int().min(3).max(30).optional(),
+  mode: z.enum(["index", "live"]).optional(),
 });
 
 export async function POST(req: Request) {
