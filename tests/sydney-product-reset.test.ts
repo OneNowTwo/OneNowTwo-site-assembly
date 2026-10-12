@@ -22,6 +22,9 @@ import {
   normalizeLgaName,
 } from "@/lib/intelligence/sydney-index-pipeline";
 import { selectTopCandidatesForEnrichment } from "@/lib/intelligence/top-candidate-enrichment";
+import { shouldSeedDemo } from "@/lib/production-bootstrap";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 describe("Sydney product reset — material change rules", () => {
   it("SOURCE_DOCUMENT_CHANGED with only hash churn is not material", () => {
@@ -268,5 +271,22 @@ describe("Sydney index geography — lockBbox + actual LGA", () => {
 
   it("top-candidate enrichment selector is exported (scaffold)", () => {
     expect(typeof selectTopCandidatesForEnrichment).toBe("function");
+  });
+});
+
+describe("Production bootstrap — no demo seed on start:render", () => {
+  it("demo seeding requires explicit --demo or --reset", () => {
+    expect(shouldSeedDemo(["node", "seed.mts"])).toBe(false);
+    expect(shouldSeedDemo(["node", "seed.mts", "--demo"])).toBe(true);
+    expect(shouldSeedDemo(["node", "seed.mts", "--reset"])).toBe(true);
+  });
+
+  it("start:render uses ensure-production-bootstrap, not prisma/seed.mts", () => {
+    const pkg = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    expect(pkg.scripts["start:render"]).toContain("ensure-production-bootstrap.mts");
+    expect(pkg.scripts["start:render"]).not.toContain("prisma/seed.mts");
+    expect(pkg.scripts["db:seed:demo"]).toContain("--demo");
   });
 });

@@ -8,6 +8,11 @@ export const maxDuration = 300;
  * Sydney baseline cron — START / CONTINUE / COMPLETE.
  * Processes a bounded number of index batches per call.
  * Archive apply is NEVER automatic (dry-run only).
+ *
+ * Continues the active RUNNING/QUEUED SydneyIndexRun for sydney-metro
+ * (e.g. cmv4g2pef0000hyjsxbdgveot). Candidates upsert by canonicalKey so
+ * re-processing a tile does not duplicate ACTIVE INDEX_DISCOVERY rows.
+ * Do not call invalidatePriorRunsAndStartFresh from production cron.
  */
 export async function POST(req: Request) {
   const secret = process.env.CRON_SECRET;

@@ -66,6 +66,11 @@ export function candidateBelongsToBatchLga(
   return a === b || a.includes(b) || b.includes(a);
 }
 
+/**
+ * Resume the active sydney-metro run if one is QUEUED/RUNNING.
+ * Production cron must continue that run — never invent a second parallel baseline
+ * while one is in progress. Candidate upserts key on canonicalKey (idempotent).
+ */
 async function ensureActiveRun(marketScope = "sydney-metro") {
   const existing = await prisma.sydneyIndexRun.findFirst({
     where: { marketScope, status: { in: ["QUEUED", "RUNNING"] } },
