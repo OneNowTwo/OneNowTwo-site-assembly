@@ -99,26 +99,12 @@ export async function deleteWatchItem(id: string, userId: string) {
   return true;
 }
 
+/**
+ * Fresh accounts start with an empty watchlist.
+ * Do NOT seed historic test suburbs (Manly Vale / Neutral Bay / Mosman) or random opportunities —
+ * those biased Today toward development history.
+ */
 export async function ensureDefaultWatchlist(userId: string) {
-  const count = await prisma.watchItem.count({ where: { userId, active: true } });
-  if (count > 0) return;
-  const seeds: { kind: WatchItemKind; label: string; suburb: string }[] = [
-    { kind: "SUBURB", label: "Manly Vale", suburb: "Manly Vale" },
-    { kind: "SUBURB", label: "Neutral Bay", suburb: "Neutral Bay" },
-    { kind: "SUBURB", label: "Mosman", suburb: "Mosman" },
-  ];
-  for (const s of seeds) {
-    await createWatchItem({ userId, ...s, scanCadence: "WEEKLY" });
-  }
-  const opps = await prisma.opportunity.findMany({ take: 3, orderBy: { updatedAt: "desc" } });
-  for (const o of opps) {
-    await createWatchItem({
-      userId,
-      kind: "OPPORTUNITY",
-      label: o.name,
-      suburb: o.suburb,
-      opportunityId: o.id,
-      scanCadence: "DAILY",
-    });
-  }
+  void userId;
+  // Intentionally no-op: Harry's clean start must not inherit test geography.
 }

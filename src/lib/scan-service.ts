@@ -33,6 +33,30 @@ export function tileBBox(b: BBox, maxSpan = MAX_BBOX_SPAN_DEG): BBox[] {
   return tiles.slice(0, 9); // hard cap for V1 performance
 }
 
+/**
+ * Decide the scan envelope. Pure helper for regression tests.
+ * When lockBbox is true, supplied bbox is returned unchanged even if centres match a suburbHint.
+ */
+export function chooseScanBBox(input: {
+  bbox?: BBox;
+  lockBbox?: boolean;
+  matchedCentre?: { lng: number; lat: number } | null;
+  geocodeHit?: { lng: number; lat: number; bbox?: BBox } | null;
+}): BBox | null {
+  if (input.lockBbox) {
+    return input.bbox ?? null;
+  }
+  if (input.matchedCentre) {
+    return bboxAround(input.matchedCentre.lng, input.matchedCentre.lat, 800);
+  }
+  if (!input.bbox && input.geocodeHit) {
+    return input.geocodeHit.bbox
+      ? clampBBox(input.geocodeHit.bbox)
+      : bboxAround(input.geocodeHit.lng, input.geocodeHit.lat, 800);
+  }
+  return input.bbox ?? null;
+}
+
 async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
@@ -109,6 +133,13 @@ export async function scanArea(input: {
   maxResults?: number;
   /** Skip live AVM (tests / offline). */
   skipValuation?: boolean;
+  /**
+   * When true, the supplied bbox is authoritative for the scan envelope.
+   * Still loads nominated centres intersecting the bbox for LMR maths,
+   * but never recentres/replaces bbox from suburbHint / centreQuery / geocode.
+   * Used by SydneyIndexBatch background indexing.
+   */
+  lockBbox?: boolean;
 }): Promise<
   AreaScanResult & {
     bbox: BBox;
@@ -124,8 +155,13 @@ export async function scanArea(input: {
   let bbox = input.bbox;
   let centres: NominatedCentre[] = [];
   const progress: string[] = [];
+  const locked = input.lockBbox === true;
 
-  if (input.centreQuery || input.suburbHint) {
+  if (locked) {
+    if (!bbox) throw new Error("lockBbox requires a supplied bbox");
+    // Preserve bbox exactly — do not geocode/recentre from suburbHint or centreQuery.
+    bbox = chooseScanBBox({ bbox, lockBbox: true }) ?? bbox;
+  } else if (input.centreQuery || input.suburbHint) {
     const q = (input.centreQuery ?? input.suburbHint ?? "").toLowerCase();
     const broad: BBox = bbox ?? { west: 150.6, south: -34.2, east: 151.4, north: -33.5 };
     const all = await timer.time("lmr_centres", () => fetchNominatedCentres(broad));
@@ -133,15 +169,16 @@ export async function scanArea(input: {
     if (matched.length) {
       centres = matched;
       const c = matched[0]!;
-      bbox = bboxAround(c.lng, c.lat, 800);
+      bbox = chooseScanBBox({ bbox, matchedCentre: c }) ?? undefined;
     } else if (!bbox) {
       // Geography-neutral: any NSW suburb/centre via geocoder when not an LMR label.
       const geo = await timer.time("geocode_centre", () => geocode(input.centreQuery ?? input.suburbHint ?? ""));
       const hit = geo.results[0];
       if (hit) {
-        bbox = hit.bbox
-          ? clampBBox(hit.bbox)
-          : bboxAround(hit.lng, hit.lat, 800);
+        bbox = chooseScanBBox({
+          bbox,
+          geocodeHit: { lng: hit.lng, lat: hit.lat, bbox: hit.bbox ?? undefined },
+        }) ?? undefined;
       }
     }
   }

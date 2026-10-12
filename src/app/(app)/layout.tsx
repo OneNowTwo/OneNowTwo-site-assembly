@@ -4,18 +4,21 @@ import { getSession } from "@/lib/session";
 import { getGlobalAssumptions } from "@/lib/opportunity-service";
 import { NavLinks } from "@/components/nav-links";
 import { AppShell } from "@/components/map/app-shell";
+import { getMarketScope } from "@/lib/market-scope";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const session = await getSession();
   if (!session) redirect("/login");
   const assumptions = await getGlobalAssumptions();
+  /** Selected market scope — not app identity (future: Newcastle / Wollongong / Melbourne). */
+  const market = getMarketScope("sydney-metro");
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-11 shrink-0 items-center gap-6 border-b border-[#0b2f49] bg-brand px-4 text-white">
         <div className="text-[13px] font-bold tracking-[0.18em]">SITE ASSEMBLY</div>
         <NavLinks />
         <div className="ml-auto flex items-center gap-3 text-[11.5px] text-white/70">
-          <span>NSW · Sydney metro</span>
+          <span title="Selected market scope">{market.headerLabel}</span>
           <span className="text-white/40">|</span>
           <span>{session.email}</span>
           <form action="/api/auth/logout" method="post">

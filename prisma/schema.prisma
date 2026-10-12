@@ -110,6 +110,12 @@ model Opportunity {
   unitCount         Int?
   totalNonLandCost  Float?
   targetMoc         Float?
+  /// Product lifecycle — ARCHIVED/TEST/FIXTURE/SUPERSEDED must not drive Today.
+  lifecycleStatus   ProductRecordStatus @default(ACTIVE)
+  /// Canonical assembly identity: sorted included external parcel IDs joined by "|".
+  canonicalKey      String?
+  archivedAt        DateTime?
+  archivedReason    String?
   createdById       String?
   createdBy         User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt         DateTime            @default(now())
@@ -125,6 +131,8 @@ model Opportunity {
   @@index([status])
   @@index([updatedAt])
   @@index([acquisitionHeadroom])
+  @@index([lifecycleStatus])
+  @@index([canonicalKey])
 }
 
 model Parcel {
@@ -621,6 +629,52 @@ enum SourceRunStatus {
   FAILED
 }
 
+/// Product / test / archive lifecycle for Opportunities, intel events, stories, candidates.
+enum ProductRecordStatus {
+  ACTIVE
+  ARCHIVED
+  TEST
+  FIXTURE
+  SUPERSEDED
+}
+
+/// Distinguishes first Sydney baseline ingest from incremental refresh / material change runs.
+enum SourceRunPurpose {
+  BASELINE
+  REFRESH
+  CHANGE
+}
+
+enum IntelligenceStoryKind {
+  PLANNING_UPDATE
+  KEY_SITE_PROGRAM
+  DEVELOPMENT_ACTIVITY
+  MARKET
+  OTHER
+}
+
+enum SydneyIndexRunStatus {
+  QUEUED
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+enum SydneyIndexBatchStatus {
+  QUEUED
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+/// Provenance of a SiteCandidateIndex row — discovery universe vs enrichment.
+enum CandidateProvenance {
+  INDEX_DISCOVERY
+  USER_ANALYSED
+  KEY_SITE
+  PLANNING_CHANGE
+}
+
 enum IntelChangeKind {
   PLANNING_PROPOSAL_CREATED
   PLANNING_STATUS_CHANGED
@@ -678,6 +732,8 @@ model SourceRun {
   sourceId       String
   source         SourceRegistry @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   status         SourceRunStatus @default(QUEUED)
+  /// BASELINE = first Sydney ingest (not "changed today"); REFRESH = poll; CHANGE = material diff.
+  purpose        SourceRunPurpose @default(REFRESH)
   startedAt      DateTime?
   finishedAt     DateTime?
   contentHash    String?
@@ -689,6 +745,7 @@ model SourceRun {
 
   @@index([sourceId, createdAt])
   @@index([status, createdAt])
+  @@index([purpose, createdAt])
 }
 
 /// Immutable raw/normalised payload for a source fetch — never silently overwritten.
@@ -729,12 +786,148 @@ model IntelChangeEvent {
   href           String?
   importance     Float           @default(0)
   payload        Json?
+  /// False for engineering churn (hash/parser/portal HTML) with no developer-material control change.
+  material       Boolean         @default(true)
+  lifecycleStatus ProductRecordStatus @default(ACTIVE)
+  /// Optional link into an aggregated IntelligenceStory.
+  storyId        String?
+  story          IntelligenceStory? @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  /// Propagated from SourceRun purpose when created.
+  runPurpose     SourceRunPurpose?
   createdAt      DateTime        @default(now())
 
   @@unique([changeKey])
   @@index([kind, createdAt])
   @@index([createdAt])
   @@index([sourceId, createdAt])
+  @@index([lifecycleStatus, material, createdAt])
+  @@index([storyId])
+}
+
+/// Aggregated developer-facing story — many IntelChangeEvents → one Today card.
+model IntelligenceStory {
+  id                String                @id @default(cuid())
+  kind              IntelligenceStoryKind
+  title             String
+  summary           String?
+  locationLabel     String?
+  strategyTags      String[]              @default([])
+  /// Stable story identity for time-window dedupe (source + area + kind + window).
+  dedupeKey         String                @unique
+  affectedSiteCount Int?
+  mapHref           String?
+  findHref          String?
+  sourceHref        String?
+  importance        Float                 @default(0)
+  material          Boolean               @default(true)
+  lifecycleStatus   ProductRecordStatus   @default(ACTIVE)
+  windowStart       DateTime?
+  windowEnd         DateTime?
+  payload           Json?
+  events            IntelChangeEvent[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@index([lifecycleStatus, material, importance])
+  @@index([createdAt])
+}
+
+/// Progressive Sydney-wide site candidate index — Today/Find read this; Analyse uses full engines.
+model SiteCandidateIndex {
+  id                         String              @id @default(cuid())
+  /// Sorted included parcel IDs, or keysite:/pca: identity.
+  canonicalKey               String              @unique
+  kind                       String
+  parcelIds                  Json                @default("[]")
+  address                    String?
+  suburb                     String?
+  lga                        String?
+  zone                       String?
+  siteAreaSqm                Float?
+  lotCount                   Int?
+  owners                     Int?
+  currentFsr                 Float?
+  currentHeightM             Float?
+  proposedFsr                Float?
+  proposedHeightM            Float?
+  keySiteStatus              String?
+  stationDistanceM           Float?
+  planningChangeFlags        Json?
+  developmentActivityFlags   Json?
+  lastSaleValue              Float?
+  quickScore                 Float?
+  quickHeadroom              Float?
+  maxPayable                 Float?
+  geometry                   Json?
+  centroidLat                Float?
+  centroidLng                Float?
+  bbox                       Json?
+  reasonHints                Json?
+  /// Per-strategy quick scores e.g. { "APARTMENTS": 82 }.
+  strategyScores             Json?
+  sourceRefs                 Json?
+  opportunityId              String?
+  /// How this candidate entered the index — INDEX_DISCOVERY is the Sydney scan universe.
+  provenance                 CandidateProvenance @default(INDEX_DISCOVERY)
+  indexRunId                 String?
+  indexBatchId               String?
+  lastEvaluatedAt            DateTime?
+  lifecycleStatus            ProductRecordStatus @default(ACTIVE)
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
+
+  @@index([lifecycleStatus, quickScore])
+  @@index([lga, suburb])
+  @@index([kind])
+  @@index([provenance])
+  @@index([indexRunId])
+  @@index([lastEvaluatedAt])
+}
+
+/// Progressive Greater Sydney indexing run (checkpointed batches).
+model SydneyIndexRun {
+  id               String               @id @default(cuid())
+  marketScope      String               @default("sydney-metro")
+  status           SydneyIndexRunStatus @default(QUEUED)
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  totalBatches     Int                  @default(0)
+  completedBatches Int                  @default(0)
+  failedBatches    Int                  @default(0)
+  parcelsProcessed Int                  @default(0)
+  candidateCount   Int                  @default(0)
+  error            String?
+  notes            Json?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  batches          SydneyIndexBatch[]
+
+  @@index([status, createdAt])
+  @@index([marketScope, status])
+}
+
+model SydneyIndexBatch {
+  id                  String                  @id @default(cuid())
+  runId               String
+  run                 SydneyIndexRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  lga                 String
+  region              String?
+  /// Tile bbox {west,south,east,north}.
+  bbox                Json
+  tileKey             String
+  status              SydneyIndexBatchStatus  @default(QUEUED)
+  attempts            Int                     @default(0)
+  parcelsLoaded       Int                     @default(0)
+  candidatesGenerated Int                     @default(0)
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  error               String?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  @@unique([runId, tileKey])
+  @@index([runId, status])
+  @@index([lga, status])
 }
 
 /// Proposed / pending planning change area (never treated as current LEP law).

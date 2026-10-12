@@ -39,7 +39,8 @@ export async function verifySessionToken(token: string | undefined): Promise<Ses
 export const sessionCookieOptions = {
   httpOnly: true,
   sameSite: "lax" as const,
-  secure: process.env.NODE_ENV === "production",
+  // Local http:// screenshots / previews: set AUTH_COOKIE_INSECURE=1
+  secure: process.env.AUTH_COOKIE_INSECURE === "1" ? false : process.env.NODE_ENV === "production",
   path: "/",
   maxAge: SESSION_TTL_SECONDS,
 };

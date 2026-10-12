@@ -8,41 +8,55 @@ import { fetchApiJson } from "@/lib/api-json";
 import { StrategySelector } from "@/components/strategy-selector";
 import type { DevelopmentStrategy } from "@/lib/source-watcher/strategy-profile";
 
+type Story = {
+  id: string;
+  type: string;
+  location: string | null;
+  title: string;
+  whatChanged: string;
+  whyItMatters: string;
+  affectedSites: number | null;
+  date: string;
+  sourceId: string | null;
+  sourceLabel?: string | null;
+  sourceHref?: string | null;
+  href: string | null;
+  mapHref?: string | null;
+  findHref?: string | null;
+  eventCount?: number | null;
+};
+
 type TodayPayload = {
   headline: string;
   subheading: string;
   strategy: string;
-  whatChanged: Array<{
-    id: string;
-    type: string;
-    location: string | null;
-    title: string;
-    whatChanged: string;
-    whyItMatters: string;
-    affectedSites: number | null;
-    date: string;
-    sourceId: string | null;
-    sourceLabel?: string | null;
-    sourceHref?: string | null;
-    href: string | null;
-  }>;
+  marketScope?: { id: string; label: string; headerLabel: string };
+  indexReady?: boolean;
+  indexCount?: number;
+  indexPreparingMessage?: string | null;
+  topIntelligence?: Story[];
+  whatChanged: Story[];
   sitesToLookAt: Array<{
     id: string;
     name: string;
     address: string;
     suburb: string | null;
+    lga?: string | null;
     siteAreaSqm: number | null;
+    lotCount?: number | null;
+    owners?: number | null;
     currentFsr: number | null;
     proposedFsr: number | null;
+    stationDistanceM?: number | null;
     score: number | null;
     maxPayable: number | null;
     headroom: number | null;
     reasons: string[];
     status: string;
     kind?: string;
+    provenance?: string;
     href?: string;
-    sourceLabel?: string | null;
-    sourceHref?: string | null;
+    analyseHref?: string | null;
   }>;
   watchedChanges: Array<{
     id: string;
@@ -52,6 +66,7 @@ type TodayPayload = {
     date: string;
     href: string | null;
   }>;
+  showWatchedSection?: boolean;
   developmentActivity: Array<{
     id: string;
     kind: string;
@@ -70,21 +85,20 @@ type TodayPayload = {
 };
 
 function typeLabel(kind: string) {
-  if (kind.includes("FSR")) return "Planning change";
-  if (kind.includes("HEIGHT")) return "Planning change";
-  if (kind.includes("ZONE")) return "Planning change";
-  if (kind.includes("KEY_SITE") || kind.includes("ASSEMBLY")) return "Key site";
-  if (kind.includes("HDA")) return "HDA";
-  if (kind.includes("SSD")) return "SSD / Major project";
-  if (kind.includes("DA_")) return "Development activity";
-  if (kind.includes("PLANNING")) return "Planning change";
+  if (kind.includes("KEY_SITE") || kind === "KEY_SITE_PROGRAM") return "Key site program";
+  if (kind.includes("DEVELOPMENT") || kind.includes("HDA") || kind.includes("SSD") || kind.includes("DA_")) {
+    return "Development activity";
+  }
+  if (kind.includes("FSR") || kind.includes("HEIGHT") || kind.includes("ZONE") || kind.includes("PLANNING")) {
+    return "Planning update";
+  }
   return kind.replaceAll("_", " ");
 }
 
 export function DashboardClient() {
   const [data, setData] = useState<TodayPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [strategy, setStrategy] = useState<DevelopmentStrategy>("GENERAL_RESIDENTIAL");
+  const [strategy, setStrategy] = useState<DevelopmentStrategy>("APARTMENTS");
   const [showSources, setShowSources] = useState(false);
 
   useEffect(() => {
@@ -109,12 +123,17 @@ export function DashboardClient() {
     return <div className="p-6 text-[13px] text-muted">Loading development intelligence…</div>;
   }
 
+  const stories = data.topIntelligence?.length ? data.topIntelligence : data.whatChanged;
+  const showWatched = data.showWatchedSection !== false && data.watchedChanges.length > 0;
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="border-b border-line bg-gradient-to-br from-[#0b2f49] via-[#124a6e] to-[#1a5f7a] px-6 py-7 text-white">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/70">Today</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/70">
+              Today · {data.marketScope?.label ?? "Greater Sydney"}
+            </div>
             <h1 className="mt-1 text-[26px] font-semibold tracking-tight">{data.headline}</h1>
             <p className="mt-1 max-w-2xl text-[13.5px] text-white/80">{data.subheading}</p>
           </div>
@@ -131,17 +150,27 @@ export function DashboardClient() {
 
       <div className="space-y-5 p-6">
         <section>
-          <SectionHead title="What changed" action={<Link href="/feed" className="text-[11px] font-semibold text-brand hover:underline">Open feed</Link>} />
-          {!data.whatChanged.length ? (
-            <Empty>No intelligence events in the last 7 days. Source Watcher will populate this as monitors run.</Empty>
+          <SectionHead
+            title="Top intelligence"
+            action={
+              <Link href="/feed" className="text-[11px] font-semibold text-brand hover:underline">
+                View all
+              </Link>
+            }
+          />
+          {!stories.length ? (
+            <Empty>No material Greater Sydney intelligence in the last 7 days yet.</Empty>
           ) : (
             <div className="space-y-3">
-              {data.whatChanged.map((ev) => (
+              {stories.map((ev) => (
                 <article key={ev.id} className="border border-line bg-white px-4 py-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone="warn">{typeLabel(ev.type)}</Badge>
                     {ev.location && <span className="text-[12px] font-semibold text-ink">{ev.location}</span>}
                     <span className="text-[11px] text-muted">{ev.date.slice(0, 10)}</span>
+                    {ev.eventCount != null && ev.eventCount > 1 && (
+                      <span className="text-[11px] text-muted">{ev.eventCount} related signals</span>
+                    )}
                   </div>
                   <h3 className="mt-1.5 text-[14px] font-semibold">{ev.title}</h3>
                   <p className="mt-1 text-[12.5px] text-ink/90">{ev.whatChanged}</p>
@@ -150,19 +179,25 @@ export function DashboardClient() {
                     <p className="text-[12.5px]">{ev.whyItMatters}</p>
                   </div>
                   {ev.affectedSites != null && ev.affectedSites > 0 && (
-                    <p className="mt-1 text-[11.5px] text-muted">{ev.affectedSites} watched / matching parcels affected</p>
+                    <p className="mt-1 text-[11.5px] text-muted">{ev.affectedSites} sites in scope</p>
                   )}
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {ev.href && (
-                      <Link href={ev.href} className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas">
-                        View area
+                    {(ev.mapHref || ev.href) && (
+                      <Link
+                        href={ev.mapHref || ev.href || "/map"}
+                        className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+                      >
+                        View on map
                       </Link>
                     )}
-                    <Link href="/opportunities" className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas">
-                      View affected sites
+                    <Link
+                      href={ev.findHref || `/find?strategy=${strategy}`}
+                      className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+                    >
+                      View sites
                     </Link>
-                    {(ev.sourceLabel || ev.sourceId) && (
-                      ev.sourceHref ? (
+                    {(ev.sourceLabel || ev.sourceId) &&
+                      (ev.sourceHref ? (
                         <a
                           href={ev.sourceHref}
                           target="_blank"
@@ -175,8 +210,7 @@ export function DashboardClient() {
                         <span className="rounded-[3px] bg-canvas px-2.5 py-1 text-[11px] text-muted">
                           Source · {ev.sourceLabel || ev.sourceId}
                         </span>
-                      )
-                    )}
+                      ))}
                   </div>
                 </article>
               ))}
@@ -185,56 +219,97 @@ export function DashboardClient() {
         </section>
 
         <section>
-          <SectionHead title="Sites to look at" action={<Link href="/find" className="text-[11px] font-semibold text-brand hover:underline">Find sites</Link>} />
-          {!data.sitesToLookAt.length ? (
-            <Empty>No ranked sites yet. Run Find or an area scan on the Map.</Empty>
+          <SectionHead
+            title="Sites to look at today"
+            action={
+              <Link href="/find" className="text-[11px] font-semibold text-brand hover:underline">
+                Find sites
+              </Link>
+            }
+          />
+          {data.indexPreparingMessage && !data.sitesToLookAt.length ? (
+            <Empty>{data.indexPreparingMessage}</Empty>
+          ) : !data.sitesToLookAt.length ? (
+            <Empty>No Sydney-index candidates ranked for this strategy yet.</Empty>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {data.sitesToLookAt.map((s) => (
-                <Link
-                  key={s.id}
-                  href={"href" in s && typeof s.href === "string" ? s.href : `/opportunities/${s.id}`}
-                  className="block border border-line bg-white px-4 py-3 hover:border-brand/40"
-                >
+                <div key={s.id} className="border border-line bg-white px-4 py-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="text-[14px] font-semibold leading-snug">{s.address || s.name}</div>
                       <div className="text-[12px] text-muted">
-                        {s.suburb ?? "NSW"}
-                        {"kind" in s && s.kind && s.kind !== "OPPORTUNITY" ? ` · ${String(s.kind).replaceAll("_", " ")}` : ""}
+                        {s.suburb ?? s.lga ?? "Sydney"}
                         {s.siteAreaSqm != null ? ` · ${sqm(s.siteAreaSqm)}` : ""}
+                        {s.lotCount != null ? ` · ${s.lotCount} lot${s.lotCount === 1 ? "" : "s"}` : ""}
+                        {s.owners != null ? ` · ${s.owners} owner${s.owners === 1 ? "" : "s"}` : ""}
                       </div>
                     </div>
                     {s.score != null && <Badge tone="brand">Score {Math.round(s.score)}</Badge>}
-                    {"kind" in s && s.kind && s.kind !== "OPPORTUNITY" && <Badge tone="warn">Intel</Badge>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
                     <span>Current FSR {s.currentFsr != null ? fsr(s.currentFsr) : "—"}</span>
                     {s.proposedFsr != null && <span className="text-brand">Proposed FSR {fsr(s.proposedFsr)}</span>}
-                    <span className={cx("num", s.headroom != null && s.headroom > 0 ? "text-good" : "text-muted")}>
-                      Headroom {s.headroom != null ? money(s.headroom, { compact: true }) : "—"}
-                    </span>
+                    {s.stationDistanceM != null && <span>{Math.round(s.stationDistanceM)}m to station</span>}
+                    {s.headroom != null && (
+                      <span className={cx("num", s.headroom > 0 ? "text-good" : "text-muted")}>
+                        Headroom {money(s.headroom, { compact: true })}
+                      </span>
+                    )}
                   </div>
-                  <ul className="mt-2 space-y-0.5">
-                    {s.reasons.map((r) => (
-                      <li key={r} className="text-[12px] text-muted">
-                        · {r}
-                      </li>
-                    ))}
-                  </ul>
-                </Link>
+                  <div className="mt-2">
+                    <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">
+                      Why this surfaced today
+                    </div>
+                    <ul className="mt-1 space-y-0.5">
+                      {s.reasons.map((r) => (
+                        <li key={r} className="text-[12px] text-muted">
+                          · {r}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Link
+                      href={s.href || "/map"}
+                      className="rounded-[3px] border border-line px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+                    >
+                      View on map
+                    </Link>
+                    {s.analyseHref ? (
+                      <Link
+                        href={s.analyseHref}
+                        className="rounded-[3px] bg-brand px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white"
+                      >
+                        Analyse
+                      </Link>
+                    ) : (
+                      <Link
+                        href={`/find?strategy=${strategy}${s.suburb ? `&suburb=${encodeURIComponent(s.suburb)}` : ""}`}
+                        className="rounded-[3px] bg-brand px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white"
+                      >
+                        Analyse
+                      </Link>
+                    )}
+                  </div>
+                </div>
               ))}
             </div>
           )}
         </section>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <section>
-            <SectionHead title="Watched changes" action={<Link href="/watching" className="text-[11px] font-semibold text-brand hover:underline">Manage</Link>} />
-            <Panel>
-              {!data.watchedChanges.length ? (
-                <p className="text-[12px] text-muted">No changes affecting watched areas, sites or assemblies.</p>
-              ) : (
+        <div className={cx("grid gap-4", showWatched ? "lg:grid-cols-2" : "")}>
+          {showWatched && (
+            <section>
+              <SectionHead
+                title="Watched items"
+                action={
+                  <Link href="/watching" className="text-[11px] font-semibold text-brand hover:underline">
+                    Manage
+                  </Link>
+                }
+              />
+              <Panel>
                 <ul className="divide-y divide-line">
                   {data.watchedChanges.map((c) => (
                     <li key={c.id} className="py-2.5">
@@ -253,17 +328,15 @@ export function DashboardClient() {
                     </li>
                   ))}
                 </ul>
-              )}
-            </Panel>
-          </section>
+              </Panel>
+            </section>
+          )}
 
           <section>
             <SectionHead title="Development activity" />
             <Panel>
               {!data.developmentActivity.length ? (
-                <p className="text-[12px] text-muted">
-                  Newest DA / HDA / SSD in watched or target areas will appear here as statewide feeds connect.
-                </p>
+                <p className="text-[12px] text-muted">HDA / SSD / DA items appear here when material activity lands.</p>
               ) : (
                 <ul className="divide-y divide-line">
                   {data.developmentActivity.map((a) => (
@@ -291,7 +364,7 @@ export function DashboardClient() {
             className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted hover:text-ink"
             onClick={() => setShowSources((v) => !v)}
           >
-            {showSources ? "Hide source freshness" : "Source freshness"}
+            {showSources ? "Hide diagnostics" : "Source / diagnostics"}
           </button>
           {showSources && (
             <div className="mt-2 grid gap-1 text-[11.5px] text-muted sm:grid-cols-2 lg:grid-cols-3">

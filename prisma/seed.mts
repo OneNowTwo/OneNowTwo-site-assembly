@@ -1,10 +1,14 @@
 /**
- * Seeds global assumptions and the "Neutral Bay Assembly Demo" opportunity.
- * Parcels are real NSW cadastral lots: fetched live when the services respond, otherwise loaded from the
- * committed snapshot of the same live data. Only dollar values, comps, unit mix and owner details are fictional.
+ * Local / preview seeding.
  *
- *   npm run db:seed            # idempotent — skips the demo if it already exists
- *   npm run db:seed -- --reset # deletes and recreates the demo opportunity
+ * Without --demo: only ensures GlobalAssumptions (same as production bootstrap).
+ * With --demo: also seeds the Neutral Bay Assembly Demo opportunity (opt-in).
+ *
+ *   npm run db:seed              # assumptions only — safe
+ *   npm run db:seed:demo         # assumptions + Neutral Bay demo
+ *   npm run db:reset-demo        # delete/recreate Neutral Bay demo
+ *
+ * Production start:render uses scripts/ensure-production-bootstrap.mts — NOT this file.
  */
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -25,6 +29,7 @@ import {
 import { nswCadastreProvider } from "@/lib/data-sources/nsw-cadastre";
 import { nswPlanningProvider } from "@/lib/data-sources/nsw-planning";
 import { createOpportunity, recomputeOpportunity, syncUnitTypes } from "@/lib/opportunity-service";
+import { shouldSeedDemo } from "@/lib/production-bootstrap";
 import type { ParcelData } from "@/lib/types";
 
 async function demoParcels(): Promise<{ parcels: ParcelData[]; origin: string }> {
@@ -51,11 +56,18 @@ async function demoParcels(): Promise<{ parcels: ParcelData[]; origin: string }>
   }
 }
 
-async function main() {
-  const reset = process.argv.includes("--reset");
-  await prisma.globalAssumptions.upsert({ where: { id: "global" }, create: { id: "global", values: DEFAULT_ASSUMPTIONS }, update: { values: DEFAULT_ASSUMPTIONS } });
+async function ensureAssumptions() {
+  await prisma.globalAssumptions.upsert({
+    where: { id: "global" },
+    create: { id: "global", values: DEFAULT_ASSUMPTIONS },
+    update: {},
+  });
+}
 
-  const existing = await prisma.opportunity.findFirst({ where: { name: DEMO_OPPORTUNITY_NAME, demoFinancialData: true } });
+async function seedDemo(reset: boolean) {
+  const existing = await prisma.opportunity.findFirst({
+    where: { name: DEMO_OPPORTUNITY_NAME, demoFinancialData: true },
+  });
   if (existing && !reset) {
     console.log(`Demo opportunity already present (${existing.id}); use --reset to recreate.`);
     return;
@@ -63,7 +75,13 @@ async function main() {
   if (existing) await prisma.opportunity.delete({ where: { id: existing.id } });
 
   const { parcels, origin } = await demoParcels();
-  const opp = await createOpportunity({ name: DEMO_OPPORTUNITY_NAME, parcels, demoFinancialData: true, notes: DEMO_NOTES, inputs: DEMO_INPUTS });
+  const opp = await createOpportunity({
+    name: DEMO_OPPORTUNITY_NAME,
+    parcels,
+    demoFinancialData: true,
+    notes: DEMO_NOTES,
+    inputs: DEMO_INPUTS,
+  });
 
   const rows = await prisma.opportunityParcel.findMany({ where: { opportunityId: opp.id }, include: { parcel: true } });
   const now = Date.now();
@@ -87,9 +105,27 @@ async function main() {
     if (contacted) {
       await prisma.acquisitionActivity.createMany({
         data: [
-          { opportunityParcelId: op.id, type: "LETTER", note: "Demo: introductory letter delivered.", activityDate: new Date(now - 14 * 864e5), stageFrom: "READY_TO_APPROACH", stageTo: "LETTER_SENT" },
+          {
+            opportunityParcelId: op.id,
+            type: "LETTER",
+            note: "Demo: introductory letter delivered.",
+            activityDate: new Date(now - 14 * 864e5),
+            stageFrom: "READY_TO_APPROACH",
+            stageTo: "LETTER_SENT",
+          },
           ...(d.stage === "INTERESTED"
-            ? [{ opportunityParcelId: op.id, type: "DOOR_KNOCK", note: "Demo: spoke with owners; open to a conversation on price.", activityDate: new Date(now - 6 * 864e5), stageFrom: "LETTER_SENT" as const, stageTo: "INTERESTED" as const, nextAction: "Follow-up call", nextActionDate: new Date(now + 5 * 864e5) }]
+            ? [
+                {
+                  opportunityParcelId: op.id,
+                  type: "DOOR_KNOCK" as const,
+                  note: "Demo: spoke with owners; open to a conversation on price.",
+                  activityDate: new Date(now - 6 * 864e5),
+                  stageFrom: "LETTER_SENT" as const,
+                  stageTo: "INTERESTED" as const,
+                  nextAction: "Follow-up call",
+                  nextActionDate: new Date(now + 5 * 864e5),
+                },
+              ]
             : []),
         ],
       });
@@ -152,6 +188,25 @@ async function main() {
   console.log(
     `  existing $${(((analysis!.combinedExistingValue ?? 0) / 1e6).toFixed(2))}m → max payable $${(analysis!.maxPayableToOwners / 1e6).toFixed(2)}m → headroom $${(((analysis!.acquisitionHeadroom ?? 0) / 1e6).toFixed(2))}m (${Math.round((analysis!.acquisitionHeadroomPercent ?? 0) * 100)}%)`,
   );
+}
+
+async function main() {
+  const reset = process.argv.includes("--reset");
+  const wantDemo = shouldSeedDemo(process.argv);
+
+  await ensureAssumptions();
+  console.log("GlobalAssumptions ensured (id=global).");
+
+  if (!wantDemo) {
+    const opportunityCount = await prisma.opportunity.count();
+    console.log(
+      `No --demo flag — skipping Neutral Bay / demo Opportunity seed (opportunities in DB: ${opportunityCount}).`,
+    );
+    console.log("For local demo data: npm run db:seed:demo");
+    return;
+  }
+
+  await seedDemo(reset);
 }
 
 main()
