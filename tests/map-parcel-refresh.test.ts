@@ -3,6 +3,7 @@ import {
   POST_SCAN_PARCEL_COOLDOWN_MS,
   POST_SCAN_PARCEL_REFRESH_DELAY_MS,
   scanReturnedSufficientParcels,
+  shouldFetchViewportParcels,
   shouldSilentSoftFailTransient,
 } from "@/lib/map-parcel-refresh";
 import type { ParcelData } from "@/lib/types";
@@ -88,5 +89,43 @@ describe("post-scan timing constants", () => {
     expect(POST_SCAN_PARCEL_COOLDOWN_MS).toBe(10_000);
     expect(POST_SCAN_PARCEL_REFRESH_DELAY_MS).toBe(10_000);
     expect(POST_SCAN_PARCEL_REFRESH_DELAY_MS).toBeGreaterThanOrEqual(POST_SCAN_PARCEL_COOLDOWN_MS);
+  });
+});
+
+describe("shouldFetchViewportParcels", () => {
+  const base = { zoom: 18, minParcelZoom: 17, cooldownActive: false };
+
+  it("blocks broad parcel/LMR refresh while INDEX_CANDIDATE is active (even at zoom 18)", () => {
+    expect(
+      shouldFetchViewportParcels({
+        ...base,
+        targetKind: "INDEX_CANDIDATE",
+        cooldownActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks INDEX_CANDIDATE even when cooldown is inactive (kind wins over timer race)", () => {
+    expect(
+      shouldFetchViewportParcels({
+        targetKind: "INDEX_CANDIDATE",
+        zoom: 18,
+        minParcelZoom: 17,
+        cooldownActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows normal map / SCAN browsing at zoom >= min when cooldown clear", () => {
+    expect(shouldFetchViewportParcels({ ...base, targetKind: null })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: undefined })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: "SCAN" })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: "POINT" })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: "PARCEL" })).toBe(true);
+  });
+
+  it("still respects zoom floor and cooldown for non-index targets", () => {
+    expect(shouldFetchViewportParcels({ ...base, targetKind: "SCAN", zoom: 16 })).toBe(false);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: null, cooldownActive: true })).toBe(false);
   });
 });

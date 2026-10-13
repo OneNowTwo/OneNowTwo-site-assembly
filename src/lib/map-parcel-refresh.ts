@@ -47,5 +47,28 @@ export const POST_SCAN_PARCEL_REFRESH_DELAY_MS = 10_000;
 /**
  * After Today → INDEX_CANDIDATE apply, suppress automatic viewport
  * /api/parcels + /api/lmr/centres so the starter instance is not hammered.
+ * Belt-and-suspenders with shouldFetchViewportParcels(targetKind) — do not
+ * rely on this timer alone (Leaflet may emit moveend before the effect arms it).
  */
 export const INDEX_CANDIDATE_VIEWPORT_SUPPRESS_MS = 15_000;
+
+export type ViewportParcelFetchInput = {
+  /** Active MapTarget.kind, if any. */
+  targetKind: string | null | undefined;
+  zoom: number;
+  minParcelZoom: number;
+  /** True when parcelCooldownUntilRef is still in the future. */
+  cooldownActive: boolean;
+};
+
+/**
+ * Whether onViewportChange may schedule broad /api/parcels + /api/lmr/centres.
+ * INDEX_CANDIDATE must never trigger a viewport cadastre/LMR load while active —
+ * the index resolver already supplies the site parcels to highlight.
+ */
+export function shouldFetchViewportParcels(input: ViewportParcelFetchInput): boolean {
+  if (input.targetKind === "INDEX_CANDIDATE") return false;
+  if (input.zoom < input.minParcelZoom) return false;
+  if (input.cooldownActive) return false;
+  return true;
+}

@@ -31,6 +31,7 @@ import {
   POST_SCAN_PARCEL_COOLDOWN_MS,
   POST_SCAN_PARCEL_REFRESH_DELAY_MS,
   scanReturnedSufficientParcels,
+  shouldFetchViewportParcels,
   shouldSilentSoftFailTransient,
 } from "@/lib/map-parcel-refresh";
 import {
@@ -422,13 +423,32 @@ export function MapWorkspace({
         zoom,
       };
       setLoad((s) => ({ ...s, zoom }));
-      if (zoom < MIN_PARCEL_ZOOM) return;
-      if (nowMs() < parcelCooldownUntilRef.current) {
+      // INDEX_CANDIDATE: never broad-fetch — check target kind before any timer/
+      // cooldown arming so early Leaflet moveend/zoomend cannot race the apply effect.
+      const allowViewportFetch = shouldFetchViewportParcels({
+        targetKind: mapTargetRef.current?.kind,
+        zoom,
+        minParcelZoom: MIN_PARCEL_ZOOM,
+        cooldownActive: nowMs() < parcelCooldownUntilRef.current,
+      });
+      if (!allowViewportFetch) {
         persistClientState();
         return;
       }
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
+        // Re-check at fire time — target may have become INDEX_CANDIDATE during debounce.
+        if (
+          !shouldFetchViewportParcels({
+            targetKind: mapTargetRef.current?.kind,
+            zoom,
+            minParcelZoom: MIN_PARCEL_ZOOM,
+            cooldownActive: nowMs() < parcelCooldownUntilRef.current,
+          })
+        ) {
+          persistClientState();
+          return;
+        }
         void fetchParcels(bbox, { soft: true });
         const pad = 0.02;
         fetchApiJson<{ centres?: NominatedCentre[] }>(
