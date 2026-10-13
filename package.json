@@ -23,6 +23,7 @@
     "sydney:historical-dry-run": "tsx scripts/sydney-historical-dry-run.mts",
     "sydney:index": "tsx scripts/sydney-index-once.mts",
     "sydney:index:corrected": "tsx scripts/sydney-index-corrected-rerun.mts",
+    "backfill:index-geometry": "tsx scripts/backfill-index-geometry.mts",
     "auth:hash": "node scripts/hash-password.mjs",
     "postinstall": "prisma generate"
   },

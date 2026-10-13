@@ -1011,6 +1011,7 @@ export function MapWorkspace({
             opportunityId?: string | null;
             parcels?: ParcelData[];
             geometry?: unknown;
+            geometryStatus?: "OK" | "MISSING";
           }>(`/api/map/index-candidate?${qs.toString()}`);
           if (cancelled) return;
           const ids = (body.parcelIds ?? []).filter(Boolean);
@@ -1048,19 +1049,21 @@ export function MapWorkspace({
               nonce: nowMs(),
             });
           }
-          const summaryBits =
-            body.summary ||
-            [
-              body.suburb,
-              body.lotCount != null ? (body.lotCount === 1 ? "1 lot" : `${body.lotCount} lots`) : null,
-              body.siteAreaSqm != null && body.siteAreaSqm > 0
-                ? `${Math.round(body.siteAreaSqm).toLocaleString("en-AU")} m²`
-                : null,
-              body.currentFsr != null ? `FSR ${body.currentFsr}` : null,
-              body.proposedFsr != null ? `proposed ${body.proposedFsr}` : null,
-            ]
-              .filter(Boolean)
-              .join(" · ");
+          const geometryMissing = body.geometryStatus === "MISSING" || (!stored.length && !body.geometry);
+          const summaryBits = geometryMissing
+            ? "Site geometry being prepared"
+            : body.summary ||
+              [
+                body.suburb,
+                body.lotCount != null ? (body.lotCount === 1 ? "1 lot" : `${body.lotCount} lots`) : null,
+                body.siteAreaSqm != null && body.siteAreaSqm > 0
+                  ? `${Math.round(body.siteAreaSqm).toLocaleString("en-AU")} m²`
+                  : null,
+                body.currentFsr != null ? `FSR ${body.currentFsr}` : null,
+                body.proposedFsr != null ? `proposed ${body.proposedFsr}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
           setTargetPanel({
             kind: "INDEX_CANDIDATE",
             title: body.title || body.address || "Indexed site",
