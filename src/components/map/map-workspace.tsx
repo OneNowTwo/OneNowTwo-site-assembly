@@ -182,6 +182,8 @@ export function MapWorkspace({
   const appliedTargetKeyRef = useRef<string | null>(null);
   const mapTargetRef = useRef<MapTarget | null>(null);
   mapTargetRef.current = mapTarget;
+  const mapVisibleRef = useRef(mapVisible);
+  mapVisibleRef.current = mapVisible;
   const [results, setResults] = useState<GeocodeResult[] | null>(null);
   const [geoMessage, setGeoMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -419,6 +421,15 @@ export function MapWorkspace({
     }
   }, []);
 
+  // Hidden Map: cancel any pending viewport /api/parcels + /api/lmr/centres timer.
+  useEffect(() => {
+    if (mapVisible) return;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, [mapVisible]);
+
   const onViewportChange = useCallback(
     (bbox: BBox, zoom: number) => {
       lastBBox.current = bbox;
@@ -428,9 +439,10 @@ export function MapWorkspace({
         zoom,
       };
       setLoad((s) => ({ ...s, zoom }));
-      // INDEX_CANDIDATE: never broad-fetch — check target kind before any timer/
+      // Hidden Map / INDEX_CANDIDATE: never broad-fetch — check before any timer/
       // cooldown arming so early Leaflet moveend/zoomend cannot race the apply effect.
       const allowViewportFetch = shouldFetchViewportParcels({
+        mapVisible: mapVisibleRef.current,
         targetKind: mapTargetRef.current?.kind,
         zoom,
         minParcelZoom: MIN_PARCEL_ZOOM,
@@ -442,9 +454,10 @@ export function MapWorkspace({
       }
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
-        // Re-check at fire time — target may have become INDEX_CANDIDATE during debounce.
+        // Re-check at fire time — map may have hidden or target become INDEX_CANDIDATE during debounce.
         if (
           !shouldFetchViewportParcels({
+            mapVisible: mapVisibleRef.current,
             targetKind: mapTargetRef.current?.kind,
             zoom,
             minParcelZoom: MIN_PARCEL_ZOOM,
