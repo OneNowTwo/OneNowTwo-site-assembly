@@ -60,6 +60,7 @@ export function FindClient() {
   const [keySiteOnly, setKeySiteOnly] = useState(false);
   const [minHeadroom, setMinHeadroom] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingMode, setLoadingMode] = useState<"index" | "live" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<string[]>([]);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
@@ -74,6 +75,7 @@ export function FindClient() {
 
   async function runSearch(mode: "index" | "live") {
     setLoading(true);
+    setLoadingMode(mode);
     setError(null);
     setHasSearched(true);
     try {
@@ -105,6 +107,7 @@ export function FindClient() {
       setError((e as Error).message);
     } finally {
       setLoading(false);
+      setLoadingMode(null);
     }
   }
 
@@ -178,7 +181,7 @@ export function FindClient() {
               Key Site only
             </label>
             <Button className="mt-3 w-full" variant="primary" disabled={!canSearch || loading} onClick={() => void runSearch("index")}>
-              {loading && source !== "live" ? "Searching…" : "Search sites"}
+              {loadingMode === "index" ? "Searching…" : "Search sites"}
             </Button>
             <Button
               className="mt-2 w-full"
@@ -186,7 +189,7 @@ export function FindClient() {
               disabled={!canSearch || loading}
               onClick={() => void runSearch("live")}
             >
-              {loading && source === "live" ? "Deep scanning…" : "Run live deep scan"}
+              {loadingMode === "live" ? "Deep scanning…" : "Run live deep scan"}
             </Button>
             <p className="mt-2 text-[11px] text-muted">
               Search uses the Sydney candidate index when available. Live deep scan runs the full parcel/assembly engine on demand.{" "}

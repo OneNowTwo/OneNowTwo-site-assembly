@@ -18,6 +18,7 @@ import type { ScanCandidate } from "@/lib/analysis/area-scan";
 import { nearestLmrCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { fetchTrainStations, nearestTrainStation } from "@/lib/data-sources/nsw-train-stations";
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { buildMapHref } from "@/lib/map/map-target";
 import { parseNaturalLanguageFind } from "./nl-parse";
 import type { FindFilters } from "./find-filters-types";
@@ -321,31 +322,83 @@ function rankResults(results: FindResultRow[], filters: FindFilters, profile: St
   return ranked;
 }
 
+/**
+ * DB place scope for index Find — applied BEFORE orderBy/take.
+ * Matches suburb and LGA (e.g. "Parramatta" → suburb or "CITY OF PARRAMATTA").
+ * Address is optional fallback only when suburb/LGA return nothing.
+ */
+export function buildIndexPlaceWhere(place: string): Prisma.SiteCandidateIndexWhereInput {
+  const p = place.trim();
+  return {
+    OR: [
+      { suburb: { equals: p, mode: "insensitive" } },
+      { suburb: { contains: p, mode: "insensitive" } },
+      { lga: { equals: p, mode: "insensitive" } },
+      { lga: { contains: p, mode: "insensitive" } },
+    ],
+  };
+}
+
+/**
+ * Pure helper for regression: place-scope first, then take top N by score.
+ * Proves a lower-scoring in-place row survives when out-of-place rows dominate globally.
+ */
+export function placeScopeThenTake<T extends { suburb?: string | null; lga?: string | null; address?: string | null; quickScore?: number | null }>(
+  rows: T[],
+  place: string | null,
+  take: number,
+): T[] {
+  const scoped = place
+    ? rows.filter(
+        (r) => placeMatches(place, r.suburb) || placeMatches(place, r.lga) || placeMatches(place, r.address),
+      )
+    : rows;
+  return [...scoped]
+    .sort((a, b) => (b.quickScore ?? 0) - (a.quickScore ?? 0))
+    .slice(0, take);
+}
+
 async function findFromIndex(
   filters: FindFilters,
   profile: StrategyProfile,
 ): Promise<{ results: FindResultRow[]; assessedCount: number; diagnostics: string[] }> {
   const diagnostics: string[] = [];
-  const place = filters.suburb ?? filters.lga ?? filters.centreQuery ?? null;
-  const take = Math.min(Math.max((filters.maxResults ?? 15) * 12, 80), 400);
+  const place = (filters.suburb ?? filters.lga ?? filters.centreQuery ?? null)?.trim() || null;
+  // Cap after place scope — never "global top N then filter place in memory".
+  const take = Math.min(Math.max((filters.maxResults ?? 15) * 20, 120), 500);
 
-  const rows = await prisma.siteCandidateIndex.findMany({
-    where: { lifecycleStatus: "ACTIVE", provenance: "INDEX_DISCOVERY" },
+  const baseWhere: Prisma.SiteCandidateIndexWhereInput = {
+    lifecycleStatus: "ACTIVE",
+    provenance: "INDEX_DISCOVERY",
+  };
+
+  let rows = await prisma.siteCandidateIndex.findMany({
+    where: place ? { AND: [baseWhere, buildIndexPlaceWhere(place)] } : baseWhere,
     orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
     take,
   });
-  diagnostics.push(`Index fetch: ${rows.length} ACTIVE INDEX_DISCOVERY rows (cap ${take}).`);
+  diagnostics.push(
+    place
+      ? `Index fetch (place-scoped): ${rows.length} rows for "${place}" (cap ${take}).`
+      : `Index fetch: ${rows.length} ACTIVE INDEX_DISCOVERY rows (cap ${take}).`,
+  );
 
-  const placeFiltered = place
-    ? rows.filter(
-        (r) =>
-          placeMatches(place, r.suburb) ||
-          placeMatches(place, r.lga) ||
-          placeMatches(place, r.address),
-      )
-    : rows;
+  // Address fallback only when suburb/LGA scope returned nothing.
+  if (place && rows.length === 0) {
+    rows = await prisma.siteCandidateIndex.findMany({
+      where: {
+        AND: [
+          baseWhere,
+          { address: { contains: place, mode: "insensitive" } },
+        ],
+      },
+      orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
+      take,
+    });
+    diagnostics.push(`Index address fallback: ${rows.length} rows for "${place}".`);
+  }
 
-  const mapped: FindResultRow[] = placeFiltered.map((r) => {
+  const mapped: FindResultRow[] = rows.map((r) => {
     const flags =
       r.planningChangeFlags && typeof r.planningChangeFlags === "object"
         ? (r.planningChangeFlags as Record<string, unknown>)
@@ -405,7 +458,7 @@ async function findFromIndex(
   const matched = mapped.filter((r) => passesHardFilters(r, filters));
   return {
     results: rankResults(matched, filters, profile).slice(0, filters.maxResults ?? 15),
-    assessedCount: placeFiltered.length,
+    assessedCount: rows.length,
     diagnostics,
   };
 }
