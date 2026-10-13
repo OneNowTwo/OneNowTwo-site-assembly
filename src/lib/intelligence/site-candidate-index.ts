@@ -130,13 +130,15 @@ export async function listTodaySiteCandidates(
     .sort((a, b) => b.score - a.score);
 
   const toView = (row: (typeof ranked)[number]["row"], score: number): SiteCandidateView => {
+    // Lightweight INDEX_CANDIDATE deep-link — never open as PARCEL/OPPORTUNITY
+    // (those trigger broad /api/parcels + LMR centres on zoom ≥ 17).
+    // Omit stored row.bbox: it is often the Sydney discovery TILE, not the site.
     const href = buildMapHref({
+      candidateId: row.id,
+      canonicalKey: row.canonicalKey,
       lat: row.centroidLat,
       lng: row.centroidLng,
       zoom: 18,
-      parcelId: Array.isArray(row.parcelIds) ? String((row.parcelIds as string[])[0] ?? "") : null,
-      bbox: row.bbox as { west: number; south: number; east: number; north: number } | null,
-      opportunityId: row.opportunityId,
     });
     return {
       id: row.id,

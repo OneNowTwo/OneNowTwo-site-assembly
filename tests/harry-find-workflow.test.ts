@@ -5,7 +5,23 @@ import { buildAdjacency } from "@/lib/analysis/geometry";
 import { generateAreaAssemblies } from "@/lib/analysis/area-scan";
 import { DEFAULT_ASSUMPTIONS } from "@/lib/analysis/assumptions";
 import { buildIndexPlaceWhere, mergeFilters, placeScopeThenTake } from "@/lib/find/find-sites";
+import { findResultMapHref, type FindMapHrefInput } from "@/lib/find/find-map-href";
+import { resolveMapTarget } from "@/lib/map/map-target";
 import { lot } from "./helpers";
+
+function sampleFindRow(overrides: Partial<FindMapHrefInput> = {}): FindMapHrefInput {
+  return {
+    key: "nsw-cadid:1|nsw-cadid:2",
+    candidateId: "cand-index-1",
+    locationLabel: "Example Street, Parramatta",
+    suburb: "Parramatta",
+    keySiteId: "KS_1",
+    opportunityId: "opp-1",
+    lotIds: ["nsw-cadid:1", "nsw-cadid:2"],
+    bboxHint: { west: 150.98, south: -33.84, east: 151.02, north: -33.8 },
+    ...overrides,
+  };
+}
 
 describe("Harry Find workflow #1", () => {
   it("Apartments blank Minimum Headroom does not invent minHeadroom=0", () => {
@@ -117,5 +133,36 @@ describe("Harry Find workflow #1", () => {
     expect(src).not.toMatch(
       /findMany\(\{\s*where:\s*\{\s*lifecycleStatus:\s*"ACTIVE",\s*provenance:\s*"INDEX_DISCOVERY"\s*\},\s*orderBy:[\s\S]*?take,\s*\}\);\s*[\s\S]*?rows\.filter\(\s*\(r\)\s*=>\s*[\s\S]*?placeMatches\(place,\s*r\.suburb\)/,
     );
+  });
+
+  it("index Find View on map → INDEX_CANDIDATE (no parcelId / tile bbox / scan)", () => {
+    const href = findResultMapHref(sampleFindRow(), "index");
+    const t = resolveMapTarget(new URL(href, "http://localhost").searchParams);
+    expect(t?.kind).toBe("INDEX_CANDIDATE");
+    expect(t?.candidateId).toBe("cand-index-1");
+    expect(t?.canonicalKey).toBe("nsw-cadid:1|nsw-cadid:2");
+    expect(href).not.toContain("parcelId=");
+    expect(href).not.toContain("bbox=");
+    expect(href).not.toContain("scan=");
+    expect(href).not.toContain("opportunityId=");
+  });
+
+  it("index Find falls back to canonicalKey when candidateId missing", () => {
+    const href = findResultMapHref(sampleFindRow({ candidateId: null }), "index");
+    const t = resolveMapTarget(new URL(href, "http://localhost").searchParams);
+    expect(t?.kind).toBe("INDEX_CANDIDATE");
+    expect(t?.canonicalKey).toBe("nsw-cadid:1|nsw-cadid:2");
+    expect(href).not.toContain("parcelId=");
+  });
+
+  it("live deep-scan Find View on map retains live parcel/scan path", () => {
+    const href = findResultMapHref(sampleFindRow({ candidateId: null }), "live");
+    const t = resolveMapTarget(new URL(href, "http://localhost").searchParams);
+    expect(t?.kind).not.toBe("INDEX_CANDIDATE");
+    // keySite wins over parcel in resolveMapTarget — still the live entity path.
+    expect(["KEY_SITE", "OPPORTUNITY", "PARCEL", "SCAN"]).toContain(t?.kind);
+    expect(href).toMatch(/parcelId=|opportunityId=|keySite=|scan=/);
+    expect(href).not.toContain("candidateId=");
+    expect(href).not.toContain("canonicalKey=");
   });
 });

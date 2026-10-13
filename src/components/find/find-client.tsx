@@ -7,10 +7,11 @@ import { fsr, money, sqm } from "@/lib/format";
 import { StrategySelector } from "@/components/strategy-selector";
 import type { DevelopmentStrategy } from "@/lib/source-watcher/strategy-profile";
 import { fetchApiJson } from "@/lib/api-json";
-import { buildMapHref } from "@/lib/map/map-target";
+import { findResultMapHref } from "@/lib/find/find-map-href";
 
 type FindRow = {
   key: string;
+  candidateId?: string | null;
   locationLabel: string;
   suburb: string | null;
   siteAreaSqm: number;
@@ -307,14 +308,19 @@ export function FindClient() {
                   </Link>
                 ) : null}
                 <Link
-                  href={buildMapHref({
-                    opportunityId: r.opportunityId,
-                    keySiteId: r.keySiteId,
-                    parcelId: r.lotIds?.[0] ?? null,
-                    bbox: r.bboxHint ?? null,
-                    scan: r.suburb || r.locationLabel,
-                    zoom: 17,
-                  })}
+                  href={findResultMapHref(
+                    {
+                      key: r.key,
+                      candidateId: r.candidateId,
+                      opportunityId: r.opportunityId,
+                      keySiteId: r.keySiteId,
+                      lotIds: r.lotIds ?? [],
+                      bboxHint: r.bboxHint ?? null,
+                      suburb: r.suburb,
+                      locationLabel: r.locationLabel,
+                    },
+                    source === "index" ? "index" : "live",
+                  )}
                   className="rounded-[3px] bg-brand px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white"
                 >
                   View on map

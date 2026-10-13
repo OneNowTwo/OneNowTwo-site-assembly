@@ -117,6 +117,17 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
 }
 
 /**
+ * DB-only parcel lookup by external ids — no NSW cadastre / planning calls.
+ * Used by INDEX_CANDIDATE MapTarget so Today → Map stays lightweight.
+ */
+export async function getStoredParcelsByExternalIds(externalParcelIds: string[]): Promise<ParcelData[]> {
+  const ids = [...new Set(externalParcelIds.filter((id) => /^nsw-cadid:\d+$/.test(id)))];
+  if (!ids.length) return [];
+  const stored = await prisma.parcel.findMany({ where: { externalParcelId: { in: ids } } });
+  return stored.map(parcelFromRow);
+}
+
+/**
  * Load parcels by external ids (nsw-cadid:N).
  * Prefers stored rows; hydrates missing lots from NSW cadastre by cadid.
  */
