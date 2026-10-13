@@ -41,6 +41,11 @@ import {
   shouldClearScanForMapTarget,
 } from "@/lib/map/map-target";
 import {
+  buildPersistedMapSearchParams,
+  shouldRewriteMapUrlView,
+  shouldStartMapTargetApply,
+} from "@/lib/map/map-target-apply";
+import {
   isLiveDeepScanEnabled,
   LIVE_DEEP_SCAN_DISABLED_BUTTON,
   LIVE_DEEP_SCAN_DISABLED_MESSAGE,
@@ -180,6 +185,10 @@ export function MapWorkspace({
     href?: string | null;
   } | null>(null);
   const appliedTargetKeyRef = useRef<string | null>(null);
+  /** Key currently being applied (async in flight). Distinct from applied. */
+  const applyingTargetKeyRef = useRef<string | null>(null);
+  /** Bumped when a different target key starts applying — stale fetches ignore results. */
+  const applyGenRef = useRef(0);
   const mapTargetRef = useRef<MapTarget | null>(null);
   mapTargetRef.current = mapTarget;
   const mapVisibleRef = useRef(mapVisible);
@@ -284,14 +293,24 @@ export function MapWorkspace({
       try {
         // Only rewrite the URL while the map route is active — otherwise the
         // always-mounted MapWorkspace steals Today/Find/Sites/Pipeline deep links.
-        if (typeof window !== "undefined" && window.location.pathname === "/map") {
-          const params = new URLSearchParams(window.location.search);
-          params.set("lat", view.lat.toFixed(5));
-          params.set("lng", view.lng.toFixed(5));
-          params.set("zoom", String(Math.round(view.zoom * 10) / 10));
-          if (query.trim()) params.set("scan", query.trim());
-          else params.delete("scan");
-          // Preserve MapTarget entity params (pca, keySite, parcelId, …) across pan/zoom.
+        // While a MapTarget is pending apply, target navigation owns lat/lng/zoom;
+        // localStorage above may still update, but replaceState must not run.
+        if (
+          typeof window !== "undefined" &&
+          shouldRewriteMapUrlView({
+            pathname: window.location.pathname,
+            targetKey: mapTargetRef.current?.key,
+            appliedTargetKey: appliedTargetKeyRef.current,
+          })
+        ) {
+          const params = buildPersistedMapSearchParams({
+            currentSearch: window.location.search,
+            lat: view.lat,
+            lng: view.lng,
+            zoom: view.zoom,
+            query,
+          });
+          // Preserve MapTarget entity params (candidateId, pca, keySite, …) across pan/zoom.
           window.history.replaceState(null, "", `/map?${params.toString()}`);
         }
       } catch {
@@ -967,11 +986,31 @@ export function MapWorkspace({
    * Apply MapTarget deep links while MapWorkspace stays mounted across tabs.
    * Entity targets (PCA / key site / opportunity / parcel / activity) always win over last view.
    * Every non-SCAN target: clear scan + find + assembly + selection first, then apply.
+   *
+   * Lifecycle: do NOT mark applied until apply (or deliberate fallback) finishes.
+   * Same-key object churn (e.g. searchParams identity) must not cancel/restart in-flight apply.
    */
   useEffect(() => {
     if (!mapVisible || !mapTarget) return;
-    if (appliedTargetKeyRef.current === mapTarget.key) return;
-    appliedTargetKeyRef.current = mapTarget.key;
+    const key = mapTarget.key;
+    if (
+      !shouldStartMapTargetApply({
+        targetKey: key,
+        appliedTargetKey: appliedTargetKeyRef.current,
+        applyingTargetKey: applyingTargetKeyRef.current,
+      })
+    ) {
+      return;
+    }
+
+    const gen = ++applyGenRef.current;
+    applyingTargetKeyRef.current = key;
+    const stale = () => applyGenRef.current !== gen;
+    const markApplied = () => {
+      if (stale()) return;
+      appliedTargetKeyRef.current = key;
+      if (applyingTargetKeyRef.current === key) applyingTargetKeyRef.current = null;
+    };
 
     if (shouldClearScanForMapTarget(mapTarget.kind)) {
       const cleared = emptyScan();
@@ -985,8 +1024,6 @@ export function MapWorkspace({
       clearScanSession();
       persistClientState({ scanOverride: cleared, activeKey: null });
     }
-
-    let cancelled = false;
 
     const flyBBox = (bbox: BBox, zoom?: number) => {
       const lat = (bbox.south + bbox.north) / 2;
@@ -1026,7 +1063,7 @@ export function MapWorkspace({
             geometry?: unknown;
             geometryStatus?: "OK" | "MISSING";
           }>(`/api/map/index-candidate?${qs.toString()}`);
-          if (cancelled) return;
+          if (stale()) return;
           const ids = (body.parcelIds ?? []).filter(Boolean);
           const stored = (body.parcels ?? []).filter((p) => !!p?.externalParcelId && !!p?.geometry);
           if (stored.length) {
@@ -1054,6 +1091,11 @@ export function MapWorkspace({
               zoom: mapTarget.zoom ?? 18,
               nonce: nowMs(),
             });
+            mapViewRef.current = {
+              lat: body.centroid.lat,
+              lng: body.centroid.lng,
+              zoom: mapTarget.zoom ?? 18,
+            };
           } else if (mapTarget.lat != null && mapTarget.lng != null) {
             setFlyTo({
               lat: mapTarget.lat,
@@ -1061,6 +1103,11 @@ export function MapWorkspace({
               zoom: mapTarget.zoom ?? 18,
               nonce: nowMs(),
             });
+            mapViewRef.current = {
+              lat: mapTarget.lat,
+              lng: mapTarget.lng,
+              zoom: mapTarget.zoom ?? 18,
+            };
           }
           const geometryMissing = body.geometryStatus === "MISSING" || (!stored.length && !body.geometry);
           const summaryBits = geometryMissing
@@ -1083,8 +1130,9 @@ export function MapWorkspace({
             summary: summaryBits || body.suburb || null,
             href: body.opportunityId ? `/opportunities/${body.opportunityId}` : null,
           });
+          markApplied();
         } catch {
-          if (cancelled) return;
+          if (stale()) return;
           // Still suppress viewport load — fall back to URL site centroid only
           // (do not trust URL bbox — Today currently embeds discovery tile bboxes).
           if (mapTarget.lat != null && mapTarget.lng != null) {
@@ -1094,39 +1142,63 @@ export function MapWorkspace({
               zoom: mapTarget.zoom ?? 18,
               nonce: nowMs(),
             });
+            mapViewRef.current = {
+              lat: mapTarget.lat,
+              lng: mapTarget.lng,
+              zoom: mapTarget.zoom ?? 18,
+            };
           }
           setTargetPanel({
             kind: "INDEX_CANDIDATE",
             title: mapTarget.canonicalKey ?? mapTarget.candidateId ?? "Indexed site",
           });
+          markApplied();
         }
         return;
       }
 
       if (mapTarget.kind === "POINT" && mapTarget.lat != null && mapTarget.lng != null) {
+        if (stale()) return;
         setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 16, nonce: nowMs() });
+        mapViewRef.current = { lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 16 };
         setTargetPanel({ kind: "POINT", title: "Map location" });
+        markApplied();
         return;
       }
 
       if (mapTarget.kind === "BBOX" && mapTarget.bbox) {
+        if (stale()) return;
         flyBBox(mapTarget.bbox, mapTarget.zoom);
         setTargetPanel({ kind: "BBOX", title: "Map area" });
+        markApplied();
         return;
       }
 
       if (mapTarget.kind === "PARCEL" && mapTarget.parcelId) {
+        if (stale()) return;
         if (mapTarget.lat != null && mapTarget.lng != null) {
           setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 18, nonce: nowMs() });
+          mapViewRef.current = {
+            lat: mapTarget.lat,
+            lng: mapTarget.lng,
+            zoom: mapTarget.zoom ?? 18,
+          };
         }
         setSelectedId(mapTarget.parcelId);
         setTargetPanel({ kind: "PARCEL", title: mapTarget.parcelId });
+        markApplied();
         return;
       }
 
       if (mapTarget.kind === "DEVELOPMENT_ACTIVITY") {
+        if (stale()) return;
         if (mapTarget.lat != null && mapTarget.lng != null) {
           setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 16, nonce: nowMs() });
+          mapViewRef.current = {
+            lat: mapTarget.lat,
+            lng: mapTarget.lng,
+            zoom: mapTarget.zoom ?? 16,
+          };
         }
         setDevActivityLayer(true);
         setTargetPanel({
@@ -1134,6 +1206,7 @@ export function MapWorkspace({
           title: "Development activity",
           summary: mapTarget.activityId ?? null,
         });
+        markApplied();
         return;
       }
 
@@ -1144,7 +1217,7 @@ export function MapWorkspace({
             name: string;
             lots?: Array<{ externalParcelId: string; centroid: [number, number]; included?: boolean }>;
           }>(`/api/opportunities/${mapTarget.opportunityId}`);
-          if (cancelled) return;
+          if (stale()) return;
           const lots = (body.lots ?? []).filter((l) => l.included !== false);
           const ids = lots.map((l) => l.externalParcelId);
           if (ids.length) {
@@ -1164,17 +1237,22 @@ export function MapWorkspace({
             }
           } else if (mapTarget.lat != null && mapTarget.lng != null) {
             setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 18, nonce: nowMs() });
+            mapViewRef.current = { lat: mapTarget.lat, lng: mapTarget.lng, zoom: 18 };
           }
           setTargetPanel({
             kind: "OPPORTUNITY",
             title: body.name,
             href: `/opportunities/${body.id}`,
           });
+          markApplied();
         } catch {
+          if (stale()) return;
           if (mapTarget.lat != null && mapTarget.lng != null) {
             setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 17, nonce: nowMs() });
+            mapViewRef.current = { lat: mapTarget.lat, lng: mapTarget.lng, zoom: 17 };
           }
           setTargetPanel({ kind: "OPPORTUNITY", title: "Site", href: `/opportunities/${mapTarget.opportunityId}` });
+          markApplied();
         }
         return;
       }
@@ -1197,7 +1275,7 @@ export function MapWorkspace({
               ...(mapTarget.keySiteId ? { keySite: mapTarget.keySiteId } : {}),
             }).toString()}`,
           );
-          if (cancelled) return;
+          if (stale()) return;
           const bbox = resolved.bbox ?? bboxFromGeometry(resolved.geometry);
           if (bbox) flyBBox(bbox as BBox, mapTarget.kind === "KEY_SITE" ? 17 : 15);
           else if (resolved.centroid) {
@@ -1207,8 +1285,14 @@ export function MapWorkspace({
               zoom: mapTarget.kind === "KEY_SITE" ? 17 : 15,
               nonce: nowMs(),
             });
+            mapViewRef.current = {
+              lat: resolved.centroid.lat,
+              lng: resolved.centroid.lng,
+              zoom: mapTarget.kind === "KEY_SITE" ? 17 : 15,
+            };
           } else if (mapTarget.lat != null && mapTarget.lng != null) {
             setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 15, nonce: nowMs() });
+            mapViewRef.current = { lat: mapTarget.lat, lng: mapTarget.lng, zoom: 15 };
           }
           if (resolved.requiredParcelIds?.length) {
             setAssembly(resolved.requiredParcelIds);
@@ -1220,21 +1304,28 @@ export function MapWorkspace({
             summary: resolved.summary,
             href: resolved.sourceUrl,
           });
+          markApplied();
         } catch {
+          if (stale()) return;
           if (mapTarget.lat != null && mapTarget.lng != null) {
             setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: 15, nonce: nowMs() });
+            mapViewRef.current = { lat: mapTarget.lat, lng: mapTarget.lng, zoom: 15 };
           }
           setTargetPanel({
             kind: mapTarget.kind,
             title: mapTarget.keySiteId ?? mapTarget.planningChangeAreaId ?? "Planning area",
           });
+          markApplied();
         }
+        return;
       }
+
+      // SCAN / unhandled kinds: nothing async to resolve — release apply lock.
+      markApplied();
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    // No cleanup cancel: same-key mapTarget identity churn must leave the in-flight
+    // apply alone. A different key bumps applyGenRef on the next effect start.
   }, [mapVisible, mapTarget]);
 
   const letters = "ABCDEFGH";
