@@ -6,12 +6,14 @@
 
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
+import { siteGeometryFromParcels } from "@/lib/index-candidate-geometry";
+import { upsertParcel } from "@/lib/opportunity-service";
 import { scanArea } from "@/lib/scan-service";
 import { resolveProposedPlanningForPoint } from "@/lib/source-watcher/resolve-proposed-at-point";
 import { fetchTrainStations, nearestTrainStation } from "@/lib/data-sources/nsw-train-stations";
 import { canonicalParcelKey } from "./canonical-key";
 import { buildSydneyIndexBatchPlan, GREATER_SYDNEY_LGA_COUNT } from "./greater-sydney-lgas";
-import type { BBox } from "@/lib/types";
+import type { BBox, ParcelData } from "@/lib/types";
 
 const DEFAULT_BATCHES_PER_INVOKE = 5;
 
@@ -135,6 +137,10 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
       stations = [];
     }
 
+    const parcelsById = new Map<string, ParcelData>(
+      (scan.valuedParcels ?? []).map((p) => [p.externalParcelId, p]),
+    );
+
     let generated = 0;
     for (const c of scan.candidates) {
       const key = canonicalParcelKey(c.lotIds);
@@ -144,6 +150,22 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
       const actualLga = c.lga?.trim() ? c.lga.trim() : null;
       if (!candidateBelongsToBatchLga(actualLga, batch.lga)) {
         continue;
+      }
+
+      const memberParcels = c.lotIds
+        .map((lotId) => parcelsById.get(lotId))
+        .filter((p): p is ParcelData => !!p?.geometry);
+      const siteGeometry = siteGeometryFromParcels(memberParcels);
+
+      // Persist exact lot polygons so Today → Map can draw without a live bbox scan.
+      if (memberParcels.length) {
+        try {
+          await prisma.$transaction(async (tx) => {
+            for (const p of memberParcels) await upsertParcel(tx, p);
+          });
+        } catch {
+          // Index upsert still proceeds with geometry JSON even if Parcel write fails.
+        }
       }
 
       let proposedFsr: number | null = null;
@@ -232,6 +254,9 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
           centroidLat: c.centroid?.[1] ?? null,
           centroidLng: c.centroid?.[0] ?? null,
           bbox: bbox as unknown as Prisma.InputJsonValue,
+          ...(siteGeometry
+            ? { geometry: siteGeometry as unknown as Prisma.InputJsonValue }
+            : {}),
           reasonHints: reasons.slice(0, 3) as unknown as Prisma.InputJsonValue,
           strategyScores: strategyScores as unknown as Prisma.InputJsonValue,
           provenance: "INDEX_DISCOVERY",
@@ -247,6 +272,7 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
         },
         update: {
           kind: c.lotCount > 1 ? "ASSEMBLY" : "PARCEL",
+          parcelIds: c.lotIds as unknown as Prisma.InputJsonValue,
           address: c.locationLabel,
           suburb: c.suburb,
           lga: actualLga,
@@ -265,6 +291,10 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
           maxPayable: c.financialRankingAvailable ? c.maxPayable : null,
           centroidLat: c.centroid?.[1] ?? null,
           centroidLng: c.centroid?.[0] ?? null,
+          bbox: bbox as unknown as Prisma.InputJsonValue,
+          ...(siteGeometry
+            ? { geometry: siteGeometry as unknown as Prisma.InputJsonValue }
+            : {}),
           reasonHints: reasons.slice(0, 3) as unknown as Prisma.InputJsonValue,
           strategyScores: strategyScores as unknown as Prisma.InputJsonValue,
           provenance: "INDEX_DISCOVERY",
