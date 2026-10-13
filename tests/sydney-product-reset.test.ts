@@ -11,6 +11,7 @@ import {
   buildMapHref,
   SYDNEY_METRO_START,
   shouldClearScanForMapTarget,
+  resetSelectionForMapTarget,
 } from "@/lib/map/map-target";
 import { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 import { profileForStrategy } from "@/lib/source-watcher/strategy-profile";
@@ -228,6 +229,34 @@ describe("Sydney product reset — MapTarget", () => {
     expect(shouldClearScanForMapTarget("DEVELOPMENT_ACTIVITY")).toBe(true);
     expect(shouldClearScanForMapTarget("SCAN")).toBe(false);
     expect(shouldClearScanForMapTarget(null)).toBe(false);
+  });
+
+  it("clears old assembly when OPPORTUNITY/KEY_SITE resolve no parcel IDs", () => {
+    const prev = { assembly: ["old-lot-a", "old-lot-b"], selectedId: "old-lot-a" };
+
+    expect(resetSelectionForMapTarget("OPPORTUNITY", prev, { assemblyIds: [] })).toEqual({
+      assembly: [],
+      selectedId: null,
+    });
+    expect(resetSelectionForMapTarget("KEY_SITE", prev, { assemblyIds: null })).toEqual({
+      assembly: [],
+      selectedId: null,
+    });
+    expect(resetSelectionForMapTarget("PLANNING_AREA", prev)).toEqual({
+      assembly: [],
+      selectedId: null,
+    });
+
+    // Successful resolve may set a new assembly after the clear.
+    expect(
+      resetSelectionForMapTarget("OPPORTUNITY", prev, {
+        assemblyIds: ["new-lot-1"],
+        selectedId: "new-lot-1",
+      }),
+    ).toEqual({ assembly: ["new-lot-1"], selectedId: "new-lot-1" });
+
+    // SCAN must not wipe an in-progress / restored selection.
+    expect(resetSelectionForMapTarget("SCAN", prev)).toEqual(prev);
   });
 
   it("humanizes stored engineering site reasons for Today", () => {

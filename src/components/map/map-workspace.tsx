@@ -912,7 +912,7 @@ export function MapWorkspace({
   /**
    * Apply MapTarget deep links while MapWorkspace stays mounted across tabs.
    * Entity targets (PCA / key site / opportunity / parcel / activity) always win over last view.
-   * Non-SCAN targets clear any prior area-scan so Today → Map never shows stale results.
+   * Every non-SCAN target: clear scan + find + assembly + selection first, then apply.
    */
   useEffect(() => {
     if (!mapVisible || !mapTarget) return;
@@ -926,18 +926,10 @@ export function MapWorkspace({
       setHoverKey(null);
       setScanExpanded(null);
       setFind(null);
+      setAssembly([]);
+      setSelectedId(null);
       clearScanSession();
       persistClientState({ scanOverride: cleared, activeKey: null });
-      // Point / parcel / activity targets should not keep a prior assembly highlight.
-      if (
-        mapTarget.kind === "POINT" ||
-        mapTarget.kind === "PARCEL" ||
-        mapTarget.kind === "BBOX" ||
-        mapTarget.kind === "DEVELOPMENT_ACTIVITY"
-      ) {
-        setAssembly([]);
-        if (mapTarget.kind !== "PARCEL") setSelectedId(null);
-      }
     }
 
     let cancelled = false;
