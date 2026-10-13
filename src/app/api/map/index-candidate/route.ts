@@ -63,7 +63,7 @@ export async function GET(req: Request) {
       siteBbox = { west: west - pad, south: south - pad, east: east + pad, north: north + pad };
     }
   }
-  if (!siteBbox) siteBbox = bboxFromGeometry(row.geometry);
+  if (!siteBbox) siteBbox = bboxFromGeometry(row.geometry) ?? null;
   if (!siteBbox && row.centroidLat != null && row.centroidLng != null) {
     siteBbox = {
       west: row.centroidLng - 0.0012,
