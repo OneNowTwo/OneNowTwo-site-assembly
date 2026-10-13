@@ -203,6 +203,18 @@ describe("Sydney product reset — MapTarget", () => {
     expect(resolveMapTarget(new URLSearchParams("bbox=151.1,-33.9,151.3,-33.7"))?.kind).toBe("BBOX");
   });
 
+  it("resolves INDEX_CANDIDATE ahead of parcelId / opportunityId", () => {
+    const t = resolveMapTarget(
+      new URLSearchParams(
+        "candidateId=cand1&canonicalKey=a%7Cb&parcelId=nsw-cadid:1&opportunityId=opp1&lat=-33.8&lng=151.2&zoom=18",
+      ),
+    );
+    expect(t?.kind).toBe("INDEX_CANDIDATE");
+    expect(t?.candidateId).toBe("cand1");
+    expect(t?.canonicalKey).toBe("a|b");
+    expect(resolveMapTarget(new URLSearchParams("canonicalKey=only-key"))?.kind).toBe("INDEX_CANDIDATE");
+  });
+
   it("buildMapHref is generic and round-trips", () => {
     const href = buildMapHref({ planningChangeAreaId: "pca1", keySiteId: "KS1", lat: -33.9, lng: 151.1 });
     expect(href).toContain("/map?");
@@ -210,6 +222,23 @@ describe("Sydney product reset — MapTarget", () => {
     expect(href).toContain("keySite=KS1");
     const t = resolveMapTarget(new URL(href, "http://localhost").searchParams);
     expect(t?.kind).toBe("KEY_SITE");
+  });
+
+  it("buildMapHref for indexed Today candidate stays INDEX_CANDIDATE (no parcelId)", () => {
+    const href = buildMapHref({
+      candidateId: "cand99",
+      canonicalKey: "nsw-cadid:1|nsw-cadid:2",
+      lat: -33.81,
+      lng: 151.2,
+      zoom: 18,
+      parcelId: "nsw-cadid:1",
+      opportunityId: "opp-should-omit",
+      bbox: { west: 151.19, south: -33.82, east: 151.21, north: -33.8 },
+    });
+    expect(href).toContain("candidateId=cand99");
+    expect(href).not.toContain("parcelId=");
+    expect(href).not.toContain("opportunityId=");
+    expect(resolveMapTarget(new URL(href, "http://localhost").searchParams)?.kind).toBe("INDEX_CANDIDATE");
   });
 
   it("default map start is Sydney metro not Manly Vale", () => {
@@ -222,6 +251,7 @@ describe("Sydney product reset — MapTarget", () => {
   it("clears prior scan when Today opens a new MapTarget (not SCAN)", () => {
     expect(shouldClearScanForMapTarget("POINT")).toBe(true);
     expect(shouldClearScanForMapTarget("PARCEL")).toBe(true);
+    expect(shouldClearScanForMapTarget("INDEX_CANDIDATE")).toBe(true);
     expect(shouldClearScanForMapTarget("OPPORTUNITY")).toBe(true);
     expect(shouldClearScanForMapTarget("KEY_SITE")).toBe(true);
     expect(shouldClearScanForMapTarget("PLANNING_AREA")).toBe(true);

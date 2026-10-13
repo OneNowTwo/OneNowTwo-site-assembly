@@ -27,6 +27,7 @@ import { SCAN_CALCULATION_VERSION } from "@/lib/analysis/assembly-feasibility";
 import { syncCandidatesWithCanonical, type CanonicalScanOverlay } from "@/lib/analysis/sync-scan-canonical";
 import { ApiJsonError, fetchApiJson, fetchApiJsonWithRetry, isTransientHttpError } from "@/lib/api-json";
 import {
+  INDEX_CANDIDATE_VIEWPORT_SUPPRESS_MS,
   POST_SCAN_PARCEL_COOLDOWN_MS,
   POST_SCAN_PARCEL_REFRESH_DELAY_MS,
   scanReturnedSufficientParcels,
@@ -942,6 +943,87 @@ export function MapWorkspace({
     };
 
     void (async () => {
+      if (mapTarget.kind === "INDEX_CANDIDATE") {
+        // Suppress broad viewport /api/parcels + /api/lmr/centres before flyTo
+        // so zoom≥17 does not hammer the starter web instance.
+        parcelCooldownUntilRef.current = nowMs() + INDEX_CANDIDATE_VIEWPORT_SUPPRESS_MS;
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        try {
+          const qs = new URLSearchParams();
+          if (mapTarget.candidateId) qs.set("id", mapTarget.candidateId);
+          if (mapTarget.canonicalKey) qs.set("canonicalKey", mapTarget.canonicalKey);
+          const body = await fetchApiJson<{
+            id: string;
+            title: string;
+            address?: string | null;
+            suburb?: string | null;
+            parcelIds?: string[];
+            bbox?: BBox | null;
+            centroid?: { lat: number; lng: number } | null;
+            opportunityId?: string | null;
+            parcels?: ParcelData[];
+          }>(`/api/map/index-candidate?${qs.toString()}`);
+          if (cancelled) return;
+          const ids = (body.parcelIds ?? []).filter(Boolean);
+          const stored = (body.parcels ?? []).filter((p) => !!p?.externalParcelId && !!p?.geometry);
+          if (stored.length) {
+            setParcels((prev) => {
+              const next = new Map(prev);
+              for (const p of stored) next.set(p.externalParcelId, p);
+              parcelsCountRef.current = next.size;
+              return next;
+            });
+          }
+          if (ids.length) {
+            setAssembly(ids);
+            setSelectedId(ids[0] ?? null);
+          }
+          const bbox = body.bbox ?? mapTarget.bbox ?? null;
+          if (bbox) flyBBox(bbox, mapTarget.zoom ?? 18);
+          else if (body.centroid) {
+            setFlyTo({
+              lat: body.centroid.lat,
+              lng: body.centroid.lng,
+              zoom: mapTarget.zoom ?? 18,
+              nonce: nowMs(),
+            });
+          } else if (mapTarget.lat != null && mapTarget.lng != null) {
+            setFlyTo({
+              lat: mapTarget.lat,
+              lng: mapTarget.lng,
+              zoom: mapTarget.zoom ?? 18,
+              nonce: nowMs(),
+            });
+          }
+          setTargetPanel({
+            kind: "INDEX_CANDIDATE",
+            title: body.title || body.address || "Indexed site",
+            summary: body.suburb ?? null,
+            href: body.opportunityId ? `/opportunities/${body.opportunityId}` : null,
+          });
+        } catch {
+          if (cancelled) return;
+          // Still suppress viewport load — fall back to URL centroid/bbox only.
+          if (mapTarget.bbox) flyBBox(mapTarget.bbox, mapTarget.zoom ?? 18);
+          else if (mapTarget.lat != null && mapTarget.lng != null) {
+            setFlyTo({
+              lat: mapTarget.lat,
+              lng: mapTarget.lng,
+              zoom: mapTarget.zoom ?? 18,
+              nonce: nowMs(),
+            });
+          }
+          setTargetPanel({
+            kind: "INDEX_CANDIDATE",
+            title: mapTarget.canonicalKey ?? mapTarget.candidateId ?? "Indexed site",
+          });
+        }
+        return;
+      }
+
       if (mapTarget.kind === "POINT" && mapTarget.lat != null && mapTarget.lng != null) {
         setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 16, nonce: nowMs() });
         setTargetPanel({ kind: "POINT", title: "Map location" });

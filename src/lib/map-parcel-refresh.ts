@@ -43,3 +43,9 @@ export function shouldSilentSoftFailTransient(opts: {
 
 export const POST_SCAN_PARCEL_COOLDOWN_MS = 10_000;
 export const POST_SCAN_PARCEL_REFRESH_DELAY_MS = 10_000;
+
+/**
+ * After Today → INDEX_CANDIDATE apply, suppress automatic viewport
+ * /api/parcels + /api/lmr/centres so the starter instance is not hammered.
+ */
+export const INDEX_CANDIDATE_VIEWPORT_SUPPRESS_MS = 15_000;

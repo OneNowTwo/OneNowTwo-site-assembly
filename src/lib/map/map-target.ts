@@ -2,6 +2,7 @@
  * Generic MapTarget resolver — every app surface should deep-link via these URLs.
  *
  * Supported search params:
+ *   candidateId | canonicalKey  (INDEX_CANDIDATE — SiteCandidateIndex)
  *   lat, lng, zoom
  *   parcelId
  *   opportunityId
@@ -13,6 +14,7 @@
  */
 
 export type MapTargetKind =
+  | "INDEX_CANDIDATE"
   | "POINT"
   | "PARCEL"
   | "OPPORTUNITY"
@@ -27,6 +29,10 @@ export type MapTarget = {
   lat?: number;
   lng?: number;
   zoom?: number;
+  /** SiteCandidateIndex row id */
+  candidateId?: string;
+  /** SiteCandidateIndex.canonicalKey */
+  canonicalKey?: string;
   parcelId?: string;
   opportunityId?: string;
   planningChangeAreaId?: string;
@@ -99,6 +105,8 @@ type ParamSource = {
 
 /** Resolve MapTarget from URLSearchParams or any get()-compatible source. */
 export function resolveMapTarget(searchParams: ParamSource): MapTarget | null {
+  const candidateId = searchParams.get("candidateId") ?? undefined;
+  const canonicalKey = searchParams.get("canonicalKey") ?? undefined;
   const parcelId = searchParams.get("parcelId") ?? undefined;
   const opportunityId = searchParams.get("opportunityId") ?? undefined;
   const planningChangeAreaId =
@@ -110,6 +118,21 @@ export function resolveMapTarget(searchParams: ParamSource): MapTarget | null {
   const lng = num(searchParams.get("lng"));
   const zoom = num(searchParams.get("zoom"));
   const scan = searchParams.get("scan") ?? undefined;
+
+  // Today / indexed discovery — prefer lightweight SiteCandidateIndex targets
+  // over PARCEL so the map does not fall into a broad viewport cadastre load.
+  if (candidateId || canonicalKey) {
+    return {
+      kind: "INDEX_CANDIDATE",
+      candidateId,
+      canonicalKey,
+      lat,
+      lng,
+      zoom: zoom ?? 18,
+      bbox,
+      key: `index:${candidateId ?? canonicalKey}`,
+    };
+  }
 
   if (keySiteId) {
     return {
@@ -204,6 +227,8 @@ export function buildMapHref(partial: {
   lat?: number | null;
   lng?: number | null;
   zoom?: number | null;
+  candidateId?: string | null;
+  canonicalKey?: string | null;
   parcelId?: string | null;
   opportunityId?: string | null;
   planningChangeAreaId?: string | null;
@@ -213,13 +238,19 @@ export function buildMapHref(partial: {
   scan?: string | null;
 }): string {
   const params = new URLSearchParams();
+  if (partial.candidateId) params.set("candidateId", partial.candidateId);
+  if (partial.canonicalKey) params.set("canonicalKey", partial.canonicalKey);
   if (partial.lat != null && partial.lng != null) {
     params.set("lat", Number(partial.lat).toFixed(5));
     params.set("lng", Number(partial.lng).toFixed(5));
   }
   if (partial.zoom != null) params.set("zoom", String(Math.round(Number(partial.zoom) * 10) / 10));
-  if (partial.parcelId) params.set("parcelId", partial.parcelId);
-  if (partial.opportunityId) params.set("opportunityId", partial.opportunityId);
+  // When opening an indexed candidate, omit parcelId/opportunityId so resolveMapTarget
+  // stays on INDEX_CANDIDATE (parcelId alone would still be PARCEL if candidate params missing).
+  if (!partial.candidateId && !partial.canonicalKey) {
+    if (partial.parcelId) params.set("parcelId", partial.parcelId);
+    if (partial.opportunityId) params.set("opportunityId", partial.opportunityId);
+  }
   if (partial.planningChangeAreaId) params.set("pca", partial.planningChangeAreaId);
   if (partial.keySiteId) params.set("keySite", partial.keySiteId);
   if (partial.activityId) params.set("activityId", partial.activityId);
@@ -227,7 +258,7 @@ export function buildMapHref(partial: {
     const b = partial.bbox;
     params.set("bbox", `${b.west},${b.south},${b.east},${b.north}`);
   }
-  if (partial.scan) params.set("scan", partial.scan);
+  if (partial.scan && !partial.candidateId && !partial.canonicalKey) params.set("scan", partial.scan);
   const q = params.toString();
   return q ? `/map?${q}` : "/map";
 }
