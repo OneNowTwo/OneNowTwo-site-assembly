@@ -38,6 +38,47 @@ export type MapTarget = {
   key: string;
 };
 
+/**
+ * Today / Find / Sites deep-links keep MapWorkspace mounted. A new entity or
+ * point target must drop the previous area-scan overlay so Harry does not see
+ * stale ranked assemblies on the wrong place.
+ * SCAN targets intentionally keep / bootstrap scan state.
+ */
+export function shouldClearScanForMapTarget(kind: MapTargetKind | null | undefined): boolean {
+  if (!kind) return false;
+  return kind !== "SCAN";
+}
+
+export type MapSelectionState = {
+  assembly: string[];
+  selectedId: string | null;
+};
+
+/**
+ * Every non-SCAN MapTarget starts from a clean selection (scan/find/assembly/
+ * selected parcel cleared in the workspace). Target handlers may then set a
+ * new assembly/selection only after they successfully resolve parcel IDs.
+ * If resolution fails or returns none, prior assembly must not remain.
+ */
+export function resetSelectionForMapTarget(
+  kind: MapTargetKind | null | undefined,
+  prev: MapSelectionState,
+  resolved?: { assemblyIds?: string[] | null; selectedId?: string | null },
+): MapSelectionState {
+  if (!shouldClearScanForMapTarget(kind)) return prev;
+  const ids = (resolved?.assemblyIds ?? []).filter(Boolean);
+  if (ids.length) {
+    return {
+      assembly: ids,
+      selectedId: resolved?.selectedId ?? ids[0] ?? null,
+    };
+  }
+  if (resolved?.selectedId) {
+    return { assembly: [], selectedId: resolved.selectedId };
+  }
+  return { assembly: [], selectedId: null };
+}
+
 function num(v: string | null): number | undefined {
   if (v == null || v === "") return undefined;
   const n = Number(v);

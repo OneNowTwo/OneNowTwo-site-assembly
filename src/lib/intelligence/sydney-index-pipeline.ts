@@ -182,13 +182,13 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
 
       const reasons: string[] = [];
       if (proposedFsr != null && c.lepFsr != null && proposedFsr > c.lepFsr) {
-        reasons.push(`NEW PROPOSED DENSITY UPLIFT · ${c.lepFsr} → ${proposedFsr} FSR`);
+        reasons.push(`Proposed FSR uplift: ${c.lepFsr} → ${proposedFsr}`);
       } else if (proposedFsr != null) {
         reasons.push(`Proposed FSR ${proposedFsr}`);
       }
       if (keySiteStatus) reasons.push(`KEY SITE OPPORTUNITY · ${keySiteStatus}`);
       if (stationDistanceM != null && stationDistanceM <= 800) {
-        reasons.push(`STATION PROXIMITY · ${Math.round(stationDistanceM)}m`);
+        reasons.push(`About ${Math.round(stationDistanceM)}m to a station`);
       }
       if (c.zone) reasons.push(`Zone ${c.zone}`);
       if (!reasons.length) reasons.push("Sydney index discovery — meets screening filters");

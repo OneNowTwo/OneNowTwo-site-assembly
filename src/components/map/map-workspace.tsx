@@ -32,7 +32,12 @@ import {
   scanReturnedSufficientParcels,
   shouldSilentSoftFailTransient,
 } from "@/lib/map-parcel-refresh";
-import { SYDNEY_METRO_START, type MapTarget, bboxFromGeometry } from "@/lib/map/map-target";
+import {
+  SYDNEY_METRO_START,
+  type MapTarget,
+  bboxFromGeometry,
+  shouldClearScanForMapTarget,
+} from "@/lib/map/map-target";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
@@ -907,11 +912,25 @@ export function MapWorkspace({
   /**
    * Apply MapTarget deep links while MapWorkspace stays mounted across tabs.
    * Entity targets (PCA / key site / opportunity / parcel / activity) always win over last view.
+   * Every non-SCAN target: clear scan + find + assembly + selection first, then apply.
    */
   useEffect(() => {
     if (!mapVisible || !mapTarget) return;
     if (appliedTargetKeyRef.current === mapTarget.key) return;
     appliedTargetKeyRef.current = mapTarget.key;
+
+    if (shouldClearScanForMapTarget(mapTarget.kind)) {
+      const cleared = emptyScan();
+      setScan(cleared);
+      setActiveKey(null);
+      setHoverKey(null);
+      setScanExpanded(null);
+      setFind(null);
+      setAssembly([]);
+      setSelectedId(null);
+      clearScanSession();
+      persistClientState({ scanOverride: cleared, activeKey: null });
+    }
 
     let cancelled = false;
 

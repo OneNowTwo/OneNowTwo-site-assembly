@@ -6,7 +6,14 @@ import {
   eventDedupeFingerprint,
 } from "@/lib/intelligence/material-change";
 import { aggregateIntelligenceStories } from "@/lib/intelligence/stories";
-import { resolveMapTarget, buildMapHref, SYDNEY_METRO_START } from "@/lib/map/map-target";
+import {
+  resolveMapTarget,
+  buildMapHref,
+  SYDNEY_METRO_START,
+  shouldClearScanForMapTarget,
+  resetSelectionForMapTarget,
+} from "@/lib/map/map-target";
+import { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 import { profileForStrategy } from "@/lib/source-watcher/strategy-profile";
 import { canonicalParcelKey } from "@/lib/intelligence/canonical-key";
 import { coverageSummary, SYDNEY_COVERAGE_MATRIX } from "@/lib/intelligence/sydney-coverage";
@@ -210,6 +217,54 @@ describe("Sydney product reset — MapTarget", () => {
     expect(SYDNEY_METRO_START.lat).toBeCloseTo(-33.87, 1);
     // Manly Vale was ~-33.836 / zoom 18
     expect(SYDNEY_METRO_START.zoom).not.toBe(18);
+  });
+
+  it("clears prior scan when Today opens a new MapTarget (not SCAN)", () => {
+    expect(shouldClearScanForMapTarget("POINT")).toBe(true);
+    expect(shouldClearScanForMapTarget("PARCEL")).toBe(true);
+    expect(shouldClearScanForMapTarget("OPPORTUNITY")).toBe(true);
+    expect(shouldClearScanForMapTarget("KEY_SITE")).toBe(true);
+    expect(shouldClearScanForMapTarget("PLANNING_AREA")).toBe(true);
+    expect(shouldClearScanForMapTarget("BBOX")).toBe(true);
+    expect(shouldClearScanForMapTarget("DEVELOPMENT_ACTIVITY")).toBe(true);
+    expect(shouldClearScanForMapTarget("SCAN")).toBe(false);
+    expect(shouldClearScanForMapTarget(null)).toBe(false);
+  });
+
+  it("clears old assembly when OPPORTUNITY/KEY_SITE resolve no parcel IDs", () => {
+    const prev = { assembly: ["old-lot-a", "old-lot-b"], selectedId: "old-lot-a" };
+
+    expect(resetSelectionForMapTarget("OPPORTUNITY", prev, { assemblyIds: [] })).toEqual({
+      assembly: [],
+      selectedId: null,
+    });
+    expect(resetSelectionForMapTarget("KEY_SITE", prev, { assemblyIds: null })).toEqual({
+      assembly: [],
+      selectedId: null,
+    });
+    expect(resetSelectionForMapTarget("PLANNING_AREA", prev)).toEqual({
+      assembly: [],
+      selectedId: null,
+    });
+
+    // Successful resolve may set a new assembly after the clear.
+    expect(
+      resetSelectionForMapTarget("OPPORTUNITY", prev, {
+        assemblyIds: ["new-lot-1"],
+        selectedId: "new-lot-1",
+      }),
+    ).toEqual({ assembly: ["new-lot-1"], selectedId: "new-lot-1" });
+
+    // SCAN must not wipe an in-progress / restored selection.
+    expect(resetSelectionForMapTarget("SCAN", prev)).toEqual(prev);
+  });
+
+  it("humanizes stored engineering site reasons for Today", () => {
+    expect(humanizeSiteReason("NEW PROPOSED DENSITY UPLIFT · 1 → 2.2 FSR")).toBe(
+      "Proposed FSR uplift: 1 → 2.2 FSR",
+    );
+    expect(humanizeSiteReason("STATION PROXIMITY · 420m")).toBe("About 420m to a station");
+    expect(humanizeSiteReason("KEY SITE · nominated")).toBe("Key site · nominated");
   });
 });
 

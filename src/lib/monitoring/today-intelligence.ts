@@ -209,8 +209,8 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
   }));
 
   return {
-    headline: "Development Intelligence",
-    subheading: `Greater Sydney — what changed, which sites deserve attention for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`,
+    headline: "Today",
+    subheading: `Greater Sydney — what changed, and which sites to check for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`,
     strategy: profile.strategy,
     marketScope: {
       id: market.id,
@@ -221,7 +221,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     indexCount: siteResult.indexCount,
     indexPreparingMessage: siteResult.indexReady
       ? null
-      : "Sydney candidate index is being prepared — discovery scan in progress.",
+      : "We're still building the Sydney site list. Check back soon.",
     topIntelligence,
     whatChanged: topIntelligence,
     sitesToLookAt,
