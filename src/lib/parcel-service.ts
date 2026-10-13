@@ -127,17 +127,26 @@ export async function getStoredParcelsByExternalIds(externalParcelIds: string[])
   return stored.map(parcelFromRow);
 }
 
+export type GetParcelsByExternalIdsOptions = {
+  /** Skip NSW planning attach (INDEX_CANDIDATE hydrate stays geometry-only). */
+  skipPlanning?: boolean;
+};
+
 /**
  * Load parcels by external ids (nsw-cadid:N).
- * Prefers stored rows; hydrates missing lots from NSW cadastre by cadid.
+ * Prefers stored rows; hydrates missing lots from NSW cadastre by exact cadid only.
+ * Never uses bbox / suburb scan / LMR.
  */
-export async function getParcelsByExternalIds(externalParcelIds: string[]): Promise<ParcelData[]> {
+export async function getParcelsByExternalIds(
+  externalParcelIds: string[],
+  opts: GetParcelsByExternalIdsOptions = {},
+): Promise<ParcelData[]> {
   const ids = [...new Set(externalParcelIds.filter((id) => /^nsw-cadid:\d+$/.test(id)))];
   if (!ids.length) return [];
 
   const stored = await prisma.parcel.findMany({ where: { externalParcelId: { in: ids } } });
   const byId = new Map(stored.map((r) => [r.externalParcelId, parcelFromRow(r)]));
-  const missing = ids.filter((id) => !byId.has(id));
+  const missing = ids.filter((id) => !byId.has(id) || !byId.get(id)?.geometry);
 
   if (missing.length) {
     const cadids = missing.map((id) => id.replace("nsw-cadid:", "")).join(",");
@@ -239,33 +248,79 @@ export async function getParcelsByExternalIds(externalParcelIds: string[]): Prom
     }
   }
 
-  // Attach planning where possible
   const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as ParcelData[];
-  if (ordered.length) {
+  if (opts.skipPlanning || !ordered.length) return ordered;
+
+  // Attach planning where possible
+  try {
+    const lngs = ordered.map((p) => p.centroid[0]);
+    const lats = ordered.map((p) => p.centroid[1]);
+    const bbox: BBox = {
+      west: Math.min(...lngs),
+      east: Math.max(...lngs),
+      south: Math.min(...lats),
+      north: Math.max(...lats),
+    };
+    const controls = await nswPlanningProvider.getControlsForParcels(
+      bbox,
+      ordered.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
+    );
+    return ordered.map((p) => {
+      const live = controls.get(p.externalParcelId);
+      return live ? { ...p, planning: live, planningStatus: "ok" as const } : p;
+    });
+  } catch {
+    return ordered;
+  }
+}
+
+/**
+ * Exact-ID hydrate for INDEX_CANDIDATE: DB first, then NSW cadastre by cadid only,
+ * then persist so the next Today → Map is DB-only. Never bbox/LMR/scanArea.
+ */
+export async function hydrateExactParcelsForIndexCandidate(
+  externalParcelIds: string[],
+): Promise<{ parcels: ParcelData[]; hydratedFromCadastre: boolean }> {
+  const { capParcelIds, parcelsMissingDrawableGeometry } = await import("@/lib/index-candidate-geometry");
+  const { upsertParcel } = await import("@/lib/opportunity-service");
+  const ids = capParcelIds(externalParcelIds);
+  if (!ids.length) return { parcels: [], hydratedFromCadastre: false };
+
+  let parcels = await getStoredParcelsByExternalIds(ids);
+  const missing = parcelsMissingDrawableGeometry(ids, parcels);
+  let hydratedFromCadastre = false;
+
+  if (missing.length) {
     try {
-      const lngs = ordered.map((p) => p.centroid[0]);
-      const lats = ordered.map((p) => p.centroid[1]);
-      const bbox: BBox = {
-        west: Math.min(...lngs),
-        east: Math.max(...lngs),
-        south: Math.min(...lats),
-        north: Math.max(...lats),
-      };
-      const controls = await nswPlanningProvider.getControlsForParcels(
-        bbox,
-        ordered.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
-      );
-      return ordered.map((p) => {
-        const live = controls.get(p.externalParcelId);
-        return live
-          ? { ...p, planning: live, planningStatus: "ok" as const }
-          : p;
-      });
+      const live = await getParcelsByExternalIds(missing, { skipPlanning: true });
+      if (live.length) {
+        hydratedFromCadastre = true;
+        await prisma.$transaction(async (tx) => {
+          for (const p of live) {
+            if (!p.geometry) continue;
+            await upsertParcel(tx, p);
+          }
+        });
+        parcels = await getStoredParcelsByExternalIds(ids);
+        // If persist failed partially, still return live geometry for this response.
+        if (!parcels.length) parcels = live.filter((p) => !!p.geometry);
+        else {
+          const byId = new Map(parcels.map((p) => [p.externalParcelId, p]));
+          for (const p of live) {
+            if (p.geometry && !byId.get(p.externalParcelId)?.geometry) byId.set(p.externalParcelId, p);
+          }
+          parcels = ids.map((id) => byId.get(id)).filter(Boolean) as ParcelData[];
+        }
+      }
     } catch {
-      return ordered;
+      // Cadastre unavailable — return whatever was already in DB.
     }
   }
-  return ordered;
+
+  return {
+    parcels: parcels.filter((p) => !!p.geometry),
+    hydratedFromCadastre,
+  };
 }
 
 /** Refresh live planning for specific stored parcels (Planning tab "Retry"/"Refresh"). */

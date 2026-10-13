@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { isLiveDeepScanEnabled, LIVE_DEEP_SCAN_DISABLED_MESSAGE } from "@/lib/live-deep-scan";
 import { scanArea } from "@/lib/scan-service";
 import { jsonError } from "@/lib/session";
 
@@ -17,6 +18,12 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
+  // Temporary: synchronous scanArea on the starter web instance takes the product offline.
+  // Re-enable only when LIVE_DEEP_SCAN_ENABLED=true (isolated worker path).
+  if (!isLiveDeepScanEnabled()) {
+    return jsonError(LIVE_DEEP_SCAN_DISABLED_MESSAGE, 503);
+  }
+
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError("Invalid scan request");
   const { west, south, east, north, centreQuery, suburbHint, maxResults } = parsed.data;

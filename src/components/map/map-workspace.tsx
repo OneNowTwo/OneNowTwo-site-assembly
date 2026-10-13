@@ -40,6 +40,11 @@ import {
   bboxFromGeometry,
   shouldClearScanForMapTarget,
 } from "@/lib/map/map-target";
+import {
+  isLiveDeepScanEnabled,
+  LIVE_DEEP_SCAN_DISABLED_BUTTON,
+  LIVE_DEEP_SCAN_DISABLED_MESSAGE,
+} from "@/lib/live-deep-scan";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
@@ -612,6 +617,15 @@ export function MapWorkspace({
   }
 
   async function scanThisArea(forceQuery?: string) {
+    if (!isLiveDeepScanEnabled()) {
+      setScan((s) => ({
+        ...s,
+        scanning: false,
+        stage: "",
+        error: LIVE_DEEP_SCAN_DISABLED_MESSAGE,
+      }));
+      return;
+    }
     const bbox = lastBBox.current;
     const q = (forceQuery ?? query).trim();
     const sessionId = newScanSessionId();
@@ -918,6 +932,12 @@ export function MapWorkspace({
       return;
     }
     bootstrappedScanQueryRef.current = initialScanQuery;
+    // Temporary: do not auto-fire synchronous /api/scan on the web instance.
+    if (!isLiveDeepScanEnabled()) {
+      setQuery(initialScanQuery);
+      setScan((s) => ({ ...s, scanning: false, error: LIVE_DEEP_SCAN_DISABLED_MESSAGE }));
+      return;
+    }
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
@@ -980,11 +1000,17 @@ export function MapWorkspace({
             title: string;
             address?: string | null;
             suburb?: string | null;
+            summary?: string | null;
+            lotCount?: number | null;
+            siteAreaSqm?: number | null;
+            currentFsr?: number | null;
+            proposedFsr?: number | null;
             parcelIds?: string[];
             bbox?: BBox | null;
             centroid?: { lat: number; lng: number } | null;
             opportunityId?: string | null;
             parcels?: ParcelData[];
+            geometry?: unknown;
           }>(`/api/map/index-candidate?${qs.toString()}`);
           if (cancelled) return;
           const ids = (body.parcelIds ?? []).filter(Boolean);
@@ -1022,10 +1048,23 @@ export function MapWorkspace({
               nonce: nowMs(),
             });
           }
+          const summaryBits =
+            body.summary ||
+            [
+              body.suburb,
+              body.lotCount != null ? (body.lotCount === 1 ? "1 lot" : `${body.lotCount} lots`) : null,
+              body.siteAreaSqm != null && body.siteAreaSqm > 0
+                ? `${Math.round(body.siteAreaSqm).toLocaleString("en-AU")} m²`
+                : null,
+              body.currentFsr != null ? `FSR ${body.currentFsr}` : null,
+              body.proposedFsr != null ? `proposed ${body.proposedFsr}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ");
           setTargetPanel({
             kind: "INDEX_CANDIDATE",
             title: body.title || body.address || "Indexed site",
-            summary: body.suburb ?? null,
+            summary: summaryBits || body.suburb || null,
             href: body.opportunityId ? `/opportunities/${body.opportunityId}` : null,
           });
         } catch {
@@ -1249,12 +1288,28 @@ export function MapWorkspace({
             )}
           </form>
           <div className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-[3px] border border-line bg-white p-1 shadow-sm">
-            <Button size="sm" variant="accent" className="h-8" disabled={scan.scanning} onClick={() => scanThisArea()}>
-              {scan.scanning ? scan.stage || "Scanning…" : "Scan this area"}
+            <Button
+              size="sm"
+              variant="accent"
+              className="h-8"
+              disabled={scan.scanning || !isLiveDeepScanEnabled()}
+              title={!isLiveDeepScanEnabled() ? LIVE_DEEP_SCAN_DISABLED_MESSAGE : undefined}
+              onClick={() => scanThisArea()}
+            >
+              {scan.scanning
+                ? scan.stage || "Scanning…"
+                : isLiveDeepScanEnabled()
+                  ? "Scan this area"
+                  : LIVE_DEEP_SCAN_DISABLED_BUTTON}
             </Button>
             {scan.scanning && (
               <span className="hidden max-w-[220px] truncate px-1 text-[10.5px] text-muted sm:inline" title={scan.stage}>
                 {scan.stage}
+              </span>
+            )}
+            {!isLiveDeepScanEnabled() && !scan.scanning && (
+              <span className="hidden max-w-[280px] truncate px-1 text-[10.5px] text-muted sm:inline" title={LIVE_DEEP_SCAN_DISABLED_MESSAGE}>
+                Use Today / Find indexed sites
               </span>
             )}
             {!!scan.candidates.length && (
@@ -1456,7 +1511,7 @@ export function MapWorkspace({
                   <strong className="text-ink">Find assemblies</strong> — start from a selected parcel (2–{assumptions.maxAssemblySize} lots).
                 </li>
                 <li>
-                  <strong className="text-ink">Scan this area</strong> — auto-discover assemblies without picking a start lot.
+                  <strong className="text-ink">Indexed sites</strong> — open from Today / Find. Live deep scan is temporarily unavailable on this web service.
                 </li>
               </ul>
               <p className="mt-2">
