@@ -336,7 +336,7 @@ export function DashboardClient() {
             <SectionHead title="Development activity" />
             <Panel>
               {!data.developmentActivity.length ? (
-                <p className="text-[12px] text-muted">HDA / SSD / DA items appear here when material activity lands.</p>
+                <p className="text-[12px] text-muted">HDA, SSD, and DA items show up here when something new is lodged or approved nearby.</p>
               ) : (
                 <ul className="divide-y divide-line">
                   {data.developmentActivity.map((a) => (
