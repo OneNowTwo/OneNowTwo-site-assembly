@@ -7,6 +7,9 @@
 import { prisma } from "@/lib/db";
 import type { StrategyProfile } from "@/lib/source-watcher/strategy-profile";
 import { buildMapHref } from "@/lib/map/map-target";
+import { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
+
+export { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 
 export type SiteCandidateView = {
   id: string;
@@ -91,14 +94,14 @@ function reasonsFor(
 ): string[] {
   const out: string[] = [];
   const hints = Array.isArray(row.reasonHints) ? row.reasonHints.map(String) : [];
-  out.push(...hints.slice(0, 3));
+  out.push(...hints.slice(0, 3).map(humanizeSiteReason));
   if (!out.length) {
     if (row.proposedFsr != null && row.currentFsr != null && row.proposedFsr > row.currentFsr) {
-      out.push(`NEW PROPOSED DENSITY UPLIFT · ${row.currentFsr} → ${row.proposedFsr} FSR`);
+      out.push(`Proposed FSR uplift: ${row.currentFsr} → ${row.proposedFsr}`);
     }
-    if (row.keySiteStatus) out.push(`KEY SITE · ${row.keySiteStatus}`);
+    if (row.keySiteStatus) out.push(`Key site · ${row.keySiteStatus}`);
     if (row.stationDistanceM != null && row.stationDistanceM <= 800) {
-      out.push(`STATION PROXIMITY · ${Math.round(row.stationDistanceM)}m`);
+      out.push(`About ${Math.round(row.stationDistanceM)}m to a station`);
     }
     if (row.zone) out.push(`Zone ${row.zone}`);
   }

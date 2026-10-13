@@ -38,6 +38,17 @@ export type MapTarget = {
   key: string;
 };
 
+/**
+ * Today / Find / Sites deep-links keep MapWorkspace mounted. A new entity or
+ * point target must drop the previous area-scan overlay so Harry does not see
+ * stale ranked assemblies on the wrong place.
+ * SCAN targets intentionally keep / bootstrap scan state.
+ */
+export function shouldClearScanForMapTarget(kind: MapTargetKind | null | undefined): boolean {
+  if (!kind) return false;
+  return kind !== "SCAN";
+}
+
 function num(v: string | null): number | undefined {
   if (v == null || v === "") return undefined;
   const n = Number(v);

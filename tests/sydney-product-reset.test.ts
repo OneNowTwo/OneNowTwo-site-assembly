@@ -6,7 +6,13 @@ import {
   eventDedupeFingerprint,
 } from "@/lib/intelligence/material-change";
 import { aggregateIntelligenceStories } from "@/lib/intelligence/stories";
-import { resolveMapTarget, buildMapHref, SYDNEY_METRO_START } from "@/lib/map/map-target";
+import {
+  resolveMapTarget,
+  buildMapHref,
+  SYDNEY_METRO_START,
+  shouldClearScanForMapTarget,
+} from "@/lib/map/map-target";
+import { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 import { profileForStrategy } from "@/lib/source-watcher/strategy-profile";
 import { canonicalParcelKey } from "@/lib/intelligence/canonical-key";
 import { coverageSummary, SYDNEY_COVERAGE_MATRIX } from "@/lib/intelligence/sydney-coverage";
@@ -210,6 +216,26 @@ describe("Sydney product reset — MapTarget", () => {
     expect(SYDNEY_METRO_START.lat).toBeCloseTo(-33.87, 1);
     // Manly Vale was ~-33.836 / zoom 18
     expect(SYDNEY_METRO_START.zoom).not.toBe(18);
+  });
+
+  it("clears prior scan when Today opens a new MapTarget (not SCAN)", () => {
+    expect(shouldClearScanForMapTarget("POINT")).toBe(true);
+    expect(shouldClearScanForMapTarget("PARCEL")).toBe(true);
+    expect(shouldClearScanForMapTarget("OPPORTUNITY")).toBe(true);
+    expect(shouldClearScanForMapTarget("KEY_SITE")).toBe(true);
+    expect(shouldClearScanForMapTarget("PLANNING_AREA")).toBe(true);
+    expect(shouldClearScanForMapTarget("BBOX")).toBe(true);
+    expect(shouldClearScanForMapTarget("DEVELOPMENT_ACTIVITY")).toBe(true);
+    expect(shouldClearScanForMapTarget("SCAN")).toBe(false);
+    expect(shouldClearScanForMapTarget(null)).toBe(false);
+  });
+
+  it("humanizes stored engineering site reasons for Today", () => {
+    expect(humanizeSiteReason("NEW PROPOSED DENSITY UPLIFT · 1 → 2.2 FSR")).toBe(
+      "Proposed FSR uplift: 1 → 2.2 FSR",
+    );
+    expect(humanizeSiteReason("STATION PROXIMITY · 420m")).toBe("About 420m to a station");
+    expect(humanizeSiteReason("KEY SITE · nominated")).toBe("Key site · nominated");
   });
 });
 

@@ -120,7 +120,7 @@ export function DashboardClient() {
     return <div className="p-6 text-[13px] text-bad">{error}</div>;
   }
   if (!data) {
-    return <div className="p-6 text-[13px] text-muted">Loading development intelligence…</div>;
+    return <div className="p-6 text-[13px] text-muted">Loading…</div>;
   }
 
   const stories = data.topIntelligence?.length ? data.topIntelligence : data.whatChanged;
@@ -151,7 +151,7 @@ export function DashboardClient() {
       <div className="space-y-5 p-6">
         <section>
           <SectionHead
-            title="Top intelligence"
+            title="What's new"
             action={
               <Link href="/feed" className="text-[11px] font-semibold text-brand hover:underline">
                 View all
@@ -159,7 +159,7 @@ export function DashboardClient() {
             }
           />
           {!stories.length ? (
-            <Empty>No material Greater Sydney intelligence in the last 7 days yet.</Empty>
+            <Empty>Nothing new in Greater Sydney in the last 7 days.</Empty>
           ) : (
             <div className="space-y-3">
               {stories.map((ev) => (
@@ -169,7 +169,7 @@ export function DashboardClient() {
                     {ev.location && <span className="text-[12px] font-semibold text-ink">{ev.location}</span>}
                     <span className="text-[11px] text-muted">{ev.date.slice(0, 10)}</span>
                     {ev.eventCount != null && ev.eventCount > 1 && (
-                      <span className="text-[11px] text-muted">{ev.eventCount} related signals</span>
+                      <span className="text-[11px] text-muted">{ev.eventCount} related updates</span>
                     )}
                   </div>
                   <h3 className="mt-1.5 text-[14px] font-semibold">{ev.title}</h3>
@@ -179,7 +179,7 @@ export function DashboardClient() {
                     <p className="text-[12.5px]">{ev.whyItMatters}</p>
                   </div>
                   {ev.affectedSites != null && ev.affectedSites > 0 && (
-                    <p className="mt-1 text-[11.5px] text-muted">{ev.affectedSites} sites in scope</p>
+                    <p className="mt-1 text-[11.5px] text-muted">{ev.affectedSites} sites nearby</p>
                   )}
                   <div className="mt-3 flex flex-wrap gap-2">
                     {(ev.mapHref || ev.href) && (
@@ -220,7 +220,7 @@ export function DashboardClient() {
 
         <section>
           <SectionHead
-            title="Sites to look at today"
+            title="Sites to check"
             action={
               <Link href="/find" className="text-[11px] font-semibold text-brand hover:underline">
                 Find sites
@@ -230,7 +230,7 @@ export function DashboardClient() {
           {data.indexPreparingMessage && !data.sitesToLookAt.length ? (
             <Empty>{data.indexPreparingMessage}</Empty>
           ) : !data.sitesToLookAt.length ? (
-            <Empty>No Sydney-index candidates ranked for this strategy yet.</Empty>
+            <Empty>No sites ranked for this strategy yet.</Empty>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {data.sitesToLookAt.map((s) => (
@@ -259,7 +259,7 @@ export function DashboardClient() {
                   </div>
                   <div className="mt-2">
                     <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">
-                      Why this surfaced today
+                      Why it matters
                     </div>
                     <ul className="mt-1 space-y-0.5">
                       {s.reasons.map((r) => (
@@ -336,7 +336,7 @@ export function DashboardClient() {
             <SectionHead title="Development activity" />
             <Panel>
               {!data.developmentActivity.length ? (
-                <p className="text-[12px] text-muted">HDA / SSD / DA items appear here when material activity lands.</p>
+                <p className="text-[12px] text-muted">New applications and assessments will show up here.</p>
               ) : (
                 <ul className="divide-y divide-line">
                   {data.developmentActivity.map((a) => (
@@ -364,7 +364,7 @@ export function DashboardClient() {
             className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted hover:text-ink"
             onClick={() => setShowSources((v) => !v)}
           >
-            {showSources ? "Hide diagnostics" : "Source / diagnostics"}
+            {showSources ? "Hide sources" : "Sources"}
           </button>
           {showSources && (
             <div className="mt-2 grid gap-1 text-[11.5px] text-muted sm:grid-cols-2 lg:grid-cols-3">
