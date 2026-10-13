@@ -19,15 +19,17 @@ import { nearestLmrCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import { fetchTrainStations, nearestTrainStation } from "@/lib/data-sources/nsw-train-stations";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
-import { buildMapHref } from "@/lib/map/map-target";
 import { parseNaturalLanguageFind } from "./nl-parse";
 import type { FindFilters } from "./find-filters-types";
 
 export type { FindFilters } from "./find-filters-types";
 export { parseNaturalLanguageFind } from "./nl-parse";
+export { findResultMapHref, type FindMapHrefInput } from "@/lib/find/find-map-href";
 
 export interface FindResultRow {
   key: string;
+  /** SiteCandidateIndex row id — set for index-mode results only. */
+  candidateId?: string | null;
   locationLabel: string;
   suburb: string | null;
   lga: string | null;
@@ -417,16 +419,13 @@ async function findFromIndex(
       ? (r.reasonHints as string[]).map((t) => ({ title: t, body: "From Sydney candidate index." }))
       : [];
     const parcelIds = Array.isArray(r.parcelIds) ? (r.parcelIds as string[]) : [];
-    const bbox =
-      r.bbox && typeof r.bbox === "object"
-        ? (r.bbox as { west: number; south: number; east: number; north: number })
-        : null;
     const cachedScore =
       r.strategyScores && typeof r.strategyScores === "object"
         ? (r.strategyScores as Record<string, number>)[profile.strategy]
         : undefined;
     return {
       key: r.canonicalKey,
+      candidateId: r.id,
       locationLabel: r.address ?? r.suburb ?? r.canonicalKey,
       suburb: r.suburb,
       lga: r.lga,
@@ -451,7 +450,8 @@ async function findFromIndex(
         : [{ title: "Indexed candidate", body: "Active INDEX_DISCOVERY site from the Sydney baseline." }],
       opportunityId: r.opportunityId,
       lotIds: parcelIds,
-      bboxHint: bbox,
+      // Never expose discovery-tile bbox to the client map link.
+      bboxHint: null,
     };
   });
 
@@ -640,14 +640,3 @@ export async function findDevelopmentSites(input: FindFilters): Promise<FindResp
   };
 }
 
-/** @deprecated map href helper retained for callers that build links client-side */
-export function findResultMapHref(r: FindResultRow): string {
-  return buildMapHref({
-    opportunityId: r.opportunityId,
-    keySiteId: r.keySiteId,
-    parcelId: r.lotIds?.[0] ?? null,
-    bbox: r.bboxHint ?? null,
-    scan: r.suburb || r.locationLabel,
-    zoom: 17,
-  });
-}
