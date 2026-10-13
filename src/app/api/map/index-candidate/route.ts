@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import {
   capParcelIds,
@@ -7,14 +6,16 @@ import {
   siteGeometryFromParcels,
 } from "@/lib/index-candidate-geometry";
 import { bboxFromGeometry } from "@/lib/map/map-target";
-import { hydrateExactParcelsForIndexCandidate } from "@/lib/parcel-service";
+import { getStoredParcelsByExternalIds } from "@/lib/parcel-service";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Lightweight SiteCandidateIndex resolve for Today → Map (INDEX_CANDIDATE).
- * Prefer DB parcels / index geometry; if missing, hydrate ONLY explicit parcel IDs
- * via NSW cadastre-by-cadid (never bbox / LMR / scanArea).
+ * Strictly DB-only SiteCandidateIndex resolve for Today → Map (INDEX_CANDIDATE).
+ *
+ * Reads SiteCandidateIndex + stored Parcel rows only.
+ * Never calls NSW cadastre/planning, never hydrates, never writes.
+ * Missing geometry → geometryStatus: "MISSING" (repair via out-of-band backfill).
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -42,32 +43,16 @@ export async function GET(req: Request) {
   const parcelIds = capParcelIds(rawParcelIds);
 
   // Index rows often store the Sydney batch TILE bbox (multi-km), not the site.
-  // Prefer a tight site bbox from stored/hydrated parcels / centroid — never fly the map to a tile.
   const storedTileBbox = bboxFromGeometry(row.bbox);
 
-  let hydratedFromCadastre = false;
-  let parcels: Awaited<ReturnType<typeof hydrateExactParcelsForIndexCandidate>>["parcels"] = [];
-  try {
-    const hydrated = await hydrateExactParcelsForIndexCandidate(parcelIds);
-    parcels = hydrated.parcels;
-    hydratedFromCadastre = hydrated.hydratedFromCadastre;
-  } catch {
-    parcels = [];
-  }
+  // DB-only: no NSW, no live hydrate, no writes.
+  const parcels = (await getStoredParcelsByExternalIds(parcelIds)).filter((p) => !!p.geometry);
 
-  // Persist site geometry on the index row when we have drawable lots (backfill older rows).
-  let siteGeometry = siteGeometryFromParcels(parcels) ?? (row.geometry as typeof row.geometry);
-  if (parcels.length && siteGeometry && !row.geometry) {
-    try {
-      await prisma.siteCandidateIndex.update({
-        where: { id: row.id },
-        data: { geometry: siteGeometry as unknown as Prisma.InputJsonValue },
-      });
-    } catch {
-      // Non-fatal — response still carries drawable parcels.
-    }
-  }
-  if (!siteGeometry) siteGeometry = row.geometry;
+  const siteGeometry =
+    siteGeometryFromParcels(parcels) ?? (row.geometry as typeof row.geometry) ?? null;
+
+  const geometryStatus: "OK" | "MISSING" =
+    parcels.length > 0 || !!siteGeometry ? "OK" : "MISSING";
 
   let siteBbox: { west: number; south: number; east: number; north: number } | null = null;
   if (parcels.length) {
@@ -138,10 +123,11 @@ export async function GET(req: Request) {
     bbox: siteBbox,
     tileBbox: storedTileBbox,
     geometry: siteGeometry,
+    geometryStatus,
     centroid,
     opportunityId: row.opportunityId,
     parcels,
-    hydratedFromCadastre,
+    hydratedFromCadastre: false,
     source: "site_candidate_index",
   });
 }
