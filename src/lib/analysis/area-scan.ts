@@ -316,6 +316,11 @@ export function runAreaScan(input: {
   centres: NominatedCentre[];
   assumptions: Assumptions;
   maxResults?: number;
+  /**
+   * When set (e.g. Find min site area), assembly generation uses this floor
+   * instead of the internal Math.min(minViable, 800) discovery default.
+   */
+  minAreaSqm?: number;
   /** Optional pedestrian-route hints keyed by externalParcelId. */
   walkingByParcelId?: Map<string, WalkingDistanceHint>;
   /** Local exit benchmarks — same market inputs Analyse will use. */
@@ -348,7 +353,10 @@ export function runAreaScan(input: {
   let adjacencyEdges = 0;
   for (const [, ns] of adj) adjacencyEdges += ns.size;
   adjacencyEdges = Math.floor(adjacencyEdges / 2);
-  const minAreaSqmUsed = Math.min(input.assumptions.minViableSiteAreaSqm, 800);
+  const minAreaSqmUsed =
+    input.minAreaSqm != null && Number.isFinite(input.minAreaSqm) && input.minAreaSqm > 0
+      ? input.minAreaSqm
+      : Math.min(input.assumptions.minViableSiteAreaSqm, 800);
   const raw = generateAreaAssemblies(lots, adj, input.assumptions, { minAreaSqm: minAreaSqmUsed });
   const generatedByLotCount: Record<string, number> = {};
   for (const c of raw) {

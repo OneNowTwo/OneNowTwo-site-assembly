@@ -33,11 +33,25 @@ type FindRow = {
   bboxHint?: { west: number; south: number; east: number; north: number } | null;
 };
 
+type AppliedFilter = { label: string; value: string };
+
+type FindApiBody = {
+  results: FindRow[];
+  messages: string[];
+  diagnostics?: string[];
+  source?: "index" | "live";
+  assessedCount?: number;
+  matchedCount?: number;
+  elapsedMs?: number;
+  appliedFilters?: AppliedFilter[];
+};
+
+const NL_PLACEHOLDER =
+  "Show me non-strata sites over 450 sqm inside proposed FSR 2.5+ within 400m of a station";
+
 export function FindClient() {
   const [strategy, setStrategy] = useState<DevelopmentStrategy>("APARTMENTS");
-  const [nl, setNl] = useState(
-    "Show me non-strata sites over 450 sqm inside proposed FSR 2.5+ within 400m of a station",
-  );
+  const [nl, setNl] = useState("");
   const [suburb, setSuburb] = useState("");
   const [minSiteArea, setMinSiteArea] = useState("450");
   const [minProposedFsr, setMinProposedFsr] = useState("");
@@ -46,22 +60,31 @@ export function FindClient() {
   const [keySiteOnly, setKeySiteOnly] = useState(false);
   const [minHeadroom, setMinHeadroom] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingMode, setLoadingMode] = useState<"index" | "live" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<string[]>([]);
+  const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [results, setResults] = useState<FindRow[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [source, setSource] = useState<"index" | "live" | null>(null);
+  const [assessedCount, setAssessedCount] = useState(0);
+  const [appliedFilters, setAppliedFilters] = useState<AppliedFilter[]>([]);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const canSearch = useMemo(() => suburb.trim().length >= 2 || nl.trim().length >= 8, [suburb, nl]);
 
-  async function runSearch() {
+  async function runSearch(mode: "index" | "live") {
     setLoading(true);
+    setLoadingMode(mode);
     setError(null);
+    setHasSearched(true);
     try {
-      const body = await fetchApiJson<{ results: FindRow[]; messages: string[] }>("/api/find", {
+      const body = await fetchApiJson<FindApiBody>("/api/find", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           strategy,
-          naturalLanguage: nl || null,
+          naturalLanguage: nl.trim() || null,
           suburb: suburb.trim() || null,
           centreQuery: suburb.trim() || null,
           minSiteAreaSqm: minSiteArea ? Number(minSiteArea) : null,
@@ -71,14 +94,20 @@ export function FindClient() {
           keySiteOnly: keySiteOnly ? true : null,
           minHeadroom: minHeadroom ? Number(minHeadroom) : null,
           maxResults: 15,
+          mode,
         }),
       });
       setResults(body.results ?? []);
       setMessages(body.messages ?? []);
+      setDiagnostics(body.diagnostics ?? []);
+      setSource(body.source ?? mode);
+      setAssessedCount(body.assessedCount ?? 0);
+      setAppliedFilters(body.appliedFilters ?? []);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
+      setLoadingMode(null);
     }
   }
 
@@ -88,7 +117,7 @@ export function FindClient() {
         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">Find</div>
         <h1 className="mt-1 text-[24px] font-semibold tracking-tight">Find development sites</h1>
         <p className="mt-1 max-w-2xl text-[13px] text-muted">
-          Search available parcels and assemblies with explicit filters. Natural language is a shortcut — filters stay authoritative.
+          Search indexed Sydney candidates first. Filters stay authoritative — strategy affects ranking, not hidden cut-offs.
         </p>
         <div className="mt-4">
           <StrategySelector value={strategy} onChange={setStrategy} />
@@ -99,6 +128,7 @@ export function FindClient() {
             className="mt-1 w-full rounded-[3px] border border-line bg-white px-3 py-2 text-[13px]"
             rows={2}
             value={nl}
+            placeholder={NL_PLACEHOLDER}
             onChange={(e) => setNl(e.target.value)}
           />
         </label>
@@ -150,11 +180,19 @@ export function FindClient() {
               <input type="checkbox" checked={keySiteOnly} onChange={(e) => setKeySiteOnly(e.target.checked)} />
               Key Site only
             </label>
-            <Button className="mt-3 w-full" variant="primary" disabled={!canSearch || loading} onClick={() => void runSearch()}>
-              {loading ? "Searching…" : "Search sites"}
+            <Button className="mt-3 w-full" variant="primary" disabled={!canSearch || loading} onClick={() => void runSearch("index")}>
+              {loadingMode === "index" ? "Searching…" : "Search sites"}
+            </Button>
+            <Button
+              className="mt-2 w-full"
+              variant="secondary"
+              disabled={!canSearch || loading}
+              onClick={() => void runSearch("live")}
+            >
+              {loadingMode === "live" ? "Deep scanning…" : "Run live deep scan"}
             </Button>
             <p className="mt-2 text-[11px] text-muted">
-              Uses the existing parcel scanner, assembly generator and score engine.{" "}
+              Search uses the Sydney candidate index when available. Live deep scan runs the full parcel/assembly engine on demand.{" "}
               <Link href="/radar" className="font-semibold text-brand hover:underline">
                 Precinct radar
               </Link>{" "}
@@ -165,14 +203,58 @@ export function FindClient() {
 
         <div className="space-y-3 lg:col-span-8">
           {messages.map((m) => (
-            <div key={m} className="rounded-[3px] border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-950">
+            <div key={m} className="rounded-[3px] border border-line bg-white px-3 py-2 text-[13px] text-ink">
               {m}
+              {source ? (
+                <span className="ml-2 text-[11px] uppercase tracking-wide text-muted">
+                  · {source === "index" ? "indexed" : "live scan"}
+                </span>
+              ) : null}
             </div>
           ))}
-          {error && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[13px] text-bad">{error}</div>}
-          {!results.length && !loading && (
-            <Empty>Enter a suburb or natural-language query, then search. Results show why each site matched.</Empty>
+
+          {hasSearched && !results.length && !loading && assessedCount > 0 && (
+            <div className="rounded-[3px] border border-line bg-canvas/40 px-3 py-3 text-[12.5px]">
+              <div className="font-semibold">No sites matched your current filters.</div>
+              <p className="mt-1 text-muted">
+                {assessedCount} candidate{assessedCount === 1 ? "" : "s"} assessed; 0 matched.
+              </p>
+              {appliedFilters.length > 0 && (
+                <ul className="mt-2 flex flex-wrap gap-2">
+                  {appliedFilters.map((f) => (
+                    <li key={f.label} className="rounded-[3px] border border-line bg-white px-2 py-0.5 text-[11px]">
+                      <span className="text-muted">{f.label}:</span> {f.value}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
+
+          {diagnostics.length > 0 && (
+            <details
+              className="rounded-[3px] border border-line bg-canvas/30 px-3 py-2 text-[12px]"
+              open={showDiagnostics}
+              onToggle={(e) => setShowDiagnostics((e.target as HTMLDetailsElement).open)}
+            >
+              <summary className="cursor-pointer font-semibold text-muted">Diagnostics / Search details</summary>
+              <ul className="mt-2 space-y-1 text-[11.5px] text-muted">
+                {diagnostics.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {error && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[13px] text-bad">{error}</div>}
+
+          {!hasSearched && !loading && (
+            <Empty>Enter a suburb, then search. Indexed results return quickly; live deep scan is optional.</Empty>
+          )}
+          {hasSearched && !results.length && !loading && assessedCount === 0 && !messages.length && (
+            <Empty>No sites matched your current filters.</Empty>
+          )}
+
           {results.map((r) => (
             <article key={r.key} className="border border-line bg-white p-4">
               <div className="flex items-start justify-between gap-3">
@@ -193,7 +275,7 @@ export function FindClient() {
                 </span>
                 {r.stationDistanceM != null && (
                   <span>
-                    {r.stationDistanceM}m from {r.nearestStationLabel ?? "station"}
+                    {Math.round(r.stationDistanceM)}m from {r.nearestStationLabel ?? "station"}
                   </span>
                 )}
                 {r.planningChangeStatus && <Badge tone="warn">{r.planningChangeStatus}</Badge>}
@@ -205,13 +287,13 @@ export function FindClient() {
                 <ul className="mt-1 space-y-0.5">
                   {r.whyMatched.length ? (
                     r.whyMatched.map((w) => (
-                      <li key={w.title} className="text-[12.5px]">
+                      <li key={`${r.key}-${w.title}`} className="text-[12.5px]">
                         <span className="text-good">✓</span> {w.title}
                         <span className="text-muted"> — {w.body}</span>
                       </li>
                     ))
                   ) : (
-                    <li className="text-[12.5px] text-muted">Matched scan ranking criteria.</li>
+                    <li className="text-[12.5px] text-muted">Matched explicit filters.</li>
                   )}
                 </ul>
               </div>
