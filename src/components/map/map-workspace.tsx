@@ -27,12 +27,20 @@ import { SCAN_CALCULATION_VERSION } from "@/lib/analysis/assembly-feasibility";
 import { syncCandidatesWithCanonical, type CanonicalScanOverlay } from "@/lib/analysis/sync-scan-canonical";
 import { ApiJsonError, fetchApiJson, fetchApiJsonWithRetry, isTransientHttpError } from "@/lib/api-json";
 import {
+  EXPLICIT_TARGET_VIEWPORT_PARCEL_SUPPRESS_MS,
   POST_SCAN_PARCEL_COOLDOWN_MS,
   POST_SCAN_PARCEL_REFRESH_DELAY_MS,
   scanReturnedSufficientParcels,
   shouldSilentSoftFailTransient,
 } from "@/lib/map-parcel-refresh";
-import { SYDNEY_METRO_START, type MapTarget, bboxFromGeometry } from "@/lib/map/map-target";
+import {
+  SYDNEY_METRO_START,
+  type MapTarget,
+  bboxFromGeometry,
+  mapTargetClearsStaleScan,
+  shouldRestoreScanSession,
+  tightBboxAroundTarget,
+} from "@/lib/map/map-target";
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
@@ -142,7 +150,11 @@ export function MapWorkspace({
 }) {
   const router = useRouter();
   const start = useMemo(() => initialMapStart(), []);
-  const restoredScan = useMemo(() => (typeof window !== "undefined" ? loadScanSession() : null), []);
+  const restoredScan = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    if (!shouldRestoreScanSession(mapTarget)) return null;
+    return loadScanSession();
+  }, [mapTarget]);
   const [parcels, setParcels] = useState<Map<string, ParcelData>>(new Map());
   const [load, setLoad] = useState<LoadState>({ loading: false, messages: [], zoom: start.zoom });
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -208,6 +220,8 @@ export function MapWorkspace({
   const parcelsCountRef = useRef(0);
   /** Suppress aggressive /api/parcels calls right after a heavy /api/scan (avoids Render 502). */
   const parcelCooldownUntilRef = useRef(0);
+  /** Suppress viewport parcel storms right after Today/Find entity deep links. */
+  const explicitTargetParcelUntilRef = useRef(0);
   const postScanRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -417,6 +431,10 @@ export function MapWorkspace({
       };
       setLoad((s) => ({ ...s, zoom }));
       if (zoom < MIN_PARCEL_ZOOM) return;
+      if (nowMs() < explicitTargetParcelUntilRef.current) {
+        persistClientState();
+        return;
+      }
       if (nowMs() < parcelCooldownUntilRef.current) {
         persistClientState();
         return;
@@ -469,6 +487,15 @@ export function MapWorkspace({
     setHoverKey(null);
   }
 
+  /** Hide stale scan UI for a new explicit map target — keeps saved session in localStorage. */
+  function dismissStaleScanDisplay() {
+    setScan(emptyScan());
+    setFind(null);
+    setActiveKey(null);
+    setHoverKey(null);
+    setScanExpanded(null);
+  }
+
   function clearScanResults() {
     const cleared = emptyScan();
     setScan(cleared);
@@ -477,6 +504,15 @@ export function MapWorkspace({
     setScanExpanded(null);
     clearScanSession();
     persistClientState({ scanOverride: cleared, activeKey: null });
+  }
+
+  function primeExplicitTargetParcels(target: MapTarget) {
+    const bbox = tightBboxAroundTarget(target);
+    if (!bbox) return;
+    lastBBox.current = bbox;
+    explicitTargetParcelUntilRef.current = nowMs() + EXPLICIT_TARGET_VIEWPORT_PARCEL_SUPPRESS_MS;
+    parcelCooldownUntilRef.current = Math.max(parcelCooldownUntilRef.current, nowMs() + 2_000);
+    void fetchParcels(bbox, { soft: false });
   }
 
   function clearAssembliesFromMap() {
@@ -915,6 +951,11 @@ export function MapWorkspace({
 
     let cancelled = false;
 
+    if (mapTargetClearsStaleScan(mapTarget.kind)) {
+      dismissStaleScanDisplay();
+      primeExplicitTargetParcels(mapTarget);
+    }
+
     const flyBBox = (bbox: BBox, zoom?: number) => {
       const lat = (bbox.south + bbox.north) / 2;
       const lng = (bbox.west + bbox.east) / 2;
@@ -936,9 +977,11 @@ export function MapWorkspace({
       }
 
       if (mapTarget.kind === "PARCEL" && mapTarget.parcelId) {
-        if (mapTarget.lat != null && mapTarget.lng != null) {
+        if (mapTarget.bbox) flyBBox(mapTarget.bbox, mapTarget.zoom ?? 18);
+        else if (mapTarget.lat != null && mapTarget.lng != null) {
           setFlyTo({ lat: mapTarget.lat, lng: mapTarget.lng, zoom: mapTarget.zoom ?? 18, nonce: nowMs() });
         }
+        setAssembly([]);
         setSelectedId(mapTarget.parcelId);
         setTargetPanel({ kind: "PARCEL", title: mapTarget.parcelId });
         return;

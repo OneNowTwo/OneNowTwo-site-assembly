@@ -120,7 +120,7 @@ export function DashboardClient() {
     return <div className="p-6 text-[13px] text-bad">{error}</div>;
   }
   if (!data) {
-    return <div className="p-6 text-[13px] text-muted">Loading development intelligence…</div>;
+    return <div className="p-6 text-[13px] text-muted">Loading Today…</div>;
   }
 
   const stories = data.topIntelligence?.length ? data.topIntelligence : data.whatChanged;
@@ -151,7 +151,7 @@ export function DashboardClient() {
       <div className="space-y-5 p-6">
         <section>
           <SectionHead
-            title="Top intelligence"
+            title="What changed"
             action={
               <Link href="/feed" className="text-[11px] font-semibold text-brand hover:underline">
                 View all
@@ -159,7 +159,7 @@ export function DashboardClient() {
             }
           />
           {!stories.length ? (
-            <Empty>No material Greater Sydney intelligence in the last 7 days yet.</Empty>
+            <Empty>No important planning or development changes picked up this week.</Empty>
           ) : (
             <div className="space-y-3">
               {stories.map((ev) => (
@@ -169,7 +169,7 @@ export function DashboardClient() {
                     {ev.location && <span className="text-[12px] font-semibold text-ink">{ev.location}</span>}
                     <span className="text-[11px] text-muted">{ev.date.slice(0, 10)}</span>
                     {ev.eventCount != null && ev.eventCount > 1 && (
-                      <span className="text-[11px] text-muted">{ev.eventCount} related signals</span>
+                      <span className="text-[11px] text-muted">{ev.eventCount} related updates</span>
                     )}
                   </div>
                   <h3 className="mt-1.5 text-[14px] font-semibold">{ev.title}</h3>
@@ -220,7 +220,7 @@ export function DashboardClient() {
 
         <section>
           <SectionHead
-            title="Sites to look at today"
+            title="Sites worth a look"
             action={
               <Link href="/find" className="text-[11px] font-semibold text-brand hover:underline">
                 Find sites
@@ -230,7 +230,7 @@ export function DashboardClient() {
           {data.indexPreparingMessage && !data.sitesToLookAt.length ? (
             <Empty>{data.indexPreparingMessage}</Empty>
           ) : !data.sitesToLookAt.length ? (
-            <Empty>No Sydney-index candidates ranked for this strategy yet.</Empty>
+            <Empty>No ranked Sydney sites for this strategy yet.</Empty>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {data.sitesToLookAt.map((s) => (
@@ -259,7 +259,7 @@ export function DashboardClient() {
                   </div>
                   <div className="mt-2">
                     <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">
-                      Why this surfaced today
+                      Why it stands out
                     </div>
                     <ul className="mt-1 space-y-0.5">
                       {s.reasons.map((r) => (

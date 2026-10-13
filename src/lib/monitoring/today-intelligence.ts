@@ -106,8 +106,8 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
         typeof payload.whyItMatters === "string" && payload.whyItMatters.trim()
           ? String(payload.whyItMatters)
           : s.affectedSiteCount
-            ? `${s.affectedSiteCount} indexed sites in scope for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`
-            : "Material planning or activity change in Greater Sydney.";
+            ? `${s.affectedSiteCount} sites in scope for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`
+            : "Notable planning or development change in Greater Sydney.";
       const what =
         typeof payload.whatChanged === "string" ? String(payload.whatChanged) : (s.summary ?? s.title);
       return {
@@ -209,8 +209,8 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
   }));
 
   return {
-    headline: "Development Intelligence",
-    subheading: `Greater Sydney — what changed, which sites deserve attention for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`,
+    headline: "This morning",
+    subheading: `Greater Sydney — what changed and which sites are worth a look for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`,
     strategy: profile.strategy,
     marketScope: {
       id: market.id,
@@ -221,7 +221,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     indexCount: siteResult.indexCount,
     indexPreparingMessage: siteResult.indexReady
       ? null
-      : "Sydney candidate index is being prepared — discovery scan in progress.",
+      : "Sydney site list is still filling in — background discovery is running.",
     topIntelligence,
     whatChanged: topIntelligence,
     sitesToLookAt,

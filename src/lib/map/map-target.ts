@@ -22,6 +22,48 @@ export type MapTargetKind =
   | "BBOX"
   | "SCAN";
 
+/** Deep-linked entity targets — stale area-scan UI must not overlay these. */
+export function mapTargetClearsStaleScan(kind: MapTargetKind): boolean {
+  return (
+    kind === "PARCEL" ||
+    kind === "OPPORTUNITY" ||
+    kind === "PLANNING_AREA" ||
+    kind === "KEY_SITE" ||
+    kind === "DEVELOPMENT_ACTIVITY"
+  );
+}
+
+/** Restore persisted scan session only when navigation is not an explicit entity target. */
+export function shouldRestoreScanSession(mapTarget: MapTarget | null | undefined): boolean {
+  if (!mapTarget) return true;
+  if (mapTarget.kind === "SCAN") return true;
+  return !mapTargetClearsStaleScan(mapTarget.kind);
+}
+
+export type BBox = { west: number; south: number; east: number; north: number };
+
+/** Tight bbox for indexed-candidate / parcel deep links — keeps /api/parcels lightweight. */
+export function tightBboxAroundTarget(target: Pick<MapTarget, "bbox" | "lat" | "lng">, padDeg = 0.0012): BBox | null {
+  if (target.bbox) {
+    const b = target.bbox;
+    return {
+      west: b.west - padDeg * 0.25,
+      south: b.south - padDeg * 0.25,
+      east: b.east + padDeg * 0.25,
+      north: b.north + padDeg * 0.25,
+    };
+  }
+  if (target.lat != null && target.lng != null) {
+    return {
+      west: target.lng - padDeg,
+      south: target.lat - padDeg,
+      east: target.lng + padDeg,
+      north: target.lat + padDeg,
+    };
+  }
+  return null;
+}
+
 export type MapTarget = {
   kind: MapTargetKind;
   lat?: number;
@@ -113,6 +155,7 @@ export function resolveMapTarget(searchParams: ParamSource): MapTarget | null {
       lat,
       lng,
       zoom: zoom ?? 18,
+      bbox,
       key: `parcel:${parcelId}`,
     };
   }

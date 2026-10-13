@@ -43,3 +43,6 @@ export function shouldSilentSoftFailTransient(opts: {
 
 export const POST_SCAN_PARCEL_COOLDOWN_MS = 10_000;
 export const POST_SCAN_PARCEL_REFRESH_DELAY_MS = 10_000;
+
+/** After Today/Find entity deep link — defer viewport-wide /api/parcels until target bbox loads. */
+export const EXPLICIT_TARGET_VIEWPORT_PARCEL_SUPPRESS_MS = 12_000;
