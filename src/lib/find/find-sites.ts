@@ -22,7 +22,10 @@ import type { Prisma } from "@/generated/prisma/client";
 import { parseNaturalLanguageFind } from "./nl-parse";
 import type { FindFilters } from "./find-filters-types";
 import { resolveDisplayScore, type ScoreProvenance } from "@/lib/intelligence/display-score";
-import { loadLinkedOpportunityScoresByCanonicalKey } from "@/lib/intelligence/linked-opportunity-scores";
+import {
+  loadLinkedOpportunityScoreIndex,
+  resolveLinkedOpportunityScore,
+} from "@/lib/intelligence/linked-opportunity-scores";
 
 export type { FindFilters } from "./find-filters-types";
 export { parseNaturalLanguageFind } from "./nl-parse";
@@ -242,11 +245,21 @@ function annotateCandidate(
   };
 }
 
+/** Hard maxOwners filter: unknown owner count does not satisfy an explicit max. */
+export function failsMaxOwnersFilter(
+  maxOwners: number | null | undefined,
+  owners: number | null | undefined,
+): boolean {
+  if (maxOwners == null) return false;
+  if (owners == null) return true;
+  return owners > maxOwners;
+}
+
 function passesHardFilters(r: FindResultRow, filters: FindFilters): boolean {
   if (filters.minSiteAreaSqm != null && r.siteAreaSqm < filters.minSiteAreaSqm) return false;
   if (filters.maxSiteAreaSqm != null && r.siteAreaSqm > filters.maxSiteAreaSqm) return false;
   if (filters.singleLotOnly && r.lotCount !== 1) return false;
-  if (filters.maxOwners != null && r.owners != null && r.owners > filters.maxOwners) return false;
+  if (failsMaxOwnersFilter(filters.maxOwners, r.owners)) return false;
   if (filters.minCurrentFsr != null && (r.currentFsr == null || r.currentFsr < filters.minCurrentFsr)) return false;
   if (filters.maxCurrentFsr != null && (r.currentFsr == null || r.currentFsr > filters.maxCurrentFsr)) return false;
   if (filters.minScore != null && r.score < filters.minScore) return false;
@@ -386,7 +399,7 @@ async function findFromIndex(
     provenance: "INDEX_DISCOVERY",
   };
 
-  const linkedScores = await loadLinkedOpportunityScoresByCanonicalKey();
+  const linkedScores = await loadLinkedOpportunityScoreIndex();
 
   let rows = await prisma.siteCandidateIndex.findMany({
     where: place ? { AND: [baseWhere, buildIndexPlaceWhere(place)] } : baseWhere,
@@ -438,8 +451,8 @@ async function findFromIndex(
         ? (r.strategyScores as Record<string, number>)[profile.strategy]
         : undefined;
     const screening = typeof cachedScore === "number" ? cachedScore : (r.quickScore ?? 40);
-    const linked = linkedScores.get(r.canonicalKey);
-    const opportunityId = r.opportunityId ?? linked?.opportunityId ?? null;
+    const linked = resolveLinkedOpportunityScore(r.opportunityId, r.canonicalKey, linkedScores);
+    const opportunityId = linked?.opportunityId ?? null;
     const display = resolveDisplayScore({
       screeningScore: screening,
       opportunityId,

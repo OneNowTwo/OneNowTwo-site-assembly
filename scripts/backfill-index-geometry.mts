@@ -7,10 +7,17 @@
  * - Concurrency 1, rate-limited, resumable/idempotent
  * - Persists Parcel geometry + SiteCandidateIndex.geometry
  *
- * IMPORTANT: default `--limit` is 1. `--all` alone still only processes 1 row unless
- * you pass an explicit `--limit`. Prefer batched runs, e.g.:
+ * IMPORTANT: default `--limit` is 1. `--all` alone requires an explicit `--limit`.
+ *
+ * `--all` pages with IMMUTABLE orderBy id asc. Do NOT order by geometry/updatedAt —
+ * those change after a write and make offset batches skip untouched rows.
+ * Idempotent `already_ok` on already-complete rows in a stable page is fine.
+ *
+ * Approved pattern (236 ACTIVE candidates → 10 batches of 25):
  *   --all --limit=25 --offset=0
  *   --all --limit=25 --offset=25
+ *   ...
+ *   --all --limit=25 --offset=225
  *
  * Usage:
  *   npx tsx scripts/backfill-index-geometry.mts --suburb=Bexley [--limit=1]
@@ -28,6 +35,7 @@ import {
   parcelsMissingDrawableGeometry,
   siteGeometryFromParcels,
 } from "../src/lib/index-candidate-geometry";
+import { STABLE_BACKFILL_ORDER_BY } from "../src/lib/intelligence/backfill-pagination";
 import { getParcelsByExternalIds, getStoredParcelsByExternalIds } from "../src/lib/parcel-service";
 import { upsertParcel } from "../src/lib/opportunity-service";
 
@@ -228,10 +236,11 @@ async function main() {
     ...(args.suburb ? { suburb: { equals: args.suburb, mode: "insensitive" as const } } : {}),
   };
 
-  // Prefer rows missing geometry first (resumable).
+  // --all: immutable id order so offset pages never skip after geometry writes.
+  // Scoped suburb/id/key: same stable id order (Washington-first re-sort would break offsets).
   const rows = await prisma.siteCandidateIndex.findMany({
     where,
-    orderBy: [{ geometry: "asc" }, { updatedAt: "asc" }],
+    orderBy: STABLE_BACKFILL_ORDER_BY,
     skip: args.offset,
     take: args.all || args.suburb || args.id || args.canonicalKey ? args.limit : DEFAULT_BATCH,
     select: {
@@ -244,15 +253,8 @@ async function main() {
     },
   });
 
-  // When suburb=Bexley and no explicit limit override beyond default, still process Washington Street first.
-  const ordered = [...rows].sort((a, b) => {
-    const aWash = /washington/i.test(a.address ?? "") ? 0 : 1;
-    const bWash = /washington/i.test(b.address ?? "") ? 0 : 1;
-    return aWash - bWash;
-  });
-
   const results: Awaited<ReturnType<typeof backfillOne>>[] = [];
-  for (const row of ordered) {
+  for (const row of rows) {
     // Concurrency 1
     const r = await backfillOne(row, { dryRun: args.dryRun, delayMs: args.delayMs });
     results.push(r);

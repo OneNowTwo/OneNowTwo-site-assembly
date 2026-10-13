@@ -22,7 +22,7 @@ export function clampScreeningScore(raw: number): number {
 
 /**
  * Resolve the one score shown to users.
- * Detailed Opportunity.score is already 0–100 from scoreAssembly; still coerce to int.
+ * Never display >100 or <0 — clamp both DETAILED and SCREENING (does not mutate stored Opportunity.score).
  */
 export function resolveDisplayScore(input: {
   screeningScore: number | null | undefined;
@@ -35,7 +35,7 @@ export function resolveDisplayScore(input: {
     Number.isFinite(input.opportunityScore)
   ) {
     return {
-      score: Math.round(input.opportunityScore),
+      score: clampScreeningScore(input.opportunityScore),
       provenance: "DETAILED",
     };
   }

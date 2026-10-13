@@ -10,7 +10,10 @@ import { buildMapHref } from "@/lib/map/map-target";
 import { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 import { resolveDisplayScore, type ScoreProvenance } from "@/lib/intelligence/display-score";
 import { pickBestPerIndexFamily } from "@/lib/intelligence/index-candidate-families";
-import { loadLinkedOpportunityScoresByCanonicalKey } from "@/lib/intelligence/linked-opportunity-scores";
+import {
+  loadLinkedOpportunityScoreIndex,
+  resolveLinkedOpportunityScore,
+} from "@/lib/intelligence/linked-opportunity-scores";
 
 export { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 
@@ -132,14 +135,14 @@ export async function listTodaySiteCandidates(
       orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
       take: 240,
     }),
-    loadLinkedOpportunityScoresByCanonicalKey(),
+    loadLinkedOpportunityScoreIndex(),
   ]);
 
   const ranked = rows
     .map((r) => {
       const screening = screeningStrategyScore(r, profile);
-      const linked = linkedScores.get(r.canonicalKey);
-      const opportunityId = r.opportunityId ?? linked?.opportunityId ?? null;
+      const linked = resolveLinkedOpportunityScore(r.opportunityId, r.canonicalKey, linkedScores);
+      const opportunityId = linked?.opportunityId ?? null;
       const display = resolveDisplayScore({
         screeningScore: screening,
         opportunityId,

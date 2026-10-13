@@ -8,6 +8,16 @@ import {
   pickBestPerIndexFamily,
   sameIndexFamily,
 } from "@/lib/intelligence/index-candidate-families";
+import {
+  resolveLinkedOpportunityScore,
+  type LinkedOpportunityScoreIndex,
+} from "@/lib/intelligence/linked-opportunity-scores";
+import {
+  stableBackfillPageIds,
+  stableBackfillPageSequence,
+} from "@/lib/intelligence/backfill-pagination";
+import { failsMaxOwnersFilter } from "@/lib/find/find-sites";
+import { lotCountPenalty } from "@/lib/analysis/area-scan";
 import { indicativeGfaDisplay } from "@/lib/analysis/indicative-gfa-display";
 import { computeAssemblyMetrics, scoreAssembly } from "@/lib/analysis/assembly";
 import { DEFAULT_ASSUMPTIONS } from "@/lib/analysis/assumptions";
@@ -47,6 +57,23 @@ describe("display score rule", () => {
     ).toEqual({ score: 88, provenance: "SCREENING" });
   });
 
+  it("defensively clamps DETAILED scores to 0–100", () => {
+    expect(
+      resolveDisplayScore({
+        screeningScore: 50,
+        opportunityId: "opp-hi",
+        opportunityScore: 104,
+      }),
+    ).toEqual({ score: 100, provenance: "DETAILED" });
+    expect(
+      resolveDisplayScore({
+        screeningScore: 50,
+        opportunityId: "opp-lo",
+        opportunityScore: -4,
+      }),
+    ).toEqual({ score: 0, provenance: "DETAILED" });
+  });
+
   it("score is deterministic for same inputs (Today / Find)", () => {
     const a = resolveDisplayScore({
       screeningScore: 105,
@@ -60,6 +87,117 @@ describe("display score rule", () => {
     });
     expect(a).toEqual(b);
     expect(a.score).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("exact opportunityId wins over canonical fallback", () => {
+  it("uses linked Opportunity A even when B has a higher score on the same key", () => {
+    const index: LinkedOpportunityScoreIndex = {
+      byId: new Map([
+        ["opp-a", { opportunityId: "opp-a", score: 39 }],
+        ["opp-b", { opportunityId: "opp-b", score: 90 }],
+      ]),
+      byCanonicalKey: new Map([
+        // Canonical fallback would prefer the higher score (B).
+        ["p1|p2", { opportunityId: "opp-b", score: 90 }],
+      ]),
+    };
+    const linked = resolveLinkedOpportunityScore("opp-a", "p1|p2", index);
+    expect(linked).toEqual({ opportunityId: "opp-a", score: 39 });
+    const display = resolveDisplayScore({
+      screeningScore: 105,
+      opportunityId: linked!.opportunityId,
+      opportunityScore: linked!.score,
+    });
+    expect(display).toEqual({ score: 39, provenance: "DETAILED" });
+  });
+
+  it("does not swap to canonical B when opportunityId A is missing from ACTIVE scored set", () => {
+    const index: LinkedOpportunityScoreIndex = {
+      byId: new Map([["opp-b", { opportunityId: "opp-b", score: 90 }]]),
+      byCanonicalKey: new Map([["p1|p2", { opportunityId: "opp-b", score: 90 }]]),
+    };
+    expect(resolveLinkedOpportunityScore("opp-a", "p1|p2", index)).toBeNull();
+  });
+
+  it("falls back to canonical only when opportunityId is absent", () => {
+    const index: LinkedOpportunityScoreIndex = {
+      byId: new Map([["opp-b", { opportunityId: "opp-b", score: 90 }]]),
+      byCanonicalKey: new Map([["p1|p2", { opportunityId: "opp-b", score: 90 }]]),
+    };
+    expect(resolveLinkedOpportunityScore(null, "p1|p2", index)).toEqual({
+      opportunityId: "opp-b",
+      score: 90,
+    });
+  });
+});
+
+describe("maxOwners hard filter", () => {
+  it("rejects unknown owners when maxOwners is set", () => {
+    expect(failsMaxOwnersFilter(2, null)).toBe(true);
+    expect(failsMaxOwnersFilter(2, undefined)).toBe(true);
+  });
+
+  it("rejects known owners above max", () => {
+    expect(failsMaxOwnersFilter(2, 3)).toBe(true);
+  });
+
+  it("accepts known owners within max", () => {
+    expect(failsMaxOwnersFilter(2, 2)).toBe(false);
+    expect(failsMaxOwnersFilter(2, 1)).toBe(false);
+  });
+
+  it("allows unknown owners when maxOwners is not set", () => {
+    expect(failsMaxOwnersFilter(null, null)).toBe(false);
+    expect(failsMaxOwnersFilter(undefined, null)).toBe(false);
+  });
+});
+
+describe("lotCountPenalty is assembly complexity, not ownership", () => {
+  it("matches prior lot-count curve without reading owners", () => {
+    expect(lotCountPenalty(2)).toBe(0);
+    expect(lotCountPenalty(5)).toBe(0.5);
+    expect(lotCountPenalty(8)).toBe(1);
+  });
+});
+
+describe("stable backfill pagination", () => {
+  it("successful geometry writes do not change id-ordered page sequence", () => {
+    const rows = Array.from({ length: 60 }, (_, i) => ({
+      id: `id-${String(i).padStart(3, "0")}`,
+      geometry: null as unknown,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }));
+    const withoutMutate = stableBackfillPageSequence(rows, 25, false);
+    const withMutate = stableBackfillPageSequence(rows, 25, true);
+    expect(withMutate).toEqual(withoutMutate);
+    expect(withMutate).toHaveLength(3);
+    expect(withMutate[0]).toHaveLength(25);
+    expect(withMutate[1]).toHaveLength(25);
+    expect(withMutate[2]).toHaveLength(10);
+    // No overlap / skip across pages
+    const flat = withMutate.flat();
+    expect(new Set(flat).size).toBe(60);
+    expect(flat).toEqual([...rows].map((r) => r.id).sort());
+  });
+
+  it("page membership is stable after mutating geometry on page 0", () => {
+    const rows = Array.from({ length: 50 }, (_, i) => ({
+      id: `c${String(i).padStart(2, "0")}`,
+      geometry: null as unknown,
+      updatedAt: null as string | null,
+    }));
+    const page0 = stableBackfillPageIds(rows, 25, 0);
+    for (const row of rows) {
+      if (page0.includes(row.id)) {
+        row.geometry = { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
+        row.updatedAt = "2026-10-14T00:00:00.000Z";
+      }
+    }
+    expect(stableBackfillPageIds(rows, 25, 0)).toEqual(page0);
+    expect(stableBackfillPageIds(rows, 25, 25)).toEqual(
+      [...rows].map((r) => r.id).sort().slice(25, 50),
+    );
   });
 });
 
