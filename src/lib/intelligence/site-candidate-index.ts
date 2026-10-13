@@ -132,13 +132,13 @@ export async function listTodaySiteCandidates(
   const toView = (row: (typeof ranked)[number]["row"], score: number): SiteCandidateView => {
     // Lightweight INDEX_CANDIDATE deep-link — never open as PARCEL/OPPORTUNITY
     // (those trigger broad /api/parcels + LMR centres on zoom ≥ 17).
+    // Omit stored row.bbox: it is often the Sydney discovery TILE, not the site.
     const href = buildMapHref({
       candidateId: row.id,
       canonicalKey: row.canonicalKey,
       lat: row.centroidLat,
       lng: row.centroidLng,
       zoom: 18,
-      bbox: row.bbox as { west: number; south: number; east: number; north: number } | null,
     });
     return {
       id: row.id,

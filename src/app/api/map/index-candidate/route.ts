@@ -32,19 +32,53 @@ export async function GET(req: Request) {
   const parcelIds = Array.isArray(row.parcelIds)
     ? (row.parcelIds as unknown[]).map(String).filter(Boolean)
     : [];
-  const bbox =
-    bboxFromGeometry(row.bbox) ??
-    bboxFromGeometry(row.geometry) ??
-    (row.centroidLat != null && row.centroidLng != null
-      ? {
-          west: row.centroidLng - 0.0015,
-          south: row.centroidLat - 0.0015,
-          east: row.centroidLng + 0.0015,
-          north: row.centroidLat + 0.0015,
-        }
-      : null);
 
+  // Index rows often store the Sydney batch TILE bbox (multi-km), not the site.
+  // Prefer a tight site bbox from stored parcels / centroid — never fly the map to a tile.
+  const storedTileBbox = bboxFromGeometry(row.bbox);
   const parcels = parcelIds.length ? await getStoredParcelsByExternalIds(parcelIds) : [];
+
+  let siteBbox: { west: number; south: number; east: number; north: number } | null = null;
+  if (parcels.length) {
+    let west = Infinity,
+      south = Infinity,
+      east = -Infinity,
+      north = -Infinity;
+    for (const p of parcels) {
+      const [lng, lat] = p.centroid;
+      west = Math.min(west, lng);
+      east = Math.max(east, lng);
+      south = Math.min(south, lat);
+      north = Math.max(north, lat);
+      const g = bboxFromGeometry(p.geometry);
+      if (g) {
+        west = Math.min(west, g.west);
+        east = Math.max(east, g.east);
+        south = Math.min(south, g.south);
+        north = Math.max(north, g.north);
+      }
+    }
+    if (Number.isFinite(west)) {
+      const pad = 0.0004;
+      siteBbox = { west: west - pad, south: south - pad, east: east + pad, north: north + pad };
+    }
+  }
+  if (!siteBbox) siteBbox = bboxFromGeometry(row.geometry);
+  if (!siteBbox && row.centroidLat != null && row.centroidLng != null) {
+    siteBbox = {
+      west: row.centroidLng - 0.0012,
+      south: row.centroidLat - 0.0012,
+      east: row.centroidLng + 0.0012,
+      north: row.centroidLat + 0.0012,
+    };
+  }
+
+  const centroid =
+    row.centroidLat != null && row.centroidLng != null
+      ? { lat: row.centroidLat, lng: row.centroidLng }
+      : siteBbox
+        ? { lat: (siteBbox.south + siteBbox.north) / 2, lng: (siteBbox.west + siteBbox.east) / 2 }
+        : null;
 
   return NextResponse.json({
     kind: "INDEX_CANDIDATE",
@@ -55,14 +89,11 @@ export async function GET(req: Request) {
     suburb: row.suburb,
     lga: row.lga,
     parcelIds,
-    bbox,
+    /** Tight site bbox for map fly/fit — never the discovery tile. */
+    bbox: siteBbox,
+    tileBbox: storedTileBbox,
     geometry: row.geometry,
-    centroid:
-      row.centroidLat != null && row.centroidLng != null
-        ? { lat: row.centroidLat, lng: row.centroidLng }
-        : bbox
-          ? { lat: (bbox.south + bbox.north) / 2, lng: (bbox.west + bbox.east) / 2 }
-          : null,
+    centroid,
     opportunityId: row.opportunityId,
     parcels,
     source: "site_candidate_index",

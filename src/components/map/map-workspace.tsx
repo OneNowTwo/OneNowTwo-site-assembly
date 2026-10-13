@@ -981,8 +981,12 @@ export function MapWorkspace({
             setAssembly(ids);
             setSelectedId(ids[0] ?? null);
           }
-          const bbox = body.bbox ?? mapTarget.bbox ?? null;
-          if (bbox) flyBBox(bbox, mapTarget.zoom ?? 18);
+          // Prefer site centroid / tight site bbox. URL/index tile bboxes are multi-km
+          // and must not drive flyTo (Leaflet only fitBounds when width < 0.03°).
+          const siteBbox = body.bbox;
+          const siteBboxOk =
+            !!siteBbox && siteBbox.east - siteBbox.west < 0.03 && siteBbox.north - siteBbox.south < 0.03;
+          if (siteBboxOk && siteBbox) flyBBox(siteBbox, mapTarget.zoom ?? 18);
           else if (body.centroid) {
             setFlyTo({
               lat: body.centroid.lat,
@@ -1006,9 +1010,9 @@ export function MapWorkspace({
           });
         } catch {
           if (cancelled) return;
-          // Still suppress viewport load — fall back to URL centroid/bbox only.
-          if (mapTarget.bbox) flyBBox(mapTarget.bbox, mapTarget.zoom ?? 18);
-          else if (mapTarget.lat != null && mapTarget.lng != null) {
+          // Still suppress viewport load — fall back to URL site centroid only
+          // (do not trust URL bbox — Today currently embeds discovery tile bboxes).
+          if (mapTarget.lat != null && mapTarget.lng != null) {
             setFlyTo({
               lat: mapTarget.lat,
               lng: mapTarget.lng,
