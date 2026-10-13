@@ -93,35 +93,54 @@ describe("post-scan timing constants", () => {
 });
 
 describe("shouldFetchViewportParcels", () => {
-  const base = { zoom: 18, minParcelZoom: 17, cooldownActive: false };
+  const base = { mapVisible: true, zoom: 18, minParcelZoom: 17, cooldownActive: false };
 
-  it("blocks broad parcel/LMR refresh while INDEX_CANDIDATE is active (even at zoom 18)", () => {
+  it("hidden Map + zoom 18 → no viewport parcel/LMR fetch permitted", () => {
     expect(
       shouldFetchViewportParcels({
         ...base,
+        mapVisible: false,
+        targetKind: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldFetchViewportParcels({
+        ...base,
+        mapVisible: false,
+        targetKind: "SCAN",
+      }),
+    ).toBe(false);
+  });
+
+  it("visible Map + INDEX_CANDIDATE + zoom 18 → no viewport parcel/LMR fetch permitted", () => {
+    expect(
+      shouldFetchViewportParcels({
+        ...base,
+        mapVisible: true,
         targetKind: "INDEX_CANDIDATE",
         cooldownActive: false,
       }),
     ).toBe(false);
   });
 
+  it("visible plain Map + zoom 18 → normal viewport fetch permitted", () => {
+    expect(shouldFetchViewportParcels({ ...base, targetKind: null })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: undefined })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: "SCAN" })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: "POINT" })).toBe(true);
+    expect(shouldFetchViewportParcels({ ...base, targetKind: "PARCEL" })).toBe(true);
+  });
+
   it("blocks INDEX_CANDIDATE even when cooldown is inactive (kind wins over timer race)", () => {
     expect(
       shouldFetchViewportParcels({
+        mapVisible: true,
         targetKind: "INDEX_CANDIDATE",
         zoom: 18,
         minParcelZoom: 17,
         cooldownActive: false,
       }),
     ).toBe(false);
-  });
-
-  it("allows normal map / SCAN browsing at zoom >= min when cooldown clear", () => {
-    expect(shouldFetchViewportParcels({ ...base, targetKind: null })).toBe(true);
-    expect(shouldFetchViewportParcels({ ...base, targetKind: undefined })).toBe(true);
-    expect(shouldFetchViewportParcels({ ...base, targetKind: "SCAN" })).toBe(true);
-    expect(shouldFetchViewportParcels({ ...base, targetKind: "POINT" })).toBe(true);
-    expect(shouldFetchViewportParcels({ ...base, targetKind: "PARCEL" })).toBe(true);
   });
 
   it("still respects zoom floor and cooldown for non-index targets", () => {

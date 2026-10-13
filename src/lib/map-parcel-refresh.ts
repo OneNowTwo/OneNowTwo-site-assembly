@@ -53,6 +53,8 @@ export const POST_SCAN_PARCEL_REFRESH_DELAY_MS = 10_000;
 export const INDEX_CANDIDATE_VIEWPORT_SUPPRESS_MS = 15_000;
 
 export type ViewportParcelFetchInput = {
+  /** False while AppShell keeps MapWorkspace mounted but hidden under another tab. */
+  mapVisible: boolean;
   /** Active MapTarget.kind, if any. */
   targetKind: string | null | undefined;
   zoom: number;
@@ -63,10 +65,13 @@ export type ViewportParcelFetchInput = {
 
 /**
  * Whether onViewportChange may schedule broad /api/parcels + /api/lmr/centres.
+ * Hidden Map must never schedule viewport loads (Leaflet can still emit moveend
+ * while the persistent shell keeps the map mounted under Today/Find/etc).
  * INDEX_CANDIDATE must never trigger a viewport cadastre/LMR load while active —
  * the index resolver already supplies the site parcels to highlight.
  */
 export function shouldFetchViewportParcels(input: ViewportParcelFetchInput): boolean {
+  if (!input.mapVisible) return false;
   if (input.targetKind === "INDEX_CANDIDATE") return false;
   if (input.zoom < input.minParcelZoom) return false;
   if (input.cooldownActive) return false;
