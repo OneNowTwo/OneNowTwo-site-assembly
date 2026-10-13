@@ -262,26 +262,34 @@ export function FindClient() {
                 <div>
                   <h2 className="text-[15px] font-semibold">{r.locationLabel}</h2>
                   <p className="mt-0.5 text-[12px] text-muted">
-                    {sqm(r.siteAreaSqm)}
-                    {r.zone ? ` · ${r.zone}` : ""} · {r.lotCount} lot{r.lotCount === 1 ? "" : "s"} · {r.owners} owner
-                    {r.owners === 1 ? "" : "s"}
+                    {[
+                      r.zone,
+                      sqm(r.siteAreaSqm),
+                      `${r.lotCount} lot${r.lotCount === 1 ? "" : "s"}`,
+                      r.owners != null ? `${r.owners} owner${r.owners === 1 ? "" : "s"}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </p>
                 </div>
                 <ScoreBadge score={r.score} />
               </div>
               <div className="mt-2 flex flex-wrap gap-3 text-[12.5px]">
-                <span>Current FSR {r.currentFsr != null ? fsr(r.currentFsr) : "—"}</span>
-                <span className={cx(r.proposedFsr != null ? "font-semibold text-brand" : "text-muted")}>
-                  Proposed FSR {r.proposedFsr != null ? fsr(r.proposedFsr) : "—"}
-                </span>
+                {r.currentFsr != null && <span>Current FSR {fsr(r.currentFsr)}</span>}
+                {r.proposedFsr != null && (
+                  <span className="font-semibold text-brand">Proposed FSR {fsr(r.proposedFsr)}</span>
+                )}
                 {r.stationDistanceM != null && (
                   <span>
-                    {Math.round(r.stationDistanceM)}m from {r.nearestStationLabel ?? "station"}
+                    {Math.round(r.stationDistanceM).toLocaleString("en-AU")}m from{" "}
+                    {r.nearestStationLabel ?? "station"}
                   </span>
                 )}
                 {r.planningChangeStatus && <Badge tone="warn">{r.planningChangeStatus}</Badge>}
                 {r.keySiteId && <Badge tone="brand">Key Site</Badge>}
-                <span className="num">{r.headroom != null ? money(r.headroom, { compact: true }) : "—"} headroom</span>
+                {r.headroom != null && (
+                  <span className="num">{money(r.headroom, { compact: true })} headroom</span>
+                )}
               </div>
               <div className="mt-3">
                 <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Why this matched</div>

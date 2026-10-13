@@ -55,7 +55,7 @@ export function AcquisitionTab() {
               <th className="w-[120px] px-2 py-2 text-right">Max modelled offer</th>
               <th className="w-[120px] px-2 py-2 text-right">Opening offer</th>
               <th className="w-[110px] px-2 py-2 text-right">Neg. headroom</th>
-              <th className="px-2 py-2 text-right">Owner premium</th>
+              <th className="px-2 py-2 text-right">Offer vs market</th>
               <th className="px-2 py-2 text-left">Critical?</th>
               <th className="px-2 py-2 text-left">Owner</th>
               <th className="px-2 py-2 text-left">Acquisition stage</th>
@@ -104,7 +104,7 @@ export function AcquisitionTab() {
             })}
           </tbody>
         </table>
-        <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Negotiation headroom = maximum modelled offer − opening offer. Owner premium = (opening ÷ existing market value) − 1. Model outputs only — not legal valuations.</p>
+        <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Negotiation headroom = maximum modelled offer − opening offer. Offer vs market = (opening ÷ existing market value) − 1 (negative = discount). Model outputs only — not legal valuations.</p>
       </Panel>
 
       <div className="grid grid-cols-12 gap-4">
@@ -116,7 +116,7 @@ export function AcquisitionTab() {
                   <th className="px-3 py-2 text-left">Lot</th>
                   <th className="px-2 py-2 text-right">Area −</th>
                   <th className="px-2 py-2 text-right">GFA −</th>
-                  <th className="px-2 py-2 text-right">Budget without</th>
+                  <th className="px-2 py-2 text-right">Max payable for remaining site</th>
                   <th className="px-2 py-2 text-left">Status</th>
                 </tr>
               </thead>

@@ -132,7 +132,7 @@ export function AcquisitionsBoard() {
                 <th className="px-3 py-2 text-right">Est. value</th>
                 <th className="px-3 py-2 text-right">Opening</th>
                 <th className="px-3 py-2 text-right">Max</th>
-                <th className="px-3 py-2 text-right">Premium</th>
+                <th className="px-3 py-2 text-right">Offer vs market</th>
                 <th className="px-3 py-2 text-left">Critical</th>
                 <th className="px-3 py-2 text-left">Stage</th>
                 <th className="px-3 py-2 text-left">Last contact</th>

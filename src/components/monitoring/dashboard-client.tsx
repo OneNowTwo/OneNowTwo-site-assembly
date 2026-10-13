@@ -239,18 +239,24 @@ export function DashboardClient() {
                     <div>
                       <div className="text-[14px] font-semibold leading-snug">{s.address || s.name}</div>
                       <div className="text-[12px] text-muted">
-                        {s.suburb ?? s.lga ?? "Sydney"}
-                        {s.siteAreaSqm != null ? ` · ${sqm(s.siteAreaSqm)}` : ""}
-                        {s.lotCount != null ? ` · ${s.lotCount} lot${s.lotCount === 1 ? "" : "s"}` : ""}
-                        {s.owners != null ? ` · ${s.owners} owner${s.owners === 1 ? "" : "s"}` : ""}
+                        {[
+                          s.suburb ?? s.lga ?? "Sydney",
+                          s.siteAreaSqm != null ? sqm(s.siteAreaSqm) : null,
+                          s.lotCount != null ? `${s.lotCount} lot${s.lotCount === 1 ? "" : "s"}` : null,
+                          s.owners != null ? `${s.owners} owner${s.owners === 1 ? "" : "s"}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </div>
                     </div>
                     {s.score != null && <Badge tone="brand">Score {Math.round(s.score)}</Badge>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
-                    <span>Current FSR {s.currentFsr != null ? fsr(s.currentFsr) : "—"}</span>
+                    {s.currentFsr != null && <span>Current FSR {fsr(s.currentFsr)}</span>}
                     {s.proposedFsr != null && <span className="text-brand">Proposed FSR {fsr(s.proposedFsr)}</span>}
-                    {s.stationDistanceM != null && <span>{Math.round(s.stationDistanceM)}m to station</span>}
+                    {s.stationDistanceM != null && (
+                      <span>{Math.round(s.stationDistanceM).toLocaleString("en-AU")}m to station</span>
+                    )}
                     {s.headroom != null && (
                       <span className={cx("num", s.headroom > 0 ? "text-good" : "text-muted")}>
                         Headroom {money(s.headroom, { compact: true })}

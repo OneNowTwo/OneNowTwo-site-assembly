@@ -216,15 +216,18 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
       if (!reasons.length) reasons.push("Sydney index discovery — meets screening filters");
 
       // Quick score only — do not invent financials without valuation support.
+      // Clamp to 0–100 so index never persists display scores above 100.
       let quickScore = c.score?.score ?? c.planningPotentialScore ?? 40;
       if (proposedFsr != null && c.lepFsr != null && proposedFsr > c.lepFsr) quickScore += 12;
       if (stationDistanceM != null && stationDistanceM <= 800) quickScore += 8;
       if (keySiteStatus) quickScore += 10;
+      quickScore = Math.max(0, Math.min(100, Math.round(quickScore)));
 
+      const clampScore = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
       const strategyScores = {
-        APARTMENTS: quickScore + (/R3|R4|MU1|B4|E1/i.test(c.zone ?? "") ? 6 : 0),
-        TOWNHOUSES: quickScore + (/R2|R3/i.test(c.zone ?? "") ? 6 : -4),
-        CO_LIVING: quickScore + (stationDistanceM != null && stationDistanceM <= 800 ? 8 : 0),
+        APARTMENTS: clampScore(quickScore + (/R3|R4|MU1|B4|E1/i.test(c.zone ?? "") ? 6 : 0)),
+        TOWNHOUSES: clampScore(quickScore + (/R2|R3/i.test(c.zone ?? "") ? 6 : -4)),
+        CO_LIVING: clampScore(quickScore + (stationDistanceM != null && stationDistanceM <= 800 ? 8 : 0)),
         GENERAL_RESIDENTIAL: quickScore,
       };
 
@@ -240,7 +243,8 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
           zone: c.zone,
           siteAreaSqm: c.siteAreaSqm,
           lotCount: c.lotCount,
-          owners: c.owners,
+          // Lot count ≠ owners. Persist null unless title/ownership data proves a count.
+          owners: null,
           currentFsr: c.lepFsr,
           proposedFsr,
           proposedHeightM: proposedHeight,
@@ -279,7 +283,7 @@ async function processOneBatch(batchId: string, runId: string): Promise<{
           zone: c.zone,
           siteAreaSqm: c.siteAreaSqm,
           lotCount: c.lotCount,
-          owners: c.owners,
+          owners: null,
           currentFsr: c.lepFsr,
           proposedFsr,
           proposedHeightM: proposedHeight,

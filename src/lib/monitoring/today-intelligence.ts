@@ -198,6 +198,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     proposedFsr: s.proposedFsr,
     stationDistanceM: s.stationDistanceM,
     score: s.score,
+    scoreProvenance: s.scoreProvenance,
     maxPayable: s.maxPayable,
     headroom: s.headroom,
     reasons: s.reasons,

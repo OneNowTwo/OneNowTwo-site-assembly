@@ -7,11 +7,16 @@
  * - Concurrency 1, rate-limited, resumable/idempotent
  * - Persists Parcel geometry + SiteCandidateIndex.geometry
  *
+ * IMPORTANT: default `--limit` is 1. `--all` alone still only processes 1 row unless
+ * you pass an explicit `--limit`. Prefer batched runs, e.g.:
+ *   --all --limit=25 --offset=0
+ *   --all --limit=25 --offset=25
+ *
  * Usage:
  *   npx tsx scripts/backfill-index-geometry.mts --suburb=Bexley [--limit=1]
  *   npx tsx scripts/backfill-index-geometry.mts --id=<candidateId>
  *   npx tsx scripts/backfill-index-geometry.mts --canonicalKey=<key>
- *   npx tsx scripts/backfill-index-geometry.mts --all [--limit=50] [--offset=0]
+ *   npx tsx scripts/backfill-index-geometry.mts --all --limit=25 [--offset=0]
  *   npx tsx scripts/backfill-index-geometry.mts --dry-run --suburb=Bexley
  */
 
@@ -48,15 +53,25 @@ function parseArgs(argv: string[]): Args {
     delayMs: DEFAULT_DELAY_MS,
     dryRun: false,
   };
+  let limitExplicit = false;
   for (const a of argv) {
     if (a === "--all") args.all = true;
     else if (a === "--dry-run") args.dryRun = true;
     else if (a.startsWith("--suburb=")) args.suburb = a.slice("--suburb=".length);
     else if (a.startsWith("--id=")) args.id = a.slice("--id=".length);
     else if (a.startsWith("--canonicalKey=")) args.canonicalKey = a.slice("--canonicalKey=".length);
-    else if (a.startsWith("--limit=")) args.limit = Math.max(1, Number(a.slice("--limit=".length)) || 1);
-    else if (a.startsWith("--offset=")) args.offset = Math.max(0, Number(a.slice("--offset=".length)) || 0);
+    else if (a.startsWith("--limit=")) {
+      args.limit = Math.max(1, Number(a.slice("--limit=".length)) || 1);
+      limitExplicit = true;
+    } else if (a.startsWith("--offset=")) args.offset = Math.max(0, Number(a.slice("--offset=".length)) || 0);
     else if (a.startsWith("--delayMs=")) args.delayMs = Math.max(0, Number(a.slice("--delayMs=".length)) || 0);
+  }
+  // `--all` without `--limit` used to silently process 1 row. Require an explicit batch size.
+  if (args.all && !limitExplicit && !args.id && !args.canonicalKey && !args.suburb) {
+    console.error(
+      "Refusing --all without --limit=N. Example: --all --limit=25 --offset=0 (default limit is 1).",
+    );
+    process.exit(1);
   }
   return args;
 }
