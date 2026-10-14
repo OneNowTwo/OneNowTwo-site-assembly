@@ -174,6 +174,9 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
             setDto(await api<OpportunityDTO>(`/api/opportunities/${id}`));
           },
           setDto,
+          setTab: (next) => {
+            if (TABS.includes(next as Tab)) setTab(next as Tab);
+          },
         }
       : null;
 
@@ -277,27 +280,35 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                 {error && <Badge tone="bad">{error}</Badge>}
               </div>
             </div>
-            <div className="flex shrink-0 items-end gap-6 pb-1">
+            <div className="flex shrink-0 flex-wrap items-end justify-end gap-x-5 gap-y-2 pb-1">
               <div className="text-right">
                 <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Score</div>
                 <div className="mt-1">
                   <ScoreBadge score={analysis.score.score} />
                 </div>
               </div>
+              <HeaderStat label="Site area" value={sqm(analysis.site.siteAreaSqm)} />
+              <HeaderStat
+                label="Effective FSR"
+                value={analysis.calculation.effectiveFsr != null ? `${analysis.calculation.effectiveFsr.toFixed(2)}:1` : "—"}
+                sub={analysis.calculation.effectiveFsr != null ? undefined : "No mapped FSR"}
+              />
+              <HeaderStat label="Dwellings" value={String(analysis.base.yield.dwellings)} />
+              <HeaderStat label="GRV" value={money(f.grv, { compact: true })} />
               <HeaderStat
                 label="Existing value"
                 value={analysis.marketValueComplete ? money(analysis.combinedExistingValue, { compact: true }) : autoValuing ? "…" : "—"}
                 sub={analysis.marketValueComplete ? undefined : autoValuing ? "Fetching NSW comps" : "VALUE REQUIRED"}
               />
-              <HeaderStat label="Max payable to owners" value={money(analysis.maxPayableToOwners, { compact: true })} tone={analysis.maxPayableToOwners > 0 ? "brand" : "bad"} large />
+              <HeaderStat label="Max payable" value={money(analysis.maxPayableToOwners, { compact: true })} tone={analysis.maxPayableToOwners > 0 ? "brand" : "bad"} large />
               <HeaderStat
-                label="Acquisition headroom"
+                label="Headroom"
                 value={analysis.marketValueComplete ? money(analysis.acquisitionHeadroom, { compact: true }) : "—"}
                 tone={analysis.marketValueComplete ? ((analysis.acquisitionHeadroom ?? 0) > 0 ? "good" : "bad") : undefined}
-                sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : autoValuing ? "Waiting for values" : "Auto-value pending"}
+                sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : autoValuing ? "Waiting for values" : "VALUE REQUIRED"}
                 large
               />
-              <HeaderStat label="GRV" value={money(f.grv, { compact: true })} />
+              <HeaderStat label="MOC" value={pct(f.marginOnCost, 0)} />
             </div>
           </div>
           {scanSnap && (

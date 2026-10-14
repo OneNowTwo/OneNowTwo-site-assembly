@@ -6,10 +6,11 @@ import { useRouter } from "next/navigation";
 import { useOpportunity } from "./context";
 import { LotsMap } from "./lots-map";
 import { Badge, Button, Panel, cx } from "@/components/ui";
-import { fsr, money, num, sqm } from "@/lib/format";
+import { fsr, money, num, pct, sqm } from "@/lib/format";
 import { modelProposedScenario, type ProposedScenarioResult } from "@/lib/source-watcher/proposed-scenario";
 import { buildAdjacency } from "@/lib/analysis/geometry";
 import { dtoToLots } from "@/lib/opportunity-dto";
+import { summariseRegisteredSalesEvidence } from "@/lib/analysis/registered-sales-evidence";
 import { whyFinancialHeadroom, whyKeySite, whyNearbyActivity, whyProposedFsrUplift } from "@/lib/source-watcher/why-it-matters";
 import type { DevelopmentActivity } from "@/lib/source-watcher/development-activity";
 import { WatchOpportunityButton } from "./watch-opportunity-button";
@@ -64,7 +65,7 @@ interface IntelEvent {
 }
 
 export function SiteIntelligence() {
-  const { dto, analysis, a } = useOpportunity();
+  const { dto, analysis, a, setTab } = useOpportunity();
   const router = useRouter();
   const [proposed, setProposed] = useState<ProposedApi | null>(null);
   const [scenarioMode, setScenarioMode] = useState<"CURRENT" | "PROPOSED">("CURRENT");
@@ -76,6 +77,7 @@ export function SiteIntelligence() {
   const [selected, setSelected] = useState<string | null>(null);
   const [assemblyBusy, setAssemblyBusy] = useState(false);
   const [assemblyError, setAssemblyError] = useState<string | null>(null);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
 
   const centroid = useMemo(() => {
     const c = dto.lots[0]?.centroid;
@@ -189,7 +191,18 @@ export function SiteIntelligence() {
   const maxPay =
     scenarioMode === "PROPOSED" && scenario ? scenario.proposedOutputs.maxPayable : analysis.maxPayableToOwners;
   const existing = analysis.combinedExistingValue;
-  const gfa = scenarioMode === "PROPOSED" && scenario ? scenario.proposedOutputs.achievableGfa : analysis.base.yield.gfa;
+
+  const registered = useMemo(
+    () =>
+      summariseRegisteredSalesEvidence(dto.inputs.lotValuationDetails, dto.lots, {
+        demoFinancialData: dto.demoFinancialData,
+        combinedExistingValue: analysis.combinedExistingValue,
+      }),
+    [dto.inputs.lotValuationDetails, dto.lots, dto.demoFinancialData, analysis.combinedExistingValue],
+  );
+
+  const officialLepFsr = analysis.planningSnapshot.effectiveControls.baseFsr;
+  const effectiveFsr = analysis.calculation.effectiveFsr ?? currentFsr;
 
   const whyItems = [
     whyProposedFsrUplift({ currentFsr, proposedFsr, siteAreaSqm: analysis.site.siteAreaSqm }),
@@ -210,18 +223,51 @@ export function SiteIntelligence() {
     ...activity.slice(0, 2).map(whyNearbyActivity),
   ].filter(Boolean);
 
+  const dash = (value: React.ReactNode, reason: string): React.ReactNode =>
+    value === "—" || value == null || value === "" ? (
+      <span title={reason}>
+        —<span className="sr-only"> ({reason})</span>
+      </span>
+    ) : (
+      value
+    );
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">Site Intelligence</div>
-          <h2 className="text-[18px] font-semibold tracking-tight">Is this worth looking at?</h2>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">Decision overview</div>
+          <h2 className="text-[18px] font-semibold tracking-tight">What is the site worth pursuing?</h2>
         </div>
         <WatchOpportunityButton />
       </div>
 
+      <div className="grid grid-cols-3 gap-3 rounded-[3px] border border-line bg-white p-3 sm:grid-cols-5 lg:grid-cols-9">
+        <MiniStat label="Score" value={`${analysis.score.score}`} />
+        <MiniStat label="Site area" value={sqm(analysis.site.siteAreaSqm)} />
+        <MiniStat
+          label="Effective FSR"
+          value={dash(effectiveFsr != null ? fsr(effectiveFsr) : "—", "No effective FSR on PlanningSnapshot")}
+        />
+        <MiniStat label="Indicative dwellings" value={num(dwellings)} />
+        <MiniStat label="GRV" value={money(grv, { compact: true })} />
+        <MiniStat
+          label="Existing value"
+          value={dash(analysis.marketValueComplete ? money(existing, { compact: true }) : "—", "VALUE REQUIRED")}
+        />
+        <MiniStat label="Max payable" value={money(maxPay, { compact: true })} />
+        <MiniStat
+          label="Headroom"
+          value={dash(
+            analysis.marketValueComplete || scenarioMode === "PROPOSED" ? money(headroom, { compact: true }) : "—",
+            "VALUE REQUIRED",
+          )}
+        />
+        <MiniStat label="MOC" value={moc != null ? pct(moc, 0) : "—"} />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-12">
-        <Panel title="Site" className="lg:col-span-5" bodyClassName="space-y-2">
+        <Panel title="A · Site" className="lg:col-span-5" bodyClassName="space-y-2">
           <div className="text-[14px] font-semibold">{dto.name}</div>
           <div className="text-[12px] text-muted">
             {dto.suburb ?? "NSW"}
@@ -229,16 +275,12 @@ export function SiteIntelligence() {
           </div>
           <dl className="grid grid-cols-2 gap-2 text-[12.5px]">
             <div>
-              <dt className="text-[10.5px] uppercase text-muted">Site area</dt>
-              <dd className="num font-semibold">{sqm(analysis.site.siteAreaSqm)}</dd>
-            </div>
-            <div>
               <dt className="text-[10.5px] uppercase text-muted">Lots</dt>
               <dd className="font-semibold">{analysis.includedIds.length}</dd>
             </div>
             <div>
-              <dt className="text-[10.5px] uppercase text-muted">Current property value</dt>
-              <dd className="num font-semibold">{analysis.marketValueComplete ? money(existing, { compact: true }) : "—"}</dd>
+              <dt className="text-[10.5px] uppercase text-muted">Site area</dt>
+              <dd className="num font-semibold">{sqm(analysis.site.siteAreaSqm)}</dd>
             </div>
           </dl>
           <div className="h-[180px] overflow-hidden rounded-[3px] border border-line">
@@ -247,25 +289,28 @@ export function SiteIntelligence() {
         </Panel>
 
         <div className="space-y-4 lg:col-span-7">
-          <Panel title="Current planning" actions={<Badge tone="live">CURRENT</Badge>}>
+          <Panel title="B · Planning" actions={<Badge tone="live">CURRENT</Badge>}>
             <div className="grid grid-cols-2 gap-3 text-[12.5px] sm:grid-cols-4">
-              <MiniStat label="Zone" value={currentZone ?? "—"} />
-              <MiniStat label="Effective FSR" value={currentFsr != null ? fsr(currentFsr) : "—"} />
+              <MiniStat label="Current zone" value={currentZone ?? "—"} />
+              <MiniStat
+                label="Official LEP FSR"
+                value={dash(officialLepFsr != null ? fsr(officialLepFsr) : "—", "No mapped LEP FSR")}
+              />
+              <MiniStat
+                label="Effective / modelled FSR"
+                value={dash(effectiveFsr != null ? fsr(effectiveFsr) : "—", "No effective FSR")}
+              />
               <MiniStat label="Height" value={currentHeight != null ? `${currentHeight} m` : "—"} />
-              <MiniStat label="Indicative GFA" value={gfa != null ? sqm(gfa) : "—"} />
             </div>
             <p className="mt-2 text-[11px] text-muted">Source · PlanningSnapshot / NSW EPI (current law)</p>
-          </Panel>
-
-          <Panel title="Proposed / pending" actions={<Badge tone="warn">NOT CURRENT LAW</Badge>}>
-            {!area && !keyHit ? (
-              <p className="text-[12.5px] text-muted">
-                No monitored proposed planning change currently intersects this site.
-              </p>
-            ) : (
-              <div className="space-y-3">
+            {(area || keyHit) && (
+              <div className="mt-3 border-t border-line pt-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Proposed / pending</div>
+                  <Badge tone="warn">NOT CURRENT LAW</Badge>
+                </div>
                 {area && (
-                  <div>
+                  <div className="mb-2">
                     <div className="text-[13px] font-semibold">{area.title}</div>
                     <div className="text-[12px] text-muted">{area.status}</div>
                   </div>
@@ -278,21 +323,10 @@ export function SiteIntelligence() {
                     to={proposedHeight != null ? `${proposedHeight} m` : "—"}
                   />
                 </div>
-                {(area?.proposedControls.affordableHousingContributionPct != null ||
-                  keyHit?.keySite.incentiveControls?.affordableHousingContributionPct != null) && (
-                  <p className="text-[12px]">
-                    Affordable housing requirement:{" "}
-                    {keyHit?.keySite.incentiveControls?.affordableHousingContributionPct ??
-                      area?.proposedControls.affordableHousingContributionPct}
-                    %
-                  </p>
-                )}
-                {area?.sourceUrl && (
-                  <a href={area.sourceUrl} target="_blank" rel="noreferrer" className="text-[11px] font-semibold text-brand hover:underline">
-                    Source →
-                  </a>
-                )}
               </div>
+            )}
+            {!area && !keyHit && (
+              <p className="mt-2 text-[12px] text-muted">No monitored proposed planning change currently intersects this site.</p>
             )}
           </Panel>
         </div>
@@ -427,7 +461,7 @@ export function SiteIntelligence() {
       </Panel>
 
       <Panel
-        title="Quick feasibility"
+        title="C · Quick feasibility"
         actions={
           proposedFsr != null ? (
             <div className="flex gap-1">
@@ -457,8 +491,11 @@ export function SiteIntelligence() {
           <MiniStat label="Indicative dwellings" value={num(dwellings)} />
           <MiniStat label="GRV" value={money(grv, { compact: true })} />
           <MiniStat label="Development cost" value={money(nonLand, { compact: true })} />
-          <MiniStat label="Target MOC" value={`${Math.round((moc ?? 0) * 100)}%`} />
-          <MiniStat label="Existing value" value={analysis.marketValueComplete ? money(existing, { compact: true }) : "—"} />
+          <MiniStat label="Target MOC" value={moc != null ? pct(moc, 0) : "—"} />
+          <MiniStat
+            label="Existing value"
+            value={dash(analysis.marketValueComplete ? money(existing, { compact: true }) : "—", "VALUE REQUIRED")}
+          />
           <MiniStat label="Max payable" value={money(maxPay, { compact: true })} />
         </div>
         <div className="mt-3 text-[13px]">
@@ -469,50 +506,100 @@ export function SiteIntelligence() {
         </div>
       </Panel>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Market evidence">
-          <div className="space-y-3 text-[12.5px]">
-            <div>
-              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Acquisition</div>
-              <p>Existing property estimate: {analysis.marketValueComplete ? money(existing, { compact: true }) : "—"}</p>
-              <p className="text-muted">Recent acquisition comps — see Comparables tab for detail.</p>
-            </div>
-            <div>
-              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Exit</div>
-              <p className="text-muted">Bedroom benchmarks and $/sqm cross-check remain in the Market / Comparables tabs.</p>
-            </div>
-          </div>
-        </Panel>
+      <Panel
+        title="D · Market evidence"
+        actions={
+          <button type="button" onClick={() => setTab("market")} className="text-[11px] font-semibold text-brand hover:underline">
+            Open Comparables →
+          </button>
+        }
+      >
+        <p className="text-[13px]">
+          {registered.hasEvidence
+            ? registered.summaryLine
+            : analysis.marketValueComplete
+              ? `Existing value ${money(existing, { compact: true })} — registered-sales evidence not stored on this opportunity.`
+              : "No existing-value estimate yet — Comparables will show registered evidence once valued."}
+        </p>
+        {registered.hasEvidence && (
+          <p className="mt-1 text-[12px] text-muted">
+            {registered.primarySourceLabel} · {registered.estimateKind}
+            {registered.dataQuality ? ` · ${registered.dataQuality}` : null}
+            {registered.summaryDetail ? ` · ${registered.summaryDetail}` : null}
+            {registered.hasDetailedSaleRows && registered.uniqueIncludedSaleCount !== registered.uniqueSaleCount
+              ? ` · ${registered.uniqueIncludedSaleCount} included of ${registered.uniqueSaleCount} unique`
+              : null}
+          </p>
+        )}
+      </Panel>
 
-        <Panel title="Recent intelligence">
-          {!intel.length && !whyItems.length ? (
-            <p className="text-[12.5px] text-muted">No recent Source Watcher events spatially linked to this site.</p>
-          ) : (
-            <ul className="space-y-2">
-              {whyItems.map((w) =>
-                w ? (
-                  <li key={w.kind + w.title} className="border-l-2 border-brand/30 pl-2">
-                    <div className="text-[12px] font-semibold">{w.title}</div>
-                    <p className="text-[12px] text-muted">{w.body}</p>
+      <Panel title="E · Next action">
+        <div className="flex flex-wrap gap-2">
+          <WatchOpportunityButton />
+          <button
+            type="button"
+            onClick={() => setTab("feasibility")}
+            className="inline-flex h-8 items-center rounded-[3px] border border-line bg-white px-3 text-[12px] font-semibold hover:border-brand hover:text-brand"
+          >
+            Analyse / edit assumptions
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("acquisition")}
+            className="inline-flex h-8 items-center rounded-[3px] border border-brand bg-brand px-3 text-[12px] font-semibold text-white hover:opacity-90"
+          >
+            Acquisition
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("market")}
+            className="inline-flex h-8 items-center rounded-[3px] border border-line bg-white px-3 text-[12px] font-semibold hover:border-brand hover:text-brand"
+          >
+            Comparables evidence
+          </button>
+        </div>
+      </Panel>
+
+      <div className="rounded-[3px] border border-line bg-white">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-muted hover:text-ink"
+          onClick={() => setSourcesOpen((v) => !v)}
+        >
+          <span>Sources &amp; history</span>
+          <span>{sourcesOpen ? "Hide" : "Show"}</span>
+        </button>
+        {sourcesOpen && (
+          <div className="space-y-4 border-t border-line px-4 py-3">
+            {!intel.length && !whyItems.length ? (
+              <p className="text-[12.5px] text-muted">No recent Source Watcher events spatially linked to this site.</p>
+            ) : (
+              <ul className="space-y-2">
+                {whyItems.map((w) =>
+                  w ? (
+                    <li key={w.kind + w.title} className="border-l-2 border-brand/30 pl-2">
+                      <div className="text-[12px] font-semibold">{w.title}</div>
+                      <p className="text-[12px] text-muted">{w.body}</p>
+                    </li>
+                  ) : null,
+                )}
+                {intel.map((e) => (
+                  <li key={e.id} className="text-[12.5px]">
+                    <span className="text-muted">{e.createdAt.slice(0, 10)}</span> ·{" "}
+                    {e.href ? (
+                      <Link href={e.href} className="font-semibold hover:text-brand">
+                        {e.title}
+                      </Link>
+                    ) : (
+                      <span className="font-semibold">{e.title}</span>
+                    )}
+                    {e.summary && <p className="text-muted">{e.summary}</p>}
                   </li>
-                ) : null,
-              )}
-              {intel.map((e) => (
-                <li key={e.id} className="text-[12.5px]">
-                  <span className="text-muted">{e.createdAt.slice(0, 10)}</span> ·{" "}
-                  {e.href ? (
-                    <Link href={e.href} className="font-semibold hover:text-brand">
-                      {e.title}
-                    </Link>
-                  ) : (
-                    <span className="font-semibold">{e.title}</span>
-                  )}
-                  {e.summary && <p className="text-muted">{e.summary}</p>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

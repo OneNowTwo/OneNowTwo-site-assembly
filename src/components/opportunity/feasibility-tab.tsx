@@ -4,6 +4,7 @@ import { useOpportunity } from "./context";
 import type { Assumptions, ScenarioAdjustment } from "@/lib/analysis/assumptions";
 import type { ScenarioKey } from "@/lib/analysis/opportunity";
 import { fsr, money, num, pct, sqm } from "@/lib/format";
+import { formatOfferVsMarket } from "@/lib/analysis/registered-sales-evidence";
 import { Badge, DemoFinancialBadge, Field, NumberField, Panel, Select, SourceTag, Stat, cx } from "@/components/ui";
 
 export function FeasibilityTab() {
@@ -27,25 +28,16 @@ export function FeasibilityTab() {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-4 rounded-[3px] border-2 border-brand/30 bg-white p-4">
-        <Stat label="Maximum payable to owners" value={money(f.maxPayableToOwners, { compact: true })} tone={f.viable ? "brand" : "bad"} sub="Primary acquisition metric (P)" />
-        <Stat label="Combined existing property value" value={money(analysis.combinedExistingValue, { compact: true })} sub={dto.demoFinancialData ? <DemoFinancialBadge /> : "Acquisition-side"} />
-        <Stat label="Acquisition headroom" value={analysis.marketValueComplete ? money(analysis.acquisitionHeadroom, { compact: true }) : "—"} tone={analysis.marketValueComplete ? ((analysis.acquisitionHeadroom ?? 0) > 0 ? "good" : "bad") : undefined} sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : "VALUE REQUIRED"} />
-        <Stat label="Acquisition headroom %" value={pct(analysis.acquisitionHeadroomPercent, 0)} sub="Headroom ÷ existing value" />
-      </div>
-      <div className="grid grid-cols-6 gap-4 rounded-[3px] border border-line bg-white p-4">
-        <Stat label="GRV" value={money(f.grv, { compact: true })} sub={f.blendedPricePerSqm != null ? `Blended ${money(f.blendedPricePerSqm)}/sqm` : undefined} />
+      <p className="text-[12px] text-muted">
+        Headline score / existing value / max payable / headroom / GRV / MOC sit in the opportunity header. This tab is for assumptions and the calculations behind them — CURRENT vs PROPOSED stays in Planning / Overview.
+      </p>
+      <div className="grid grid-cols-2 gap-4 rounded-[3px] border border-line bg-white p-4 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Costs before land" value={money(f.nonLandCosts, { compact: true })} />
         <Stat label="Residual land capacity" value={money(f.residualLandValue, { compact: true })} sub="Incl. duty, legal & land holding" />
         <Stat label="Opening acquisition budget" value={money(openingBudget, { compact: true })} sub="Sum of opening offers" />
-        <Stat label="Avg premium to market" value={pct(analysis.allocation.averagePremiumToMarket, 0, true)} />
+        <Stat label="Avg premium to market" value={formatOfferVsMarket(analysis.allocation.averagePremiumToMarket)} />
         <Stat label="Negotiation headroom" value={money(analysis.allocation.totalNegotiationHeadroom, { compact: true })} sub="Max − opening (total)" />
-      </div>
-      <div className="grid grid-cols-4 gap-4 rounded-[3px] border border-line bg-white p-4">
-        <Stat label="Profit at max land price" value={money(f.profit, { compact: true })} />
-        <Stat label="Margin on cost (MOC)" value={pct(f.marginOnCost)} sub="Profit ÷ total development cost" />
-        <Stat label="Margin on revenue" value={pct(f.marginOnRevenue)} />
-        <Stat label="Assembly uplift" value={money(analysis.assemblyUplift, { compact: true })} sub="Same as acquisition headroom" />
+        <Stat label="Profit at max land price" value={money(f.profit, { compact: true })} sub={`MOR ${pct(f.marginOnRevenue)}`} />
       </div>
       {!f.viable && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[12.5px] text-bad">At these assumptions the project cannot support any land cost at the target margin.</div>}
       {f.costInputIncomplete && (
