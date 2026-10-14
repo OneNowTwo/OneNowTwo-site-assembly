@@ -49,6 +49,8 @@ export interface OpportunityCtx {
   refreshPlanning: () => Promise<{ ok: boolean; message?: string }>;
   refresh: () => Promise<void>;
   setDto: React.Dispatch<React.SetStateAction<OpportunityDTO | null>>;
+  /** Switch Opportunity primary tab (overview / market / acquisition / …). */
+  setTab: (tab: string) => void;
 }
 
 export const Ctx = createContext<OpportunityCtx | null>(null);

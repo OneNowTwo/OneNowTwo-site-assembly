@@ -6,6 +6,7 @@ import type { LotDTO } from "@/lib/opportunity-dto";
 import { ACQUISITION_STAGES, ACTIVITY_TYPES, OWNER_TYPES, STAGE_LABELS, type AcquisitionStageValue } from "@/lib/constants";
 import { generateApproachBrief, generateOwnerLetter, suggestedNextAction } from "@/lib/analysis/approach";
 import { date, lotDp, money, pct, sqm } from "@/lib/format";
+import { formatOfferVsMarket } from "@/lib/analysis/registered-sales-evidence";
 import { Badge, Button, DemoFinancialBadge, Field, NumberField, Panel, Select, Stat, TextArea, TextInput, cx } from "@/components/ui";
 
 export function AcquisitionTab() {
@@ -50,9 +51,9 @@ export function AcquisitionTab() {
           <thead className="bg-canvas text-[10.5px] uppercase tracking-wide text-muted">
             <tr>
               <th className="px-3 py-2 text-left">Property</th>
-              <th className="w-[120px] px-2 py-2 text-right">Existing market value</th>
+              <th className="w-[130px] px-2 py-2 text-right">Existing market value</th>
               <th className="px-2 py-2 text-right">Weight</th>
-              <th className="w-[120px] px-2 py-2 text-right">Max modelled offer</th>
+              <th className="w-[130px] px-2 py-2 text-right bg-brand-soft/40">Max modelled offer</th>
               <th className="w-[120px] px-2 py-2 text-right">Opening offer</th>
               <th className="w-[110px] px-2 py-2 text-right">Neg. headroom</th>
               <th className="px-2 py-2 text-right">Offer vs market</th>
@@ -73,13 +74,17 @@ export function AcquisitionTab() {
                       {lotDp(l)} · {sqm(l.areaSqm)}
                     </div>
                   </td>
-                  <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                  <td className="bg-stone-50/80 px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                     <NumberField kind="money" value={l.marketValue} onCommit={(v) => updateLot(l.id, { marketValue: v, marketValueSource: "USER_ESTIMATE" })} placeholder="Enter" ariaLabel={`Market value ${l.label}`} />
+                    <div className="mt-0.5 text-[10px] text-muted">What it is worth today</div>
                   </td>
                   <td className="px-2 py-1.5 text-right">{x ? pct(x.weight) : "—"}</td>
-                  <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                  <td className="bg-brand-soft/30 px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                     {l.included ? (
-                      <NumberField kind="money" value={x?.maximumOffer} onCommit={(v) => updateLot(l.id, { maxAllocationOverride: v })} className={x?.maximumOverridden ? "border-violet-400" : ""} ariaLabel={`Max allocation ${l.label}`} />
+                      <>
+                        <NumberField kind="money" value={x?.maximumOffer} onCommit={(v) => updateLot(l.id, { maxAllocationOverride: v })} className={x?.maximumOverridden ? "border-violet-400" : ""} ariaLabel={`Max allocation ${l.label}`} />
+                        <div className="mt-0.5 text-[10px] text-muted">What you can pay</div>
+                      </>
                     ) : (
                       <span className="block text-right">Excluded</span>
                     )}
@@ -89,13 +94,15 @@ export function AcquisitionTab() {
                   </td>
                   <td className="px-2 py-1.5 text-right font-semibold text-brand">{l.included ? money(x?.negotiationHeadroom, { compact: true }) : "—"}</td>
                   <td className="px-2 py-1.5 text-right">
-                    <div className={cx("font-semibold", (x?.openingPremium ?? 0) > 0 ? "text-good" : "")}>{pct(x?.openingPremium, 0, true)}</div>
+                    <div className={cx("font-semibold", (x?.openingPremium ?? 0) > 0 ? "text-good" : (x?.openingPremium ?? 0) < 0 ? "text-muted" : "")}>
+                      {formatOfferVsMarket(x?.openingPremium)}
+                    </div>
                     <div className="text-[10.5px] text-muted">
-                      {money(x?.ownerPremiumAmount, { compact: true })} · max {pct(x?.maximumPremium, 0, true)}
+                      {money(x?.ownerPremiumAmount, { compact: true })} · max {formatOfferVsMarket(x?.maximumPremium)}
                     </div>
                   </td>
                   <td className="px-2 py-1.5">{!l.included ? <Badge>Excluded</Badge> : c?.status === "CRITICAL" ? <Badge tone="bad">Yes</Badge> : <Badge tone="good">Optional</Badge>}</td>
-                  <td className="px-2 py-1.5 text-[11.5px]">{l.owner?.name ?? <span className="text-muted">Not identified</span>}</td>
+                  <td className="px-2 py-1.5 text-[11.5px]">{l.owner?.name?.trim() && !/^unknown$/i.test(l.owner.name.trim()) ? l.owner.name : <span className="text-muted">Owner unknown</span>}</td>
                   <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                     <Select ariaLabel={`Stage ${l.label}`} value={l.acquisitionStage} onChange={(v) => updateLot(l.id, { acquisitionStage: v })} options={ACQUISITION_STAGES.map((s) => ({ value: s, label: STAGE_LABELS[s] }))} className="h-7 w-full text-[11.5px]" />
                   </td>
@@ -104,7 +111,9 @@ export function AcquisitionTab() {
             })}
           </tbody>
         </table>
-        <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Negotiation headroom = maximum modelled offer − opening offer. Offer vs market = (opening ÷ existing market value) − 1 (negative = discount). Model outputs only — not legal valuations.</p>
+        <p className="border-t border-line px-3 py-2 text-[11px] text-muted">
+          Existing market value (grey) is what the property is worth today. Max modelled offer (tint) is what the development can support. Offer vs market describes opening relative to existing value (e.g. &quot;79% below market&quot;). Negotiation headroom = max − opening. Model outputs only — not legal valuations.
+        </p>
       </Panel>
 
       <div className="grid grid-cols-12 gap-4">
@@ -146,17 +155,17 @@ export function AcquisitionTab() {
               Critical when removal fragments the site, leaves less than the preferred scanner site-size threshold ({sqm(a.minViableSiteAreaSqm)}), cuts area/GFA ≥30%, or the remaining budget cannot cover the other lots&apos; value.
             </p>
           </Panel>
-          <Panel title="Indicative acquisition sequence">
+          <Panel title="Acquisition action plan" actions={<span className="text-[11px] text-muted">Suggested sequence — not a mandate</span>}>
             <ol className="space-y-2.5">
               {analysis.strategy.map((s) => (
-                <li key={s.order} className={cx("grid grid-cols-[22px_1fr] gap-2", s.kind === "milestone" && "rounded-[3px] bg-brand-soft/60 p-2")}>
-                  <span className="num text-[13px] font-bold text-brand">{s.order}.</span>
+                <li key={s.order} className={cx("grid grid-cols-[28px_1fr] gap-2 border-b border-line/70 pb-2 last:border-0", s.kind === "milestone" && "rounded-[3px] border-0 bg-brand-soft/60 p-2")}>
+                  <span className="num flex h-6 w-6 items-center justify-center rounded-full bg-brand text-[11px] font-bold text-white">{s.order}</span>
                   <div>
-                    <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+                    <div className="flex flex-wrap items-center gap-2 text-[12.5px] font-semibold">
                       {s.title}
                       {s.role && <Badge tone={s.role === "Optional" ? "good" : "bad"}>{s.role}</Badge>}
                     </div>
-                    <p className="text-[11.5px] text-muted">{s.rationale}</p>
+                    <p className="mt-0.5 text-[12px] leading-snug text-muted">{s.rationale}</p>
                   </div>
                 </li>
               ))}
