@@ -26,6 +26,26 @@ export type LotLikeForEvidence = {
   marketValueSource?: string | null;
 };
 
+/** True when a stored source string explicitly identifies NSW registered sales. */
+export function isNswRegisteredSourceString(raw: string | null | undefined): boolean {
+  if (!raw?.trim()) return false;
+  const u = raw.trim().toUpperCase();
+  if (u === "NSW") return true;
+  if (u.includes("NSW") && (u.includes("REGISTERED") || u.includes("SALE") || u.includes("COMP"))) return true;
+  return false;
+}
+
+/** NSW registered-sales provenance requires actual NSW evidence — not COMPARABLE_DERIVED alone. */
+export function detailHasNswRegisteredEvidence(detail: LotValuationDetail | null | undefined): boolean {
+  if (!detail) return false;
+  if ((detail.provider ?? "").toUpperCase() === "NSW") return true;
+  if (isNswRegisteredSourceString(detail.subjectLastSale?.source)) return true;
+  for (const c of detail.comps ?? []) {
+    if (isNswRegisteredSourceString(c.source)) return true;
+  }
+  return false;
+}
+
 /** Deterministic identity for a registered sale across lots. */
 export function registeredSaleEvidenceId(comp: {
   dealing?: string | null;
@@ -57,6 +77,7 @@ export function provenanceLabelsForDetail(
   methodLabel: string;
   estimateKind: string;
   dataQuality: string;
+  isNswRegistered: boolean;
 } {
   if (opts?.demoFinancialData) {
     return {
@@ -64,24 +85,21 @@ export function provenanceLabelsForDetail(
       methodLabel: "Demo",
       estimateKind: "DEMO DATA",
       dataQuality: "Manual / demo",
+      isNswRegistered: false,
     };
   }
-  const provider = (detail?.provider ?? "").toUpperCase();
   const source = (detail?.source ?? opts?.marketValueSource ?? "").toUpperCase();
   const label = detail?.valuationLabel ?? "";
-  const isNsw =
-    provider === "NSW" ||
-    source.includes("COMPARABLE") ||
-    /NSW|REGISTERED/i.test(label) ||
-    (detail?.numberOfComps != null && detail.numberOfComps > 0) ||
-    !!detail?.comps?.length;
+  const isNsw = detailHasNswRegisteredEvidence(detail);
 
   if (isNsw) {
     return {
       sourceLabel: "NSW registered sales",
       methodLabel: label?.trim() || "Registered-sales weighted",
       estimateKind: "SYSTEM CALCULATION · COMPARABLE-DERIVED",
-      dataQuality: "OFFICIAL / LIVE NSW DATA",
+      // Persisted on Opportunity — not refreshed at page load.
+      dataQuality: "OFFICIAL NSW DATA · STORED EVIDENCE",
+      isNswRegistered: true,
     };
   }
   if (source === "USER_ESTIMATE" || source === "MANUAL") {
@@ -90,6 +108,7 @@ export function provenanceLabelsForDetail(
       methodLabel: label?.trim() || "Manual",
       estimateKind: "USER ESTIMATE",
       dataQuality: "Manual",
+      isNswRegistered: false,
     };
   }
   if (source.includes("AVM") || source === "LIVE_PROVIDER") {
@@ -98,6 +117,16 @@ export function provenanceLabelsForDetail(
       methodLabel: label?.trim() || "AVM",
       estimateKind: "LIVE AVM",
       dataQuality: "Live AVM",
+      isNswRegistered: false,
+    };
+  }
+  if (source.includes("COMPARABLE")) {
+    return {
+      sourceLabel: detail?.provider?.trim() || "Comparable-derived",
+      methodLabel: label?.trim() || "Comparable-derived",
+      estimateKind: "SYSTEM CALCULATION · COMPARABLE-DERIVED",
+      dataQuality: "STORED EVIDENCE",
+      isNswRegistered: false,
     };
   }
   return {
@@ -105,6 +134,7 @@ export function provenanceLabelsForDetail(
     methodLabel: label?.trim() || "—",
     estimateKind: source || "—",
     dataQuality: "—",
+    isNswRegistered: false,
   };
 }
 
@@ -116,36 +146,115 @@ export type LotRegisteredEvidenceCard = {
   mid: number | null;
   low: number | null;
   high: number | null;
+  /** Stored valuation metadata numberOfComps (may differ from displayed rows). */
   numberOfComps: number | null;
+  /** Included rows actually present in comps[]. */
   includedCompCount: number;
   excludedCompCount: number;
+  /** True when comps[] has at least one row. */
+  hasDetailedSaleRows: boolean;
+  /**
+   * Headline "Registered sales used":
+   * - detailed rows → includedCompCount
+   * - metadata only → numberOfComps (as "comps reported")
+   */
+  usedDisplayCount: number | null;
+  usedDisplayKind: "included_rows" | "metadata_reported" | "none";
   methodLabel: string;
   sourceLabel: string;
   provider: string | null;
   checkedAt: string | null;
+  isNswRegistered: boolean;
   subjectLastSale: LotValuationDetail["subjectLastSale"];
   comps: RegisteredCompEvidence[];
 };
 
 export type AssemblyRegisteredSalesEvidence = {
   hasEvidence: boolean;
+  /** True when at least one lot has stored comps[] rows. */
+  hasDetailedSaleRows: boolean;
   lotCards: LotRegisteredEvidenceCard[];
-  /** Unique registered sales across the assembly (included + excluded). */
+  /** Unique registered sales across the assembly (included + excluded) from stored rows. */
   uniqueSaleCount: number;
-  /** Unique included registered sales across the assembly. */
+  /** Unique included registered sales across the assembly from stored rows. */
   uniqueIncludedSaleCount: number;
-  /** Sum of per-lot numberOfComps (may double-count shared sales). */
+  /** Sum of per-lot numberOfComps metadata (may double-count; not a unique count). */
+  reportedCompMentions: number;
+  /** Sum of per-lot comps[] length (may double-count). */
   rawCompMentions: number;
   combinedMid: number | null;
   primarySourceLabel: string;
   primaryMethodLabel: string;
   estimateKind: string;
   dataQuality: string;
+  isNswRegistered: boolean;
+  /** Never "based on 0 sales". */
   summaryLine: string;
+  /** Secondary line when metadata exists without sale rows. */
+  summaryDetail: string | null;
 };
 
 function lotAddress(lot: LotLikeForEvidence): string {
   return (lot.address?.trim() || lot.label || lot.externalParcelId).trim();
+}
+
+function buildSummaryCopy(args: {
+  hasEvidence: boolean;
+  hasDetailedSaleRows: boolean;
+  uniqueIncludedSaleCount: number;
+  reportedCompMentions: number;
+  isNswRegistered: boolean;
+}): { summaryLine: string; summaryDetail: string | null } {
+  if (!args.hasEvidence) {
+    return {
+      summaryLine: "No registered-sales evidence stored for this opportunity yet.",
+      summaryDetail: null,
+    };
+  }
+
+  if (args.hasDetailedSaleRows) {
+    const n = args.uniqueIncludedSaleCount;
+    if (n <= 0) {
+      // Rows exist but none marked included — do not say "based on 0".
+      return {
+        summaryLine: args.isNswRegistered
+          ? "NSW registered-sales estimate · sale records stored (none marked included)"
+          : "Comparable-derived estimate · sale records stored (none marked included)",
+        summaryDetail: null,
+      };
+    }
+    if (args.isNswRegistered) {
+      return {
+        summaryLine: `Existing value based on ${n} NSW registered sale${n === 1 ? "" : "s"}`,
+        summaryDetail: null,
+      };
+    }
+    return {
+      summaryLine: `Existing value based on ${n} unique comparable sale${n === 1 ? "" : "s"}`,
+      summaryDetail: null,
+    };
+  }
+
+  // Metadata only — comps[] absent.
+  const reported = args.reportedCompMentions;
+  if (reported > 0 && args.isNswRegistered) {
+    return {
+      summaryLine: `NSW registered-sales estimate · ${reported} comps reported`,
+      summaryDetail: "Individual sale records not stored",
+    };
+  }
+  if (reported > 0) {
+    return {
+      summaryLine: `Comparable-derived estimate · ${reported} comps reported`,
+      summaryDetail: "Individual sale records not stored",
+    };
+  }
+  return {
+    summaryLine: args.isNswRegistered
+      ? "NSW registered-sales estimate stored (comp count not recorded)"
+      : "Comparable-derived estimate stored (comp count not recorded)",
+    summaryDetail: "Individual sale records not stored",
+  };
 }
 
 /**
@@ -162,6 +271,7 @@ export function summariseRegisteredSalesEvidence(
   const uniqueAll = new Set<string>();
   const uniqueIncluded = new Set<string>();
   let rawCompMentions = 0;
+  let reportedCompMentions = 0;
 
   const lotCards: LotRegisteredEvidenceCard[] = [];
 
@@ -190,6 +300,23 @@ export function summariseRegisteredSalesEvidence(
       }
     }
 
+    const hasDetailedSaleRows = comps.length > 0;
+    const numberOfComps = detail.numberOfComps ?? null;
+    if (numberOfComps != null && numberOfComps > 0) reportedCompMentions += numberOfComps;
+
+    let usedDisplayCount: number | null;
+    let usedDisplayKind: LotRegisteredEvidenceCard["usedDisplayKind"];
+    if (hasDetailedSaleRows) {
+      usedDisplayCount = includedCompCount;
+      usedDisplayKind = "included_rows";
+    } else if (numberOfComps != null && numberOfComps > 0) {
+      usedDisplayCount = numberOfComps;
+      usedDisplayKind = "metadata_reported";
+    } else {
+      usedDisplayCount = null;
+      usedDisplayKind = "none";
+    }
+
     const mid = detail.mid ?? lot.marketValue ?? null;
     lotCards.push({
       lotId: lot.id,
@@ -199,22 +326,25 @@ export function summariseRegisteredSalesEvidence(
       mid,
       low: detail.low ?? lot.marketValueLow ?? null,
       high: detail.high ?? lot.marketValueHigh ?? null,
-      numberOfComps: detail.numberOfComps ?? (includedCompCount || null),
+      numberOfComps,
       includedCompCount,
       excludedCompCount,
+      hasDetailedSaleRows,
+      usedDisplayCount,
+      usedDisplayKind,
       methodLabel: labels.methodLabel,
       sourceLabel: labels.sourceLabel,
       provider: detail.provider ?? lot.marketValueProvider ?? null,
       checkedAt: lot.marketValueCheckedAt ?? null,
+      isNswRegistered: labels.isNswRegistered,
       subjectLastSale: detail.subjectLastSale ?? null,
       comps,
     });
   }
 
   const hasEvidence = lotCards.length > 0;
-  const firstDetail = lotCards[0]
-    ? details[lotCards[0].externalParcelId]
-    : null;
+  const hasDetailedSaleRows = lotCards.some((c) => c.hasDetailedSaleRows);
+  const firstDetail = lotCards[0] ? details[lotCards[0].externalParcelId] : null;
   const labels = provenanceLabelsForDetail(firstDetail, {
     demoFinancialData: opts?.demoFinancialData,
     marketValueSource: includedLots[0]?.marketValueSource,
@@ -229,22 +359,30 @@ export function summariseRegisteredSalesEvidence(
       : combinedFromLots;
 
   const uniqueIncludedSaleCount = uniqueIncluded.size;
-  const summaryLine = hasEvidence
-    ? `Existing value based on ${uniqueIncludedSaleCount} NSW registered sale${uniqueIncludedSaleCount === 1 ? "" : "s"}`
-    : "No registered-sales evidence stored for this opportunity yet.";
+  const { summaryLine, summaryDetail } = buildSummaryCopy({
+    hasEvidence,
+    hasDetailedSaleRows,
+    uniqueIncludedSaleCount,
+    reportedCompMentions,
+    isNswRegistered: labels.isNswRegistered,
+  });
 
   return {
     hasEvidence,
+    hasDetailedSaleRows,
     lotCards,
     uniqueSaleCount: uniqueAll.size,
     uniqueIncludedSaleCount,
+    reportedCompMentions,
     rawCompMentions,
     combinedMid,
     primarySourceLabel: hasEvidence ? labels.sourceLabel : "—",
     primaryMethodLabel: hasEvidence ? labels.methodLabel : "—",
     estimateKind: hasEvidence ? labels.estimateKind : "—",
     dataQuality: hasEvidence ? labels.dataQuality : "—",
+    isNswRegistered: labels.isNswRegistered,
     summaryLine,
+    summaryDetail,
   };
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  detailHasNswRegisteredEvidence,
   formatOfferVsMarket,
   provenanceLabelsForDetail,
   registeredSaleEvidenceId,
@@ -76,14 +77,19 @@ function bexleyStyleDetails(): OpportunityInputs["lotValuationDetails"] {
         landAreaSqm: 303,
         source: "NSW REGISTERED SALE",
       },
-      comps: [shared, lotAOnly, excludedShared, ...Array.from({ length: 7 }, (_, i) =>
-        comp({
-          id: `a-${i}`,
-          dealing: `AA${100000 + i}`,
-          address: `${10 + i} Near A St, Bexley`,
-          salePrice: 1_000_000 + i * 10_000,
-        }),
-      )],
+      comps: [
+        shared,
+        lotAOnly,
+        excludedShared,
+        ...Array.from({ length: 7 }, (_, i) =>
+          comp({
+            id: `a-${i}`,
+            dealing: `AA${100000 + i}`,
+            address: `${10 + i} Near A St, Bexley`,
+            salePrice: 1_000_000 + i * 10_000,
+          }),
+        ),
+      ],
     },
     "nsw-cadid:9": {
       mid: 1_090_000,
@@ -94,14 +100,19 @@ function bexleyStyleDetails(): OpportunityInputs["lotValuationDetails"] {
       provider: "NSW",
       numberOfComps: 10,
       valuationLabel: "COMPARABLE-DERIVED SCREENING ESTIMATE",
-      comps: [shared, lotBOnly, excludedShared, ...Array.from({ length: 7 }, (_, i) =>
-        comp({
-          id: `b-${i}`,
-          dealing: `BB${100000 + i}`,
-          address: `${20 + i} Near B St, Bexley`,
-          salePrice: 1_050_000 + i * 10_000,
-        }),
-      )],
+      comps: [
+        shared,
+        lotBOnly,
+        excludedShared,
+        ...Array.from({ length: 7 }, (_, i) =>
+          comp({
+            id: `b-${i}`,
+            dealing: `BB${100000 + i}`,
+            address: `${20 + i} Near B St, Bexley`,
+            salePrice: 1_050_000 + i * 10_000,
+          }),
+        ),
+      ],
     },
   };
 }
@@ -145,16 +156,11 @@ describe("summariseRegisteredSalesEvidence", () => {
     const summary = summariseRegisteredSalesEvidence(bexleyStyleDetails(), bexleyLots, {
       combinedExistingValue: 2_140_000,
     });
-    // Each lot has 10 comps in the fixture arrays (shared + unique + excluded + 7)
     expect(summary.lotCards).toHaveLength(2);
     expect(summary.lotCards[0].mid).toBe(1_050_000);
     expect(summary.lotCards[1].mid).toBe(1_090_000);
-    // Shared dealing AS123456 and excluded AS999999 counted once each
     expect(summary.rawCompMentions).toBeGreaterThan(summary.uniqueSaleCount);
-    expect(summary.uniqueSaleCount).toBeLessThan(summary.rawCompMentions);
-    // Unique = 1 shared + 1 A-only + 1 B-only + 1 excluded + 7 A + 7 B = 18
     expect(summary.uniqueSaleCount).toBe(18);
-    // Included unique excludes the shared excluded dealing
     expect(summary.uniqueIncludedSaleCount).toBe(17);
   });
 
@@ -163,21 +169,55 @@ describe("summariseRegisteredSalesEvidence", () => {
       combinedExistingValue: 2_140_000,
     });
     expect(summary.hasEvidence).toBe(true);
+    expect(summary.hasDetailedSaleRows).toBe(true);
     expect(summary.combinedMid).toBe(2_140_000);
     expect(summary.summaryLine).toBe("Existing value based on 17 NSW registered sales");
+    expect(summary.summaryLine).not.toMatch(/based on 0/);
     expect(summary.primarySourceLabel).toBe("NSW registered sales");
-    expect(summary.dataQuality).toBe("OFFICIAL / LIVE NSW DATA");
+    expect(summary.dataQuality).toBe("OFFICIAL NSW DATA · STORED EVIDENCE");
+    expect(summary.dataQuality).not.toMatch(/LIVE/i);
     expect(summary.estimateKind).toContain("COMPARABLE-DERIVED");
   });
 
-  it("keeps included vs excluded sale counts per lot", () => {
+  it("reconciles used count with included table rows when comps are stored", () => {
     const summary = summariseRegisteredSalesEvidence(bexleyStyleDetails(), bexleyLots);
     for (const card of summary.lotCards) {
+      expect(card.hasDetailedSaleRows).toBe(true);
       expect(card.excludedCompCount).toBe(1);
       expect(card.includedCompCount).toBe(9);
-      expect(card.comps.some((c) => !c.included && c.excludeReason)).toBe(true);
-      expect(card.comps.filter((c) => c.included).every((c) => c.included)).toBe(true);
+      expect(card.numberOfComps).toBe(10);
+      expect(card.usedDisplayKind).toBe("included_rows");
+      expect(card.usedDisplayCount).toBe(9);
+      expect(card.usedDisplayCount).not.toBe(card.numberOfComps);
     }
+  });
+
+  it("never says based on 0 sales when metadata reports comps but rows are absent", () => {
+    const details: OpportunityInputs["lotValuationDetails"] = {
+      "nsw-cadid:9a": {
+        mid: 1_057_165,
+        source: "COMPARABLE_DERIVED",
+        provider: "NSW",
+        numberOfComps: 10,
+        valuationLabel: "COMPARABLE-DERIVED SCREENING ESTIMATE",
+        // comps omitted
+      },
+      "nsw-cadid:9": {
+        mid: 1_084_345,
+        source: "COMPARABLE_DERIVED",
+        provider: "NSW",
+        numberOfComps: 10,
+      },
+    };
+    const summary = summariseRegisteredSalesEvidence(details, bexleyLots, { combinedExistingValue: 2_141_510 });
+    expect(summary.hasEvidence).toBe(true);
+    expect(summary.hasDetailedSaleRows).toBe(false);
+    expect(summary.uniqueIncludedSaleCount).toBe(0);
+    expect(summary.summaryLine).toBe("NSW registered-sales estimate · 20 comps reported");
+    expect(summary.summaryDetail).toBe("Individual sale records not stored");
+    expect(summary.summaryLine).not.toMatch(/based on 0/i);
+    expect(summary.lotCards[0].usedDisplayKind).toBe("metadata_reported");
+    expect(summary.lotCards[0].usedDisplayCount).toBe(10);
   });
 
   it("does not change existing value when transforming evidence for display", () => {
@@ -186,7 +226,6 @@ describe("summariseRegisteredSalesEvidence", () => {
     const summary = summariseRegisteredSalesEvidence(details, bexleyLots, { combinedExistingValue: 2_140_000 });
     expect(summary.lotCards.map((c) => c.mid)).toEqual(beforeMids);
     expect(summary.combinedMid).toBe(2_140_000);
-    // Source object untouched
     expect(details["nsw-cadid:9a"]!.mid).toBe(1_050_000);
     expect(details["nsw-cadid:9"]!.mid).toBe(1_090_000);
   });
@@ -200,8 +239,6 @@ describe("summariseRegisteredSalesEvidence", () => {
   });
 
   it("keeps manual ComparableSale concept separate — summary ignores Prisma comps", () => {
-    // Only lotValuationDetails drive registered evidence; empty details => empty evidence
-    // even if a caller also has manual acquisition comps elsewhere.
     const summary = summariseRegisteredSalesEvidence(undefined, bexleyLots);
     expect(summary.hasEvidence).toBe(false);
     expect(summary.lotCards).toEqual([]);
@@ -209,7 +246,7 @@ describe("summariseRegisteredSalesEvidence", () => {
 });
 
 describe("provenanceLabelsForDetail", () => {
-  it("labels NSW registered evidence correctly (not Manual / Demo / AVM)", () => {
+  it("labels NSW registered evidence correctly (not Manual / Demo / AVM / LIVE)", () => {
     const labels = provenanceLabelsForDetail({
       mid: 1_000_000,
       source: "COMPARABLE_DERIVED",
@@ -219,9 +256,52 @@ describe("provenanceLabelsForDetail", () => {
       comps: [],
     });
     expect(labels.sourceLabel).toBe("NSW registered sales");
-    expect(labels.dataQuality).toBe("OFFICIAL / LIVE NSW DATA");
+    expect(labels.isNswRegistered).toBe(true);
+    expect(labels.dataQuality).toBe("OFFICIAL NSW DATA · STORED EVIDENCE");
+    expect(labels.dataQuality).not.toMatch(/LIVE/i);
     expect(labels.estimateKind).toContain("SYSTEM CALCULATION");
     expect(labels.dataQuality).not.toMatch(/Manual|Demo|AVM/i);
+  });
+
+  it("does not infer NSW from COMPARABLE_DERIVED + comps alone when provider is OTHER", () => {
+    const detail = {
+      mid: 1_000_000,
+      source: "COMPARABLE_DERIVED",
+      provider: "OTHER",
+      numberOfComps: 10,
+      valuationLabel: "COMPARABLE-DERIVED SCREENING ESTIMATE",
+      comps: Array.from({ length: 10 }, (_, i) =>
+        comp({
+          id: `x-${i}`,
+          address: `${i} Other St`,
+          salePrice: 900_000 + i,
+          source: "THIRD_PARTY_COMP",
+        }),
+      ),
+    };
+    expect(detailHasNswRegisteredEvidence(detail)).toBe(false);
+    const labels = provenanceLabelsForDetail(detail);
+    expect(labels.isNswRegistered).toBe(false);
+    expect(labels.sourceLabel).not.toMatch(/NSW/i);
+    expect(labels.dataQuality).not.toMatch(/NSW/i);
+  });
+
+  it("accepts NSW when only subjectLastSale.source identifies NSW registered sale", () => {
+    const labels = provenanceLabelsForDetail({
+      mid: 1,
+      source: "COMPARABLE_DERIVED",
+      provider: "OTHER",
+      comps: [],
+      subjectLastSale: {
+        address: "1 St",
+        salePrice: 1,
+        saleDate: "2020-01-01",
+        landAreaSqm: 200,
+        source: "NSW REGISTERED SALE",
+      },
+    });
+    expect(labels.isNswRegistered).toBe(true);
+    expect(labels.sourceLabel).toBe("NSW registered sales");
   });
 
   it("preserves demo label when demoFinancialData is true", () => {

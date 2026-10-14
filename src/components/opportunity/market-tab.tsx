@@ -100,11 +100,29 @@ export function MarketTab() {
             />
             <Stat
               label="Registered sales evidence"
-              value={registered.hasEvidence ? num(registered.uniqueIncludedSaleCount) : "—"}
-              sub={registered.hasEvidence ? "unique comps used across assembly" : "No stored NSW evidence"}
+              value={
+                !registered.hasEvidence
+                  ? "—"
+                  : registered.hasDetailedSaleRows
+                    ? num(registered.uniqueIncludedSaleCount)
+                    : registered.reportedCompMentions > 0
+                      ? num(registered.reportedCompMentions)
+                      : "—"
+              }
+              sub={
+                !registered.hasEvidence
+                  ? "No stored evidence"
+                  : registered.hasDetailedSaleRows
+                    ? "unique comps used across assembly"
+                    : "comps reported (sale rows not stored)"
+              }
             />
             <Stat label="Source" value={registered.hasEvidence ? registered.primarySourceLabel : "—"} sub={registered.hasEvidence ? registered.dataQuality : undefined} />
-            <Stat label="Valuation method" value={registered.hasEvidence ? registered.primaryMethodLabel : "—"} sub={registered.hasEvidence ? "SYSTEM CALCULATION · COMPARABLE-DERIVED" : undefined} />
+            <Stat
+              label="Valuation method"
+              value={registered.hasEvidence ? registered.primaryMethodLabel : "—"}
+              sub={registered.hasEvidence ? registered.estimateKind : undefined}
+            />
           </div>
 
           {registered.hasEvidence ? (
@@ -139,8 +157,18 @@ export function MarketTab() {
                         </div>
                       </div>
                       <div>
-                        <div className="text-[10.5px] uppercase tracking-wide text-muted">Registered sales used</div>
-                        <div className="font-semibold">{card.numberOfComps ?? card.includedCompCount}</div>
+                        <div className="text-[10.5px] uppercase tracking-wide text-muted">
+                          {card.usedDisplayKind === "metadata_reported" ? "Comps reported" : "Registered sales used"}
+                        </div>
+                        <div className="font-semibold">{card.usedDisplayCount != null ? card.usedDisplayCount : "—"}</div>
+                        {card.hasDetailedSaleRows &&
+                          card.numberOfComps != null &&
+                          card.numberOfComps !== card.includedCompCount && (
+                            <div className="mt-0.5 text-[10.5px] text-muted">Valuation metadata reports {card.numberOfComps} comps</div>
+                          )}
+                        {card.usedDisplayKind === "metadata_reported" && (
+                          <div className="mt-0.5 text-[10.5px] text-muted">Individual sale records not stored</div>
+                        )}
                       </div>
                       <div>
                         <div className="text-[10.5px] uppercase tracking-wide text-muted">Method</div>
@@ -148,7 +176,11 @@ export function MarketTab() {
                       </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted">
-                      <Badge tone="official">NSW REGISTERED SALES</Badge>
+                      {card.isNswRegistered ? (
+                        <Badge tone="official">NSW REGISTERED SALES</Badge>
+                      ) : (
+                        <Badge>STORED EVIDENCE</Badge>
+                      )}
                       {card.provider && <Badge>{card.provider}</Badge>}
                       {card.checkedAt && <span>Last checked {date(card.checkedAt)}</span>}
                     </div>
@@ -167,29 +199,35 @@ export function MarketTab() {
                           </div>
                         )}
 
-                        <div>
-                          <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-muted">Registered sales used in estimate</div>
-                          <RegisteredCompsTable comps={included} empty="No included registered sales stored for this lot." />
-                        </div>
+                        {card.hasDetailedSaleRows ? (
+                          <>
+                            <div>
+                              <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-muted">Registered sales used in estimate</div>
+                              <RegisteredCompsTable comps={included} empty="No included registered sales stored for this lot." />
+                            </div>
 
-                        {!!excluded.length && (
-                          <div>
-                            <button
-                              type="button"
-                              className="mb-2 text-[11px] font-semibold text-muted hover:text-ink"
-                              onClick={() => setShowExcluded((v) => !v)}
-                            >
-                              {showExcluded ? "Hide" : "Show"} excluded records ({excluded.length})
-                            </button>
-                            {showExcluded && <RegisteredCompsTable comps={excluded} secondary empty="" />}
-                          </div>
+                            {!!excluded.length && (
+                              <div>
+                                <button
+                                  type="button"
+                                  className="mb-2 text-[11px] font-semibold text-muted hover:text-ink"
+                                  onClick={() => setShowExcluded((v) => !v)}
+                                >
+                                  {showExcluded ? "Hide" : "Show"} excluded records ({excluded.length})
+                                </button>
+                                {showExcluded && <RegisteredCompsTable comps={excluded} secondary empty="" />}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-[12px] text-muted">Individual sale records not stored for this lot.</p>
                         )}
                       </div>
                     )}
                   </Panel>
                 );
               })}
-              {registered.rawCompMentions > registered.uniqueSaleCount && (
+              {registered.hasDetailedSaleRows && registered.rawCompMentions > registered.uniqueSaleCount && (
                 <p className="text-[11.5px] text-muted">
                   Per-lot cards show lot-specific comps ({registered.rawCompMentions} mentions). Assembly unique registered sales:{" "}
                   <span className="font-semibold text-ink">{registered.uniqueSaleCount}</span> ({registered.uniqueIncludedSaleCount} included).

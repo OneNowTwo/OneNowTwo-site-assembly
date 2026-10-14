@@ -524,7 +524,9 @@ export function SiteIntelligence() {
         {registered.hasEvidence && (
           <p className="mt-1 text-[12px] text-muted">
             {registered.primarySourceLabel} · {registered.estimateKind}
-            {registered.uniqueIncludedSaleCount !== registered.uniqueSaleCount
+            {registered.dataQuality ? ` · ${registered.dataQuality}` : null}
+            {registered.summaryDetail ? ` · ${registered.summaryDetail}` : null}
+            {registered.hasDetailedSaleRows && registered.uniqueIncludedSaleCount !== registered.uniqueSaleCount
               ? ` · ${registered.uniqueIncludedSaleCount} included of ${registered.uniqueSaleCount} unique`
               : null}
           </p>
