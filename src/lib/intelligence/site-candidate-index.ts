@@ -8,6 +8,12 @@ import { prisma } from "@/lib/db";
 import type { StrategyProfile } from "@/lib/source-watcher/strategy-profile";
 import { buildMapHref } from "@/lib/map/map-target";
 import { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
+import { resolveDisplayScore, type ScoreProvenance } from "@/lib/intelligence/display-score";
+import { pickBestPerIndexFamily } from "@/lib/intelligence/index-candidate-families";
+import {
+  loadLinkedOpportunityScoreIndex,
+  resolveLinkedOpportunityScore,
+} from "@/lib/intelligence/linked-opportunity-scores";
 
 export { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 
@@ -20,11 +26,14 @@ export type SiteCandidateView = {
   lga: string | null;
   siteAreaSqm: number | null;
   lotCount: number | null;
+  /** Confirmed owners only — null/unknown for INDEX_DISCOVERY (lot count ≠ owners). */
   owners: number | null;
   currentFsr: number | null;
   proposedFsr: number | null;
   stationDistanceM: number | null;
   score: number | null;
+  /** DETAILED = persisted Opportunity.score; SCREENING = clamped index score. */
+  scoreProvenance?: ScoreProvenance;
   maxPayable: number | null;
   headroom: number | null;
   reasons: string[];
@@ -37,7 +46,8 @@ export type SiteCandidateView = {
   sourceHref?: string | null;
 };
 
-function strategyScore(
+/** Raw screening/strategy score before clamp / Opportunity override. */
+export function screeningStrategyScore(
   row: {
     zone?: string | null;
     siteAreaSqm?: number | null;
@@ -108,7 +118,7 @@ function reasonsFor(
   return [...new Set(out)].slice(0, 3);
 }
 
-/** Today sites — INDEX_DISCOVERY only, max 10 unique canonical keys. */
+/** Today sites — INDEX_DISCOVERY only, max 10 unique family-best members. */
 export async function listTodaySiteCandidates(
   profile: StrategyProfile,
   opts?: { limit?: number },
@@ -119,17 +129,49 @@ export async function listTodaySiteCandidates(
   });
   const indexReady = indexCount > 0;
 
-  const rows = await prisma.siteCandidateIndex.findMany({
-    where: { lifecycleStatus: "ACTIVE", provenance: "INDEX_DISCOVERY" },
-    orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
-    take: 240,
-  });
+  const [rows, linkedScores] = await Promise.all([
+    prisma.siteCandidateIndex.findMany({
+      where: { lifecycleStatus: "ACTIVE", provenance: "INDEX_DISCOVERY" },
+      orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
+      take: 240,
+    }),
+    loadLinkedOpportunityScoreIndex(),
+  ]);
 
   const ranked = rows
-    .map((r) => ({ row: r, score: strategyScore(r, profile) }))
-    .sort((a, b) => b.score - a.score);
+    .map((r) => {
+      const screening = screeningStrategyScore(r, profile);
+      const linked = resolveLinkedOpportunityScore(r.opportunityId, r.canonicalKey, linkedScores);
+      const opportunityId = linked?.opportunityId ?? null;
+      const display = resolveDisplayScore({
+        screeningScore: screening,
+        opportunityId,
+        opportunityScore: linked?.score ?? null,
+      });
+      return { row: r, score: display.score, provenance: display.provenance, opportunityId, screening };
+    })
+    .sort((a, b) => b.score - a.score || b.screening - a.screening);
 
-  const toView = (row: (typeof ranked)[number]["row"], score: number): SiteCandidateView => {
+  // One best member per overlapping/subset parcel family before LGA spread.
+  const familyBest = pickBestPerIndexFamily(
+    ranked.map(({ row, score }) => ({
+      id: row.id,
+      canonicalKey: row.canonicalKey,
+      parcelIds: Array.isArray(row.parcelIds) ? (row.parcelIds as string[]) : [],
+      score,
+      siteAreaSqm: row.siteAreaSqm,
+      lotCount: row.lotCount,
+    })),
+  );
+  const familyKeys = new Set(familyBest.map((m) => m.canonicalKey));
+  const rankedFamilies = ranked.filter((r) => familyKeys.has(r.row.canonicalKey));
+
+  const toView = (
+    row: (typeof ranked)[number]["row"],
+    score: number,
+    provenance: ScoreProvenance,
+    opportunityId: string | null,
+  ): SiteCandidateView => {
     // Lightweight INDEX_CANDIDATE deep-link — never open as PARCEL/OPPORTUNITY
     // (those trigger broad /api/parcels + LMR centres on zoom ≥ 17).
     // Omit stored row.bbox: it is often the Sydney discovery TILE, not the site.
@@ -149,11 +191,13 @@ export async function listTodaySiteCandidates(
       lga: row.lga,
       siteAreaSqm: row.siteAreaSqm,
       lotCount: row.lotCount,
-      owners: row.owners,
+      // INDEX_DISCOVERY never has title-proven owner counts — do not surface lotCount as owners.
+      owners: null,
       currentFsr: row.currentFsr,
       proposedFsr: row.proposedFsr,
       stationDistanceM: row.stationDistanceM,
-      score: Math.round(score),
+      score,
+      scoreProvenance: provenance,
       maxPayable: row.maxPayable,
       headroom: row.quickHeadroom,
       reasons: reasonsFor(row),
@@ -161,7 +205,7 @@ export async function listTodaySiteCandidates(
       kind: row.kind,
       provenance: row.provenance,
       href,
-      analyseHref: row.opportunityId ? `/opportunities/${row.opportunityId}` : null,
+      analyseHref: opportunityId ? `/opportunities/${opportunityId}` : null,
     };
   };
 
@@ -171,20 +215,20 @@ export async function listTodaySiteCandidates(
   const perLga = new Map<string, number>();
   const out: SiteCandidateView[] = [];
 
-  for (const { row, score } of ranked) {
+  for (const { row, score, provenance, opportunityId } of rankedFamilies) {
     if (seen.has(row.canonicalKey)) continue;
     const lgaKey = (row.lga || row.suburb || "unknown").toUpperCase();
     if ((perLga.get(lgaKey) ?? 0) >= maxPerLga) continue;
     seen.add(row.canonicalKey);
     perLga.set(lgaKey, (perLga.get(lgaKey) ?? 0) + 1);
-    out.push(toView(row, score));
+    out.push(toView(row, score, provenance, opportunityId));
     if (out.length >= limit) break;
   }
   if (out.length < limit) {
-    for (const { row, score } of ranked) {
+    for (const { row, score, provenance, opportunityId } of rankedFamilies) {
       if (seen.has(row.canonicalKey)) continue;
       seen.add(row.canonicalKey);
-      out.push(toView(row, score));
+      out.push(toView(row, score, provenance, opportunityId));
       if (out.length >= limit) break;
     }
   }

@@ -50,7 +50,7 @@ export function generateApproachBrief(i: ApproachBriefInput): string {
     `Estimated market value:   ${money(i.marketValue)}`,
     `Opening offer:            ${money(i.openingOffer)}`,
     `Maximum modelled offer:   ${money(i.maximumOffer)}`,
-    `Indicative owner premium: ${pct(i.ownerPremium, 0, true)} (opening offer vs estimated value)`,
+    `Offer vs market: ${pct(i.ownerPremium, 0, true)} (opening offer vs estimated value; negative = discount)`,
     `Owner: ${i.ownerName ?? "Not yet identified"}`,
     `Current status: ${i.stageLabel}`,
     "",

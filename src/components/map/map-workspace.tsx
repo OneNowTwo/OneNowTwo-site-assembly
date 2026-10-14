@@ -7,6 +7,7 @@ import type { BBox, ParcelData } from "@/lib/types";
 import type { GeocodeResult } from "@/lib/data-sources/providers";
 import type { AssemblyCandidate } from "@/lib/analysis/assembly";
 import { computeAssemblyMetrics, scoreAssembly } from "@/lib/analysis/assembly";
+import { indicativeGfaDisplay } from "@/lib/analysis/indicative-gfa-display";
 import { buildAdjacency } from "@/lib/analysis/geometry";
 import type { Assumptions, OpportunityInputs } from "@/lib/analysis/assumptions";
 import type { ScanCandidate } from "@/lib/analysis/area-scan";
@@ -1540,7 +1541,18 @@ export function MapWorkspace({
               </div>
               <div>
                 <div className="text-[10.5px] uppercase text-muted">GFA (ind.)</div>
-                <div className="num font-semibold">{sqm(manualMetrics.metrics.gfa)}</div>
+                {(() => {
+                  const disp = indicativeGfaDisplay(manualMetrics.metrics);
+                  if (disp.kind === "planning_required") {
+                    return (
+                      <div>
+                        <div className="num font-semibold">—</div>
+                        <div className="text-[10.5px] text-muted">Planning required</div>
+                      </div>
+                    );
+                  }
+                  return <div className="num font-semibold">{sqm(disp.gfaSqm)}</div>;
+                })()}
               </div>
               <div>
                 <div className="text-[10.5px] uppercase text-muted">Score</div>

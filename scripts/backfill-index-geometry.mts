@@ -7,11 +7,23 @@
  * - Concurrency 1, rate-limited, resumable/idempotent
  * - Persists Parcel geometry + SiteCandidateIndex.geometry
  *
+ * IMPORTANT: default `--limit` is 1. `--all` alone requires an explicit `--limit`.
+ *
+ * `--all` pages with IMMUTABLE orderBy id asc. Do NOT order by geometry/updatedAt —
+ * those change after a write and make offset batches skip untouched rows.
+ * Idempotent `already_ok` on already-complete rows in a stable page is fine.
+ *
+ * Approved pattern (236 ACTIVE candidates → 10 batches of 25):
+ *   --all --limit=25 --offset=0
+ *   --all --limit=25 --offset=25
+ *   ...
+ *   --all --limit=25 --offset=225
+ *
  * Usage:
  *   npx tsx scripts/backfill-index-geometry.mts --suburb=Bexley [--limit=1]
  *   npx tsx scripts/backfill-index-geometry.mts --id=<candidateId>
  *   npx tsx scripts/backfill-index-geometry.mts --canonicalKey=<key>
- *   npx tsx scripts/backfill-index-geometry.mts --all [--limit=50] [--offset=0]
+ *   npx tsx scripts/backfill-index-geometry.mts --all --limit=25 [--offset=0]
  *   npx tsx scripts/backfill-index-geometry.mts --dry-run --suburb=Bexley
  */
 
@@ -23,6 +35,7 @@ import {
   parcelsMissingDrawableGeometry,
   siteGeometryFromParcels,
 } from "../src/lib/index-candidate-geometry";
+import { STABLE_BACKFILL_ORDER_BY } from "../src/lib/intelligence/backfill-pagination";
 import { getParcelsByExternalIds, getStoredParcelsByExternalIds } from "../src/lib/parcel-service";
 import { upsertParcel } from "../src/lib/opportunity-service";
 
@@ -48,15 +61,25 @@ function parseArgs(argv: string[]): Args {
     delayMs: DEFAULT_DELAY_MS,
     dryRun: false,
   };
+  let limitExplicit = false;
   for (const a of argv) {
     if (a === "--all") args.all = true;
     else if (a === "--dry-run") args.dryRun = true;
     else if (a.startsWith("--suburb=")) args.suburb = a.slice("--suburb=".length);
     else if (a.startsWith("--id=")) args.id = a.slice("--id=".length);
     else if (a.startsWith("--canonicalKey=")) args.canonicalKey = a.slice("--canonicalKey=".length);
-    else if (a.startsWith("--limit=")) args.limit = Math.max(1, Number(a.slice("--limit=".length)) || 1);
-    else if (a.startsWith("--offset=")) args.offset = Math.max(0, Number(a.slice("--offset=".length)) || 0);
+    else if (a.startsWith("--limit=")) {
+      args.limit = Math.max(1, Number(a.slice("--limit=".length)) || 1);
+      limitExplicit = true;
+    } else if (a.startsWith("--offset=")) args.offset = Math.max(0, Number(a.slice("--offset=".length)) || 0);
     else if (a.startsWith("--delayMs=")) args.delayMs = Math.max(0, Number(a.slice("--delayMs=".length)) || 0);
+  }
+  // `--all` without `--limit` used to silently process 1 row. Require an explicit batch size.
+  if (args.all && !limitExplicit && !args.id && !args.canonicalKey && !args.suburb) {
+    console.error(
+      "Refusing --all without --limit=N. Example: --all --limit=25 --offset=0 (default limit is 1).",
+    );
+    process.exit(1);
   }
   return args;
 }
@@ -213,10 +236,11 @@ async function main() {
     ...(args.suburb ? { suburb: { equals: args.suburb, mode: "insensitive" as const } } : {}),
   };
 
-  // Prefer rows missing geometry first (resumable).
+  // --all: immutable id order so offset pages never skip after geometry writes.
+  // Scoped suburb/id/key: same stable id order (Washington-first re-sort would break offsets).
   const rows = await prisma.siteCandidateIndex.findMany({
     where,
-    orderBy: [{ geometry: "asc" }, { updatedAt: "asc" }],
+    orderBy: STABLE_BACKFILL_ORDER_BY,
     skip: args.offset,
     take: args.all || args.suburb || args.id || args.canonicalKey ? args.limit : DEFAULT_BATCH,
     select: {
@@ -229,15 +253,8 @@ async function main() {
     },
   });
 
-  // When suburb=Bexley and no explicit limit override beyond default, still process Washington Street first.
-  const ordered = [...rows].sort((a, b) => {
-    const aWash = /washington/i.test(a.address ?? "") ? 0 : 1;
-    const bWash = /washington/i.test(b.address ?? "") ? 0 : 1;
-    return aWash - bWash;
-  });
-
   const results: Awaited<ReturnType<typeof backfillOne>>[] = [];
-  for (const row of ordered) {
+  for (const row of rows) {
     // Concurrency 1
     const r = await backfillOne(row, { dryRun: args.dryRun, delayMs: args.delayMs });
     results.push(r);

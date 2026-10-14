@@ -326,7 +326,11 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions, opts?: ScoreAs
     factors.push({ sign: "-", text: "ROUGH SCREENING ESTIMATE only — DO NOT USE FOR ACQUISITION DECISION" });
   }
 
-  const planningCapacity = clamp01(modelled / 2) * 80 + clamp01((m.heightMinM ?? 0) / 24) * 20;
+  // Missing mapped FSR is not the same as an official FSR of 0:1 — do not score capacity as zero yield.
+  const allFsrUnmapped = m.lotCount > 0 && m.fsrUnmappedLots === m.lotCount;
+  const planningCapacity = allFsrUnmapped
+    ? 40
+    : clamp01(modelled / 2) * 80 + clamp01((m.heightMinM ?? 0) / 24) * 20;
   if (opts?.fsrSource === "STATE_PATHWAY" && hasUsableModelledFsr) {
     factors.push({
       sign: "+",
@@ -341,6 +345,11 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions, opts?: ScoreAs
     factors.push({
       sign: modelled >= 1.2 ? "+" : "-",
       text: `USER modelled FSR ${modelled.toFixed(2)}:1 — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA`,
+    });
+  } else if (allFsrUnmapped || opts?.fsrSource === "NO_MAPPED") {
+    factors.push({
+      sign: "-",
+      text: "Official FSR not mapped — Planning required (missing FSR is not FSR 0:1)",
     });
   } else {
     const fsrText =

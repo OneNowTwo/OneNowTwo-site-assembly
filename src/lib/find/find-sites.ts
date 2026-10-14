@@ -21,6 +21,11 @@ import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { parseNaturalLanguageFind } from "./nl-parse";
 import type { FindFilters } from "./find-filters-types";
+import { resolveDisplayScore, type ScoreProvenance } from "@/lib/intelligence/display-score";
+import {
+  loadLinkedOpportunityScoreIndex,
+  resolveLinkedOpportunityScore,
+} from "@/lib/intelligence/linked-opportunity-scores";
 
 export type { FindFilters } from "./find-filters-types";
 export { parseNaturalLanguageFind } from "./nl-parse";
@@ -43,10 +48,12 @@ export interface FindResultRow {
   stationDistanceM: number | null;
   nearestStationLabel: string | null;
   score: number;
+  scoreProvenance?: ScoreProvenance;
   headroom: number | null;
   maxPayable: number | null;
   lotCount: number;
-  owners: number;
+  /** Confirmed owners only — null when unknown (INDEX_DISCOVERY never invents from lot count). */
+  owners: number | null;
   isStrata: boolean;
   whyMatched: Array<{ title: string; body: string }>;
   opportunityId: string | null;
@@ -223,11 +230,13 @@ function annotateCandidate(
     keySiteId: proposed.keySiteId,
     stationDistanceM: station.distanceM,
     nearestStationLabel: station.label,
-    score: c.score.score,
+    score: resolveDisplayScore({ screeningScore: c.score.score }).score,
+    scoreProvenance: "SCREENING",
     headroom: c.headroom,
     maxPayable: c.maxPayable,
     lotCount: c.lotCount,
-    owners: c.owners,
+    // Lot count is not proven owner count — leave unknown unless title data exists.
+    owners: null,
     isStrata: c.isStrata,
     whyMatched: why.map((w) => ({ title: w.title, body: w.body })),
     opportunityId: c.canonicalOpportunityId ?? null,
@@ -236,11 +245,21 @@ function annotateCandidate(
   };
 }
 
+/** Hard maxOwners filter: unknown owner count does not satisfy an explicit max. */
+export function failsMaxOwnersFilter(
+  maxOwners: number | null | undefined,
+  owners: number | null | undefined,
+): boolean {
+  if (maxOwners == null) return false;
+  if (owners == null) return true;
+  return owners > maxOwners;
+}
+
 function passesHardFilters(r: FindResultRow, filters: FindFilters): boolean {
   if (filters.minSiteAreaSqm != null && r.siteAreaSqm < filters.minSiteAreaSqm) return false;
   if (filters.maxSiteAreaSqm != null && r.siteAreaSqm > filters.maxSiteAreaSqm) return false;
   if (filters.singleLotOnly && r.lotCount !== 1) return false;
-  if (filters.maxOwners != null && r.owners > filters.maxOwners) return false;
+  if (failsMaxOwnersFilter(filters.maxOwners, r.owners)) return false;
   if (filters.minCurrentFsr != null && (r.currentFsr == null || r.currentFsr < filters.minCurrentFsr)) return false;
   if (filters.maxCurrentFsr != null && (r.currentFsr == null || r.currentFsr > filters.maxCurrentFsr)) return false;
   if (filters.minScore != null && r.score < filters.minScore) return false;
@@ -292,22 +311,28 @@ function passesHardFilters(r: FindResultRow, filters: FindFilters): boolean {
 function rankResults(results: FindResultRow[], filters: FindFilters, profile: StrategyProfile): FindResultRow[] {
   const ranked = [...results];
   for (const r of ranked) {
-    if (
-      profile.preferredZones.length &&
-      r.zone &&
-      profile.preferredZones.some((z) => r.zone!.toUpperCase().startsWith(z.toUpperCase()))
-    ) {
-      if (!r.whyMatched.some((w) => w.title.startsWith("Preferred zone"))) {
-        r.whyMatched = [
-          ...r.whyMatched,
-          { title: `Preferred zone ${r.zone}`, body: `Matches ${profile.name} preferred zones.` },
-        ];
+    // Ranking boosts apply only to SCREENING scores — DETAILED Opportunity.score stays as persisted.
+    if (r.scoreProvenance !== "DETAILED") {
+      if (
+        profile.preferredZones.length &&
+        r.zone &&
+        profile.preferredZones.some((z) => r.zone!.toUpperCase().startsWith(z.toUpperCase()))
+      ) {
+        if (!r.whyMatched.some((w) => w.title.startsWith("Preferred zone"))) {
+          r.whyMatched = [
+            ...r.whyMatched,
+            { title: `Preferred zone ${r.zone}`, body: `Matches ${profile.name} preferred zones.` },
+          ];
+        }
+        r.score += 8;
       }
-      r.score += 8;
-    }
-    // Ranking preference only — does not exclude negative/unknown headroom.
-    if (profile.requirePositiveHeadroom && r.headroom != null && r.headroom > 0) {
-      r.score += 6;
+      // Ranking preference only — does not exclude negative/unknown headroom.
+      if (profile.requirePositiveHeadroom && r.headroom != null && r.headroom > 0) {
+        r.score += 6;
+      }
+      const clamped = resolveDisplayScore({ screeningScore: r.score });
+      r.score = clamped.score;
+      r.scoreProvenance = "SCREENING";
     }
   }
   ranked.sort((a, b) => {
@@ -374,6 +399,8 @@ async function findFromIndex(
     provenance: "INDEX_DISCOVERY",
   };
 
+  const linkedScores = await loadLinkedOpportunityScoreIndex();
+
   let rows = await prisma.siteCandidateIndex.findMany({
     where: place ? { AND: [baseWhere, buildIndexPlaceWhere(place)] } : baseWhere,
     orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
@@ -423,6 +450,14 @@ async function findFromIndex(
       r.strategyScores && typeof r.strategyScores === "object"
         ? (r.strategyScores as Record<string, number>)[profile.strategy]
         : undefined;
+    const screening = typeof cachedScore === "number" ? cachedScore : (r.quickScore ?? 40);
+    const linked = resolveLinkedOpportunityScore(r.opportunityId, r.canonicalKey, linkedScores);
+    const opportunityId = linked?.opportunityId ?? null;
+    const display = resolveDisplayScore({
+      screeningScore: screening,
+      opportunityId,
+      opportunityScore: linked?.score ?? null,
+    });
     return {
       key: r.canonicalKey,
       candidateId: r.id,
@@ -438,17 +473,19 @@ async function findFromIndex(
       keySiteId,
       stationDistanceM: r.stationDistanceM,
       nearestStationLabel: null,
-      score: typeof cachedScore === "number" ? cachedScore : (r.quickScore ?? 40),
+      score: display.score,
+      scoreProvenance: display.provenance,
       headroom: r.quickHeadroom,
       maxPayable: r.maxPayable,
       lotCount: r.lotCount ?? parcelIds.length,
-      owners: r.owners ?? 0,
+      // Never invent owners from lot count for INDEX_DISCOVERY.
+      owners: null,
       // Index assemblies are generated from non-strata seeds; treat as non-strata for Find.
       isStrata: false,
       whyMatched: reasons.length
         ? reasons
         : [{ title: "Indexed candidate", body: "Active INDEX_DISCOVERY site from the Sydney baseline." }],
-      opportunityId: r.opportunityId,
+      opportunityId,
       lotIds: parcelIds,
       // Never expose discovery-tile bbox to the client map link.
       bboxHint: null,

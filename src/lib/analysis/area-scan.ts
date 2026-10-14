@@ -301,13 +301,19 @@ export function groupAssemblyFamilies(candidates: ScanCandidate[], similarity = 
   return families.sort((a, b) => b.best.score.score - a.best.score.score || (b.best.headroom ?? -Infinity) - (a.best.headroom ?? -Infinity));
 }
 
+/** Assembly-complexity penalty from lot count — not ownership / title data. */
+export function lotCountPenalty(lotCount: number): number {
+  return Math.min(1, Math.max(0, lotCount - 2) / 6);
+}
+
 function planningPotentialScore(c: AssemblyCandidate, effectiveById: Map<string, EffectiveDevelopmentControls>): number {
   const uplift = c.lotIds.reduce((s, id) => s + (effectiveById.get(id)?.fsrUplift ?? 0), 0) / Math.max(c.lotIds.length, 1);
   const area = Math.min(1, c.metrics.totalAreaSqm / 2000);
   const fsr = Math.min(1, (c.metrics.weightedFsr || 0) / 2.2);
-  const ownersPenalty = Math.min(1, Math.max(0, c.metrics.owners - 2) / 6);
+  // Use lotCount for assembly complexity — never treat metrics.owners (historically = lots) as ownership.
+  const complexityPenalty = lotCountPenalty(c.metrics.lotCount);
   const heritagePenalty = c.metrics.heritageItems * 0.25 + c.metrics.heritageLots * 0.08;
-  const raw = 100 * (0.35 * Math.min(1, uplift / 0.8) + 0.25 * area + 0.25 * fsr + 0.15 * (1 - ownersPenalty) - heritagePenalty);
+  const raw = 100 * (0.35 * Math.min(1, uplift / 0.8) + 0.25 * area + 0.25 * fsr + 0.15 * (1 - complexityPenalty) - heritagePenalty);
   return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
