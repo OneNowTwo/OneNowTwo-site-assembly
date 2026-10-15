@@ -69,9 +69,15 @@ type IndexAnalyseContext = {
   canonicalKey: string;
   opportunityId: string | null;
   zone: string | null;
+  zoneName?: string | null;
   currentFsr: number | null;
   proposedFsr: number | null;
   proposedHeightM: number | null;
+  heightM?: number | null;
+  minLotSizeSqm?: number | null;
+  heritage?: string | null;
+  lepName?: string | null;
+  lga?: string | null;
   indexedAt: string | null;
 };
 
@@ -868,38 +874,43 @@ export function MapWorkspace({
     setSaving(true);
     setFindError(null);
     const uniqueIds = dedupeParcelIds(ids);
-    const ps = uniqueIds
-      .map((id) => {
-        const base = parcels.get(id);
-        if (!base) return null;
-        const fromScan = scanCandidate?.lotValuations?.[id];
-        const fromParcel = base.valuation;
-        const src = fromScan ?? fromParcel;
-        if (!src) return base;
-        return {
-          ...base,
-          valuation: {
-            mid: src.mid ?? null,
-            low: src.low ?? null,
-            high: src.high ?? null,
-            status: ("source" in src ? src.source : fromParcel?.source) ?? "COMPARABLE_DERIVED",
-            confidence: ("confidence" in src ? src.confidence : fromParcel?.confidence) ?? "UNKNOWN",
-            source: ("source" in src ? src.source : fromParcel?.source) ?? "COMPARABLE_DERIVED",
-            provider: ("provider" in src ? src.provider : fromParcel?.provider) ?? "NSW",
-            method:
-              ("provider" in src ? src.provider : fromParcel?.provider) === "DOMAIN"
-                ? "priceEstimate"
-                : "nsw_registered_comps_weighted",
-            checkedAt: ("checkedAt" in src ? src.checkedAt : fromParcel?.checkedAt) ?? null,
-            note: ("note" in src ? src.note : fromParcel?.note) ?? null,
-            numberOfComps: ("numberOfComps" in src ? src.numberOfComps : fromParcel?.numberOfComps) ?? null,
-            comps: ("comps" in src ? src.comps : fromParcel?.comps) ?? null,
-            subjectLastSale: ("subjectLastSale" in src ? src.subjectLastSale : fromParcel?.subjectLastSale) ?? null,
-            valuationLabel: ("valuationLabel" in src ? src.valuationLabel : fromParcel?.valuationLabel) ?? null,
-          },
-        } satisfies ParcelData;
-      })
-      .filter((p): p is ParcelData => !!p);
+    // Exact assembly must survive Analyse — never POST a silent subset.
+    const missingIds = uniqueIds.filter((id) => !parcels.get(id));
+    if (missingIds.length) {
+      setSaving(false);
+      return setFindError(
+        `Cannot Analyse — ${missingIds.length} of ${uniqueIds.length} assembly parcel(s) are not loaded. Zoom to the site and retry so every lot is available.`,
+      );
+    }
+    const ps = uniqueIds.map((id) => {
+      const base = parcels.get(id)!;
+      const fromScan = scanCandidate?.lotValuations?.[id];
+      const fromParcel = base.valuation;
+      const src = fromScan ?? fromParcel;
+      if (!src) return base;
+      return {
+        ...base,
+        valuation: {
+          mid: src.mid ?? null,
+          low: src.low ?? null,
+          high: src.high ?? null,
+          status: ("source" in src ? src.source : fromParcel?.source) ?? "COMPARABLE_DERIVED",
+          confidence: ("confidence" in src ? src.confidence : fromParcel?.confidence) ?? "UNKNOWN",
+          source: ("source" in src ? src.source : fromParcel?.source) ?? "COMPARABLE_DERIVED",
+          provider: ("provider" in src ? src.provider : fromParcel?.provider) ?? "NSW",
+          method:
+            ("provider" in src ? src.provider : fromParcel?.provider) === "DOMAIN"
+              ? "priceEstimate"
+              : "nsw_registered_comps_weighted",
+          checkedAt: ("checkedAt" in src ? src.checkedAt : fromParcel?.checkedAt) ?? null,
+          note: ("note" in src ? src.note : fromParcel?.note) ?? null,
+          numberOfComps: ("numberOfComps" in src ? src.numberOfComps : fromParcel?.numberOfComps) ?? null,
+          comps: ("comps" in src ? src.comps : fromParcel?.comps) ?? null,
+          subjectLastSale: ("subjectLastSale" in src ? src.subjectLastSale : fromParcel?.subjectLastSale) ?? null,
+          valuationLabel: ("valuationLabel" in src ? src.valuationLabel : fromParcel?.valuationLabel) ?? null,
+        },
+      } satisfies ParcelData;
+    });
     if (!ps.length) {
       setSaving(false);
       return setFindError("Parcels for this assembly are not loaded — zoom to the site and retry Analyse");
@@ -928,9 +939,15 @@ export function MapWorkspace({
             candidateId: indexCtx.candidateId,
             canonicalKey: indexCtx.canonicalKey,
             zone: indexCtx.zone,
+            zoneName: indexCtx.zoneName ?? null,
             currentFsr: indexCtx.currentFsr,
             proposedFsr: indexCtx.proposedFsr,
             proposedHeightM: indexCtx.proposedHeightM,
+            heightM: indexCtx.heightM ?? indexCtx.proposedHeightM ?? null,
+            minLotSizeSqm: indexCtx.minLotSizeSqm ?? null,
+            heritage: indexCtx.heritage ?? null,
+            lepName: indexCtx.lepName ?? null,
+            lga: indexCtx.lga ?? null,
             source: "SITE_CANDIDATE_INDEX" as const,
             provenance: "STORED_OFFICIAL_NSW_PLANNING" as const,
             indexedAt: indexCtx.indexedAt,
@@ -1001,24 +1018,22 @@ export function MapWorkspace({
 
   /** Parcel-panel primary Analyse — open/create Opportunity; never append to assembly. */
   async function analyseFromPanel() {
-    // A. INDEX_CANDIDATE with existing linked Opportunity → open it.
+    const activeIds = dedupeParcelIds(assembly.length ? assembly : selectedId ? [selectedId] : []);
+    // A. INDEX_CANDIDATE with existing linked Opportunity → open only when parcel set matches.
+    // Never navigate to a smaller/different Opportunity than the Map assembly.
     if (indexContext?.opportunityId) {
-      router.push(`/opportunities/${indexContext.opportunityId}`);
+      // Persist path verifies exact IDs; if Map assembly differs from index key, create/verify via save.
+      await save(activeIds, undefined, undefined, null, indexContext);
       return;
     }
-    // B. INDEX_CANDIDATE without link → save exact indexed assembly once + snapshot.
+    // B. INDEX_CANDIDATE without link → save exact Map assembly + snapshot.
     if (indexContext || mapTarget?.kind === "INDEX_CANDIDATE") {
-      const ids = dedupeParcelIds(assembly.length ? assembly : selectedId ? [selectedId] : []);
-      await save(ids, undefined, undefined, null, indexContext);
+      await save(activeIds, undefined, undefined, null, indexContext);
       return;
     }
     // D. Manual multi-lot assembly / C. single selected parcel.
-    if (assembly.length) {
-      await save(dedupeParcelIds(assembly));
-      return;
-    }
-    if (selectedId) {
-      await save([selectedId]);
+    if (activeIds.length) {
+      await save(activeIds);
       return;
     }
     setFindError("Select a parcel or open an indexed site to Analyse");

@@ -40,6 +40,7 @@ type TodayPayload = {
     id: string;
     name: string;
     address: string;
+    parcelHint?: string | null;
     suburb: string | null;
     lga?: string | null;
     siteAreaSqm: number | null;
@@ -244,6 +245,7 @@ export function DashboardClient() {
                           s.siteAreaSqm != null ? sqm(s.siteAreaSqm) : null,
                           s.lotCount != null ? `${s.lotCount} lot${s.lotCount === 1 ? "" : "s"}` : null,
                           s.owners != null ? `${s.owners} owner${s.owners === 1 ? "" : "s"}` : null,
+                          s.parcelHint ?? null,
                         ]
                           .filter(Boolean)
                           .join(" · ")}

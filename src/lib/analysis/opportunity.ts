@@ -442,13 +442,31 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
   const economicsFor = (ids: string[]): Economics => {
     const subset = economicLots.filter((l) => ids.includes(l.id));
     const subArea = subset.reduce((s, l) => s + l.areaSqm, 0);
+    // Independently recalculate the reduced site — never reuse whole-assembly unit mix,
+    // achievable GFA override, or saleable-area lock from the full site.
+    const subsetInputs: OpportunityInputs = {
+      ...inputs,
+      unitMix: [],
+      achievableGfaOverride: null,
+      siteAreaOverride: null,
+    };
     const scaledSite: SiteBasis = {
-      ...siteBasisFromLots(subset, { ...inputs, siteAreaOverride: null, fsrOverride: inputs.fsrOverride, heightOverrideM: inputs.heightOverrideM }),
+      ...siteBasisFromLots(subset, {
+        ...subsetInputs,
+        fsrOverride: inputs.fsrOverride,
+        heightOverrideM: inputs.heightOverrideM,
+      }),
       siteAreaSqm: (site.siteAreaSqm * subArea) / parcelArea,
+      // Keep effective FSR/height from the full-site planning resolution (same rights),
+      // but yield/mix must rebuild from the reduced site area.
+      fsr: site.fsr,
+      fsrSource: site.fsrSource,
+      yieldStatus: site.yieldStatus,
+      heightLimitM: site.heightLimitM,
     };
     const subComplete = subset.every((l) => (l.marketValue ?? 0) > 0);
     const subMv = subset.reduce((s, l) => s + (l.marketValue ?? 0), 0);
-    const r = runScenario("BASE", scaledSite, subset.length, subComplete ? subMv : 0, a, inputs.scenarios.BASE, inputs);
+    const r = runScenario("BASE", scaledSite, subset.length, subComplete ? subMv : 0, a, inputs.scenarios.BASE, subsetInputs);
     return {
       areaSqm: scaledSite.siteAreaSqm,
       gfa: r.yield.achievableGfa,

@@ -155,6 +155,12 @@ export async function estimateFromNswComps(input: {
 
   const peerSales = sales.filter((s) => !isSubjectSale(s, houseNo, street));
   const compsIn = peerSales.map((s) => toCompInput(s, input.lng, input.lat));
+  // Only pass defined search fields — undefined must not wipe DEFAULT_COMP_SEARCH (NaN lookback).
+  const searchPartial: { radiusM?: number; lookbackMonths?: number } = {};
+  if (input.radiusM != null && Number.isFinite(input.radiusM)) searchPartial.radiusM = input.radiusM;
+  if (input.lookbackMonths != null && Number.isFinite(input.lookbackMonths)) {
+    searchPartial.lookbackMonths = input.lookbackMonths;
+  }
   const built: ComparableValuationResult = buildComparableValuation(
     compsIn,
     {
@@ -165,7 +171,7 @@ export async function estimateFromNswComps(input: {
     },
     {
       excludedIds: excluded,
-      search: { radiusM: input.radiusM, lookbackMonths: input.lookbackMonths },
+      search: searchPartial,
     },
   );
 

@@ -22,6 +22,8 @@ export type SiteCandidateView = {
   canonicalKey: string;
   name: string;
   address: string;
+  /** Short parcel-set hint so same-street disjoint assemblies are distinguishable. */
+  parcelHint: string | null;
   suburb: string | null;
   lga: string | null;
   siteAreaSqm: number | null;
@@ -65,30 +67,35 @@ export function screeningStrategyScore(
     row.strategyScores && typeof row.strategyScores === "object"
       ? (row.strategyScores as Record<string, number>)[profile.strategy]
       : undefined;
-  if (typeof cached === "number") return cached;
 
-  let score = row.quickScore ?? 40;
-  const zone = (row.zone ?? "").toUpperCase();
-  if (profile.preferredZones.length) {
-    if (profile.preferredZones.some((z) => zone.startsWith(z.toUpperCase()))) score += 18;
-    else score -= 8;
+  // Compress additive bonuses so 100 stays exceptional (not common for typical R3+area+station rows).
+  // Base quickScore already encodes discovery quality; profile bonuses are soft reweights.
+  let score = typeof cached === "number" ? cached : (row.quickScore ?? 40);
+  if (typeof cached !== "number") {
+    const zone = (row.zone ?? "").toUpperCase();
+    if (profile.preferredZones.length) {
+      if (profile.preferredZones.some((z) => zone.startsWith(z.toUpperCase()))) score += 8;
+      else score -= 10;
+    }
+    if (profile.minSiteAreaSqm != null && row.siteAreaSqm != null) {
+      if (row.siteAreaSqm >= profile.minSiteAreaSqm) score += 4;
+      else score -= 14;
+    }
+    if (row.proposedFsr != null && row.currentFsr != null && row.proposedFsr > row.currentFsr) score += 6;
+    if (profile.maxStationDistanceM != null && row.stationDistanceM != null) {
+      if (row.stationDistanceM <= profile.maxStationDistanceM) score += 5;
+      else score -= 8;
+    }
+    if (row.keySiteStatus) score += 4;
+    if (profile.strategy === "TOWNHOUSES" && /R2|R3/.test(zone)) score += 3;
+    if (profile.strategy === "APARTMENTS" && /R3|R4|MU1|B4|E1/.test(zone)) score += 3;
+    if (profile.strategy === "CO_LIVING" && row.stationDistanceM != null && row.stationDistanceM <= 800) {
+      score += 4;
+    }
   }
-  if (profile.minSiteAreaSqm != null && row.siteAreaSqm != null) {
-    if (row.siteAreaSqm >= profile.minSiteAreaSqm) score += 8;
-    else score -= 12;
-  }
-  if (row.proposedFsr != null && row.currentFsr != null && row.proposedFsr > row.currentFsr) score += 12;
-  if (profile.maxStationDistanceM != null && row.stationDistanceM != null) {
-    if (row.stationDistanceM <= profile.maxStationDistanceM) score += 10;
-    else score -= 6;
-  }
-  if (row.keySiteStatus) score += 8;
-  if (profile.strategy === "TOWNHOUSES" && /R2|R3/.test(zone)) score += 6;
-  if (profile.strategy === "APARTMENTS" && /R3|R4|MU1|B4|E1/.test(zone)) score += 6;
-  if (profile.strategy === "CO_LIVING" && row.stationDistanceM != null && row.stationDistanceM <= 800) {
-    score += 8;
-  }
-  return score;
+  // Soft compress toward mid-high band so stacked / legacy-cached scores rarely pin at 100.
+  if (score > 85) score = 85 + (score - 85) * 0.45;
+  return Math.round(score);
 }
 
 function reasonsFor(
@@ -182,11 +189,20 @@ export async function listTodaySiteCandidates(
       lng: row.centroidLng,
       zoom: 18,
     });
+    const parcelIds = Array.isArray(row.parcelIds) ? (row.parcelIds as string[]) : [];
+    const parcelHint =
+      parcelIds.length > 0
+        ? `parcels ${parcelIds
+            .map((id) => id.replace(/^nsw-cadid:/i, ""))
+            .slice(0, 2)
+            .join("+")}${parcelIds.length > 2 ? "…" : ""}`
+        : null;
     return {
       id: row.id,
       canonicalKey: row.canonicalKey,
       name: row.address ?? row.suburb ?? row.canonicalKey,
       address: row.address ?? row.suburb ?? "Sydney site",
+      parcelHint,
       suburb: row.suburb,
       lga: row.lga,
       siteAreaSqm: row.siteAreaSqm,

@@ -53,7 +53,10 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
   const officialFsr = parcelArea > 0 ? gfaAtControls / parcelArea : 0;
   const lepHeights = included.map((l) => l.heightM).filter((h): h is number => h != null);
   const lepHeightM = lepHeights.length ? Math.min(...lepHeights) : null;
-  const zone = included.find((l) => l.zone)?.zone ?? null;
+  const indexSnap = input.inputs.indexPlanningSnapshot;
+  // Precedence for known facts: live parcel → stored official index → unknown.
+  // Never erase a stored official zone merely because Planning Portal is down.
+  const zone = included.find((l) => l.zone)?.zone ?? indexSnap?.zone ?? null;
 
   const snap = input.inputs.pathwaySnapshot;
   const band = bandFromPersisted(snap?.lmrBand, snap?.nearestDistanceM ?? null);
@@ -69,9 +72,14 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
   let statePathwayFsr: number | null;
   let statePathwayName: string | null;
 
-  const indexSnap = input.inputs.indexPlanningSnapshot;
   const indexCurrentFsr =
     indexSnap?.currentFsr != null && indexSnap.currentFsr > 0 ? indexSnap.currentFsr : null;
+  const indexHeightM =
+    indexSnap?.heightM != null && indexSnap.heightM > 0
+      ? indexSnap.heightM
+      : indexSnap?.proposedHeightM != null && indexSnap.proposedHeightM > 0
+        ? indexSnap.proposedHeightM
+        : null;
 
   if (input.inputs.fsrOverride != null) {
     const fromScan = input.inputs.fsrOverrideKind === "SCAN_MODELLED";
@@ -107,7 +115,7 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
     effectiveFsr = officialFsr;
     statePathwayFsr = null;
     statePathwayName = null;
-    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
+    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM ?? indexHeightM;
   } else if (indexCurrentFsr != null) {
     // 2. Persisted INDEX planning snapshot — fallback when live parcel planning is missing.
     // Never erase this merely because Planning Portal failed at Analyse time.
@@ -116,7 +124,7 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
     effectiveFsr = indexCurrentFsr;
     statePathwayFsr = snap?.statePathwayFsr ?? null;
     statePathwayName = snap?.statePathwayName ?? null;
-    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
+    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM ?? indexHeightM;
   } else if (anyUnmapped && officialFsr <= 0) {
     // 3. No usable FSR — planning required (never coerce to a real 0 economics path).
     fsrSource = "NO_MAPPED";
@@ -124,14 +132,14 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
     effectiveFsr = 0;
     statePathwayFsr = snap?.statePathwayFsr ?? null;
     statePathwayName = snap?.statePathwayName ?? null;
-    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
+    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM ?? indexHeightM;
   } else {
     fsrSource = "OFFICIAL";
     yieldStatus = "CALCULABLE";
     effectiveFsr = officialFsr;
     statePathwayFsr = null;
     statePathwayName = null;
-    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
+    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM ?? indexHeightM;
   }
 
   // When INDEX snapshot supplies LEP base, surface it as lepFsr for statutory display.
@@ -153,13 +161,29 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
     heightLimitM: effectiveHeightM,
   };
 
+  // Seed blank lot statutory fields from stored official index — never wipe known facts on outage.
+  const lotsForSnapshot = input.lots.map((l) => {
+    if (!indexSnap) return l;
+    return {
+      ...l,
+      zone: l.zone ?? indexSnap.zone ?? null,
+      zoneName: l.zoneName ?? indexSnap.zoneName ?? null,
+      fsr: l.fsr ?? (indexSnap.currentFsr != null && indexSnap.currentFsr > 0 ? indexSnap.currentFsr : null),
+      heightM: l.heightM ?? indexHeightM,
+      minLotSizeSqm: l.minLotSizeSqm ?? indexSnap.minLotSizeSqm ?? null,
+      heritage: l.heritage ?? indexSnap.heritage ?? null,
+      planningInstrument: l.planningInstrument ?? indexSnap.lepName ?? null,
+      planningCheckedAt: l.planningCheckedAt ?? indexSnap.indexedAt ?? null,
+    };
+  });
+
   return buildPlanningSnapshot({
-    lots: input.lots,
+    lots: lotsForSnapshot,
     site,
     statePathwayHeightM: fsrSource === "STATE_PATHWAY" ? (inferredPathwayHeight ?? effectiveHeightM) : null,
     pendingChanges: input.pendingChanges,
     pendingChangesCheckedAt: input.pendingChangesCheckedAt,
     pendingChangesSource: input.pendingChangesSource,
-    checkedAt: input.checkedAt,
+    checkedAt: input.checkedAt ?? indexSnap?.indexedAt ?? undefined,
   });
 }

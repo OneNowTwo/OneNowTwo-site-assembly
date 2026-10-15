@@ -624,21 +624,39 @@ export async function createOpportunity(input: {
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
   const parsedInputs = parseOpportunityInputs(input.inputs ?? {});
   const { canonicalParcelKey } = await import("@/lib/intelligence/canonical-key");
-  const parcelCanonicalKey =
-    parsedInputs.indexPlanningSnapshot?.canonicalKey ??
-    input.linkIndexCandidate?.canonicalKey ??
-    canonicalParcelKey(parcels.map((p) => p.externalParcelId));
+  const postedExternalIds = parcels.map((p) => p.externalParcelId);
+  // Canonical key must reflect the posted assembly — never prefer an index key that
+  // describes a different (usually smaller) parcel set than Map Analyse sent.
+  const postedCanonicalKey = canonicalParcelKey(postedExternalIds);
+  const indexCanonicalKey =
+    parsedInputs.indexPlanningSnapshot?.canonicalKey ?? input.linkIndexCandidate?.canonicalKey ?? null;
+  const parcelCanonicalKey = postedCanonicalKey ?? indexCanonicalKey;
 
-  // Exact link already exists → open that Opportunity; never silently create another.
+  // Exact link already exists → open that Opportunity only when parcel sets match.
+  // Never reopen a smaller/different Opportunity for a larger Map assembly.
   if (parcelCanonicalKey) {
     const existing = await prisma.opportunity.findFirst({
       where: { canonicalKey: parcelCanonicalKey, lifecycleStatus: "ACTIVE" },
       orderBy: { updatedAt: "desc" },
+      include: { parcels: { include: { parcel: { select: { externalParcelId: true } } } } },
     });
     if (existing) {
+      const existingIds = new Set(existing.parcels.map((op) => op.parcel.externalParcelId));
+      const postedSet = new Set(postedExternalIds);
+      const sameSet =
+        existingIds.size === postedSet.size && [...postedSet].every((id) => existingIds.has(id));
+      if (!sameSet) {
+        throw new Error(
+          `Cannot Analyse — Map assembly has ${postedSet.size} parcel(s) but linked Opportunity has ${existingIds.size}. Exact assembly must match; no silent lot drop.`,
+        );
+      }
       await linkIndexCandidateToOpportunity(existing.id, {
         candidateId: input.linkIndexCandidate?.candidateId ?? parsedInputs.indexPlanningSnapshot?.candidateId,
-        canonicalKey: parcelCanonicalKey,
+        // Link index row when its key matches posted set; otherwise still link by candidateId only.
+        canonicalKey:
+          indexCanonicalKey && indexCanonicalKey === postedCanonicalKey
+            ? indexCanonicalKey
+            : postedCanonicalKey,
       });
       return existing;
     }

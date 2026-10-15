@@ -82,6 +82,42 @@ export function allocateOffers(
     return { l, est, v: mv, composite: Math.max(composite, 0) };
   });
 
+  // Negative residual → no supported acquisition strategy. Keep budget truth for diagnostics;
+  // do not invent $0 opening/max offers or "100% below market" as recommended strategy.
+  if (!(budget > 0)) {
+    warnings.push("THE DEVELOPMENT DOES NOT SUPPORT A LAND ACQUISITION PRICE — residual land value is at or below zero.");
+    const out: AllocationLot[] = basis.map(({ l, est, v }) => {
+      const mv = l.marketValue && l.marketValue > 0 ? l.marketValue : null;
+      return {
+        id: l.id,
+        marketValue: mv,
+        weightBasis: v,
+        weightEstimated: est,
+        weight: 0,
+        maximumOffer: 0,
+        maximumOverridden: false,
+        openingOffer: 0,
+        openingOverridden: false,
+        negotiationHeadroom: 0,
+        ownerPremiumAmount: null,
+        openingPremium: null,
+        maximumPremium: null,
+        ownerPremiumPercent: null,
+      };
+    });
+    return {
+      budget,
+      lots: out,
+      totalMarketValue: out.reduce((s, l) => s + (l.marketValue ?? 0), 0),
+      totalMaximum: 0,
+      totalOpening: 0,
+      totalNegotiationHeadroom: 0,
+      averagePremiumToMarket: null,
+      unallocated: budget,
+      warnings: [...new Set(warnings)],
+    };
+  }
+
   const overriddenTotal = lots.reduce((s, l) => s + (l.maxOverride != null ? l.maxOverride : 0), 0);
   let remaining = budget - overriddenTotal;
   if (remaining < 0) {

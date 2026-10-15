@@ -125,6 +125,17 @@ export function scoreComparable(
 /**
  * Filter → score → drop price outliers → pick top comps → weighted mid + percentile range.
  */
+/** Merge partial search opts without letting `undefined` wipe defaults (NaN lookback). */
+export function mergeCompSearch(partial?: Partial<CompSearchDefaults> | null): CompSearchDefaults {
+  const clean: Partial<CompSearchDefaults> = {};
+  if (partial) {
+    for (const [k, v] of Object.entries(partial) as [keyof CompSearchDefaults, number | undefined][]) {
+      if (v != null && Number.isFinite(v)) clean[k] = v;
+    }
+  }
+  return { ...DEFAULT_COMP_SEARCH, ...clean };
+}
+
 export function buildComparableValuation(
   sales: CompSaleInput[],
   subject: { areaSqm: number; suburb?: string | null; zone?: string | null; isStrata: boolean },
@@ -135,7 +146,7 @@ export function buildComparableValuation(
     nowMs?: number;
   },
 ): ComparableValuationResult {
-  const search = { ...DEFAULT_COMP_SEARCH, ...opts?.search };
+  const search = mergeCompSearch(opts?.search);
   const now = opts?.nowMs ?? Date.now();
   const lookbackMs = search.lookbackMonths * 30.4375 * 24 * 3600 * 1000;
   const cutoff = now - lookbackMs;
@@ -146,7 +157,8 @@ export function buildComparableValuation(
     let excludeReason: string | null = null;
     if (excluded.has(sale.id)) excludeReason = "Excluded by user";
     else if (sale.strata !== subject.isStrata) excludeReason = subject.isStrata ? "Strata mismatch" : "Not a house (strata)";
-    else if (sale.saleDateMs != null && sale.saleDateMs < cutoff) excludeReason = "Older than lookback";
+    else if (sale.saleDateMs == null) excludeReason = "Missing sale date";
+    else if (sale.saleDateMs < cutoff) excludeReason = "Older than lookback";
     else if (sale.distanceM > search.radiusM) excludeReason = "Outside radius";
     else if (sale.landAreaSqm != null && subject.areaSqm > 0) {
       const diff = Math.abs(sale.landAreaSqm - subject.areaSqm) / subject.areaSqm;
@@ -169,14 +181,23 @@ export function buildComparableValuation(
     });
   }
 
-  // Soft land-area preference before outlier trim.
+  // Soft land-area preference before outlier trim — mark soft rejects as excluded (not USED).
+  const softRejected = new Set<string>();
   const eligible = scored
     .filter((c) => c.included)
     .filter((c) => {
       if (c.landAreaSqm == null || !(subject.areaSqm > 0)) return true;
-      return Math.abs(c.landAreaSqm - subject.areaSqm) / subject.areaSqm <= search.landAreaTolerance;
+      const ok = Math.abs(c.landAreaSqm - subject.areaSqm) / subject.areaSqm <= search.landAreaTolerance;
+      if (!ok) softRejected.add(c.id);
+      return ok;
     })
     .sort((a, b) => b.similarity - a.similarity || a.distanceM - b.distanceM);
+  for (const c of scored) {
+    if (softRejected.has(c.id) && c.included) {
+      c.included = false;
+      c.excludeReason = "Land area outside preferred tolerance";
+    }
+  }
 
   // Outlier removal on area-adjusted prices (median band).
   const med = median(eligible.map((c) => c.areaAdjustedPrice));
@@ -193,10 +214,10 @@ export function buildComparableValuation(
   }
 
   const picked = withoutOutliers.slice(0, search.maxComps);
-  // Mark non-picked eligible as not included in estimate (still shown).
+  // Any remaining included row not in the pick set must not count as USED.
   const pickedIds = new Set(picked.map((c) => c.id));
   for (const c of scored) {
-    if (c.included && !pickedIds.has(c.id) && withoutOutliers.includes(c)) {
+    if (c.included && !pickedIds.has(c.id)) {
       c.included = false;
       c.excludeReason = "Not in top similarity set";
     }

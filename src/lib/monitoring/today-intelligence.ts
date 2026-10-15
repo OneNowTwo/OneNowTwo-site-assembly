@@ -189,6 +189,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     id: s.id,
     name: s.name,
     address: s.address,
+    parcelHint: s.parcelHint,
     suburb: s.suburb,
     lga: s.lga,
     siteAreaSqm: s.siteAreaSqm,

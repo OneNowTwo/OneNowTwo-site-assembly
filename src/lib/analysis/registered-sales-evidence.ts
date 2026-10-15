@@ -6,10 +6,37 @@
  */
 
 import type { OpportunityInputs } from "@/lib/analysis/assumptions";
+import { DEFAULT_COMP_SEARCH } from "@/lib/analysis/comparable-valuation";
 
 export type LotValuationDetail = NonNullable<OpportunityInputs["lotValuationDetails"]>[string];
 
 export type RegisteredCompEvidence = NonNullable<LotValuationDetail["comps"]>[number];
+
+/**
+ * Re-apply active lookback to persisted comps so stale USED rows outside the window
+ * render as EXCLUDED ("Older than lookback") after engine rules change.
+ */
+export function applyLookbackToPersistedComps(
+  comps: RegisteredCompEvidence[],
+  opts?: { lookbackMonths?: number; nowMs?: number },
+): RegisteredCompEvidence[] {
+  const months = opts?.lookbackMonths ?? DEFAULT_COMP_SEARCH.lookbackMonths;
+  const now = opts?.nowMs ?? Date.now();
+  const cutoff = now - months * 30.4375 * 24 * 3600 * 1000;
+  return comps.map((c) => {
+    const ms = c.saleDate ? Date.parse(c.saleDate) : NaN;
+    if (!Number.isFinite(ms)) {
+      if (c.included) {
+        return { ...c, included: false, excludeReason: c.excludeReason ?? "Missing sale date" };
+      }
+      return c;
+    }
+    if (ms < cutoff && c.included) {
+      return { ...c, included: false, excludeReason: "Older than lookback" };
+    }
+    return c;
+  });
+}
 
 export type LotLikeForEvidence = {
   id: string;
@@ -278,7 +305,7 @@ export function summariseRegisteredSalesEvidence(
   for (const lot of includedLots) {
     const detail = details[lot.externalParcelId];
     if (!detail) continue;
-    const comps = detail.comps ?? [];
+    const comps = applyLookbackToPersistedComps(detail.comps ?? []);
     if (!comps.length && detail.mid == null && detail.numberOfComps == null) continue;
 
     const labels = provenanceLabelsForDetail(detail, {
@@ -393,4 +420,19 @@ export function formatOfferVsMarket(openingPremium: number | null | undefined): 
   if (openingPremium === 0) return "At market";
   if (openingPremium > 0) return `${pctPoints}% above market`;
   return `${pctPoints}% below market`;
+}
+
+/** Acquisition offer cells when residual does not support a land price. */
+export function unsupportedAcquisitionOfferDisplay(): {
+  opening: string;
+  maximum: string;
+  headroom: string;
+  vsMarket: string;
+} {
+  return {
+    opening: "—",
+    maximum: "—",
+    headroom: "—",
+    vsMarket: "—",
+  };
 }
