@@ -192,6 +192,7 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     parcelHint: s.parcelHint,
     suburb: s.suburb,
     lga: s.lga,
+    zone: s.zone,
     siteAreaSqm: s.siteAreaSqm,
     lotCount: s.lotCount,
     owners: s.owners,
@@ -199,9 +200,12 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     proposedFsr: s.proposedFsr,
     stationDistanceM: s.stationDistanceM,
     score: s.score,
-    scoreProvenance: s.scoreProvenance,
+    scoreProvenance: s.scoreProvenance ?? "SCREENING",
     maxPayable: s.maxPayable,
     headroom: s.headroom,
+    existingValue: s.existingValue,
+    whyItMatters: s.whyItMatters,
+    familyAlternativeCount: s.familyAlternativeCount,
     reasons: s.reasons,
     status: s.status,
     kind: s.kind,
@@ -210,9 +214,13 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     analyseHref: s.analyseHref,
   }));
 
+  const analysedCount = sitesToLookAt.filter((s) => s.scoreProvenance === "DETAILED").length;
+  const worthCheckingCount = sitesToLookAt.length;
+  const planningChangeCount = topIntelligence.length;
+
   return {
     headline: "Today",
-    subheading: `Greater Sydney — what changed, and which sites to check for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`,
+    subheading: `Greater Sydney — sites worth checking for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`,
     strategy: profile.strategy,
     marketScope: {
       id: market.id,
@@ -224,6 +232,13 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     indexPreparingMessage: siteResult.indexReady
       ? null
       : "We're still building the Sydney site list. Check back soon.",
+    summaryStrip: {
+      indexedSites: siteResult.indexCount,
+      analysedToday: analysedCount,
+      worthChecking: worthCheckingCount,
+      planningChanges: planningChangeCount,
+      watched: watching.length,
+    },
     topIntelligence,
     whatChanged: topIntelligence,
     sitesToLookAt,

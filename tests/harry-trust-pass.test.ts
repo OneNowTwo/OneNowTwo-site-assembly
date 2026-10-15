@@ -418,6 +418,24 @@ describe("harry trust: screening score compression", () => {
   });
 });
 
+describe("harry trust: Today why-it-matters copy", () => {
+  it("builds one human sentence from zone/FSR/area", async () => {
+    const { whyItMattersSentence } = await import("@/lib/intelligence/site-candidate-index");
+    const line = whyItMattersSentence({
+      zone: "R3",
+      currentFsr: 0.7,
+      siteAreaSqm: 1550,
+      lotCount: 3,
+      suburb: "Kogarah",
+      stationDistanceM: 450,
+    });
+    expect(line).toContain("R3");
+    expect(line).toContain("0.7:1");
+    expect(line).toContain("1,550 sqm");
+    expect(line).toContain("Kogarah");
+  });
+});
+
 describe("harry trust: planning source registry", () => {
   it("registers NSW + council concept sources without inventing credentials", () => {
     expect(PLANNING_SOURCE_REGISTRY.length).toBeGreaterThanOrEqual(10);
