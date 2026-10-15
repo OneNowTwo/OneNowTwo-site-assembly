@@ -418,6 +418,113 @@ describe("harry trust: screening score compression", () => {
   });
 });
 
+describe("harry trust: exact index↔Opportunity link", () => {
+  it("A+B candidate + A+B Opportunity → link PASS", async () => {
+    const { exactIndexLinkAllowed } = await import("@/lib/opportunity-service");
+    expect(exactIndexLinkAllowed("nsw-cadid:A|nsw-cadid:B", "nsw-cadid:A|nsw-cadid:B")).toBe(true);
+  });
+
+  it("A+B candidate + A+B+C Opportunity → original candidate must NOT link", async () => {
+    const { exactIndexLinkAllowed } = await import("@/lib/opportunity-service");
+    expect(exactIndexLinkAllowed("nsw-cadid:A|nsw-cadid:B", "nsw-cadid:A|nsw-cadid:B|nsw-cadid:C")).toBe(false);
+  });
+
+  it("exact A+B+C index row links only when posted key is A+B+C", async () => {
+    const { exactIndexLinkAllowed } = await import("@/lib/opportunity-service");
+    const posted = "nsw-cadid:A|nsw-cadid:B|nsw-cadid:C";
+    expect(exactIndexLinkAllowed("nsw-cadid:A|nsw-cadid:B", posted)).toBe(false);
+    expect(exactIndexLinkAllowed(posted, posted)).toBe(true);
+  });
+});
+
+describe("harry trust: current height never falls back to proposed", () => {
+  it("currentHeightM 8.5 + proposedHeightM 17.5 → current LEP height = 8.5", () => {
+    const lots = row(2).map((l) => ({
+      ...l,
+      zone: null,
+      fsr: null,
+      heightM: null,
+    }));
+    const inputs = parseOpportunityInputs({
+      indexPlanningSnapshot: {
+        candidateId: "h1",
+        canonicalKey: "a|b",
+        zone: "R3",
+        currentFsr: 0.7,
+        proposedFsr: 1.5,
+        proposedHeightM: 17.5,
+        heightM: 8.5,
+        source: "SITE_CANDIDATE_INDEX",
+        provenance: "STORED_OFFICIAL_NSW_PLANNING",
+        indexedAt: "2026-09-01T00:00:00.000Z",
+      },
+    });
+    const planning = resolvePlanning({
+      lots: lots.map((l) => ({
+        id: l.id,
+        label: l.label,
+        included: true,
+        areaSqm: l.areaSqm,
+        zone: l.zone,
+        zoneName: l.zoneName,
+        fsr: l.fsr,
+        heightM: l.heightM,
+        minLotSizeSqm: l.minLotSizeSqm,
+        heritage: l.heritage,
+        planningInstrument: null,
+        planningCheckedAt: null,
+      })),
+      inputs,
+    });
+    expect(planning.currentStatutoryControls.lepHeightM).toBe(8.5);
+    expect(planning.effectiveControls.effectiveHeightM).toBe(8.5);
+  });
+
+  it("currentHeightM null + proposedHeightM 17.5 → current LEP height stays null", () => {
+    const lots = row(2).map((l) => ({
+      ...l,
+      zone: "R3",
+      fsr: null,
+      heightM: null,
+    }));
+    const inputs = parseOpportunityInputs({
+      indexPlanningSnapshot: {
+        candidateId: "h2",
+        canonicalKey: "a|b",
+        zone: "R3",
+        currentFsr: 0.7,
+        proposedFsr: 1.5,
+        proposedHeightM: 17.5,
+        heightM: null,
+        source: "SITE_CANDIDATE_INDEX",
+        provenance: "STORED_OFFICIAL_NSW_PLANNING",
+        indexedAt: "2026-09-01T00:00:00.000Z",
+      },
+    });
+    const planning = resolvePlanning({
+      lots: lots.map((l) => ({
+        id: l.id,
+        label: l.label,
+        included: true,
+        areaSqm: l.areaSqm,
+        zone: l.zone,
+        zoneName: l.zoneName,
+        fsr: l.fsr,
+        heightM: null,
+        minLotSizeSqm: l.minLotSizeSqm,
+        heritage: l.heritage,
+        planningInstrument: null,
+        planningCheckedAt: null,
+      })),
+      inputs,
+    });
+    // Portal outage must not turn proposed 17.5 into current 17.5.
+    expect(planning.currentStatutoryControls.lepHeightM).toBeNull();
+    expect(planning.effectiveControls.effectiveHeightM).toBeNull();
+    expect(inputs.indexPlanningSnapshot?.proposedHeightM).toBe(17.5);
+  });
+});
+
 describe("harry trust: Today why-it-matters copy", () => {
   it("builds one human sentence from zone/FSR/area", async () => {
     const { whyItMattersSentence } = await import("@/lib/intelligence/site-candidate-index");

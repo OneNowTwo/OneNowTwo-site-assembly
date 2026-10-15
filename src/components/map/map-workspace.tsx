@@ -72,8 +72,9 @@ type IndexAnalyseContext = {
   zoneName?: string | null;
   currentFsr: number | null;
   proposedFsr: number | null;
+  /** Current statutory / LEP height from index — never proposed. */
+  currentHeightM?: number | null;
   proposedHeightM: number | null;
-  heightM?: number | null;
   minLotSizeSqm?: number | null;
   heritage?: string | null;
   lepName?: string | null;
@@ -943,7 +944,8 @@ export function MapWorkspace({
             currentFsr: indexCtx.currentFsr,
             proposedFsr: indexCtx.proposedFsr,
             proposedHeightM: indexCtx.proposedHeightM,
-            heightM: indexCtx.heightM ?? indexCtx.proposedHeightM ?? null,
+            // Current statutory height only — proposed must never become current.
+            heightM: indexCtx.currentHeightM ?? null,
             minLotSizeSqm: indexCtx.minLotSizeSqm ?? null,
             heritage: indexCtx.heritage ?? null,
             lepName: indexCtx.lepName ?? null,
@@ -1159,6 +1161,7 @@ export function MapWorkspace({
             zone?: string | null;
             currentFsr?: number | null;
             proposedFsr?: number | null;
+            currentHeightM?: number | null;
             proposedHeightM?: number | null;
             indexedAt?: string | null;
             parcelIds?: string[];
@@ -1191,6 +1194,7 @@ export function MapWorkspace({
             zone: body.zone ?? null,
             currentFsr: body.currentFsr ?? null,
             proposedFsr: body.proposedFsr ?? null,
+            currentHeightM: body.currentHeightM ?? null,
             proposedHeightM: body.proposedHeightM ?? null,
             indexedAt: body.indexedAt ?? null,
           });

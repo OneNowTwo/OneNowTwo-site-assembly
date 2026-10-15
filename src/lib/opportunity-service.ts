@@ -569,25 +569,53 @@ function marketValueFieldsFromParcel(p: ParcelData): {
   };
 }
 
-/** Link exact SiteCandidateIndex row → Opportunity (by id or canonicalKey only). */
+/**
+ * True when an index candidate may receive this Opportunity's opportunityId.
+ * Exact parcel-set match only — never subset/superset/family.
+ */
+export function exactIndexLinkAllowed(
+  candidateCanonicalKey: string | null | undefined,
+  postedCanonicalKey: string | null | undefined,
+): boolean {
+  const posted = postedCanonicalKey?.trim() || "";
+  const cand = candidateCanonicalKey?.trim() || "";
+  return posted.length > 0 && cand.length > 0 && posted === cand;
+}
+
+/**
+ * Link SiteCandidateIndex → Opportunity only when canonical parcel sets match exactly.
+ *
+ * - If candidateId is supplied: fetch it; link only when candidate.canonicalKey === posted key.
+ * - On mismatch: do NOT mutate that candidate; look up ACTIVE row by posted canonicalKey.
+ * - If no exact row exists: leave Opportunity unlinked.
+ */
 export async function linkIndexCandidateToOpportunity(
   opportunityId: string,
   link: { candidateId?: string | null; canonicalKey?: string | null },
 ): Promise<void> {
   try {
+    const postedKey = link.canonicalKey?.trim() || null;
+    if (!postedKey) return;
+
     if (link.candidateId) {
-      await prisma.siteCandidateIndex.updateMany({
+      const candidate = await prisma.siteCandidateIndex.findFirst({
         where: { id: link.candidateId, lifecycleStatus: "ACTIVE" },
-        data: { opportunityId },
+        select: { id: true, canonicalKey: true },
       });
-      return;
+      if (candidate && exactIndexLinkAllowed(candidate.canonicalKey, postedKey)) {
+        await prisma.siteCandidateIndex.update({
+          where: { id: candidate.id },
+          data: { opportunityId },
+        });
+        return;
+      }
+      // Mismatch or missing candidate — never stamp opportunityId onto the wrong index row.
     }
-    if (link.canonicalKey) {
-      await prisma.siteCandidateIndex.updateMany({
-        where: { canonicalKey: link.canonicalKey, lifecycleStatus: "ACTIVE" },
-        data: { opportunityId },
-      });
-    }
+
+    await prisma.siteCandidateIndex.updateMany({
+      where: { canonicalKey: postedKey, lifecycleStatus: "ACTIVE" },
+      data: { opportunityId },
+    });
   } catch {
     // Non-fatal — Opportunity remains usable without index link.
   }
@@ -652,11 +680,8 @@ export async function createOpportunity(input: {
       }
       await linkIndexCandidateToOpportunity(existing.id, {
         candidateId: input.linkIndexCandidate?.candidateId ?? parsedInputs.indexPlanningSnapshot?.candidateId,
-        // Link index row when its key matches posted set; otherwise still link by candidateId only.
-        canonicalKey:
-          indexCanonicalKey && indexCanonicalKey === postedCanonicalKey
-            ? indexCanonicalKey
-            : postedCanonicalKey,
+        // Always the Opportunity's exact posted parcel key — never an index subset key.
+        canonicalKey: postedCanonicalKey,
       });
       return existing;
     }
@@ -723,7 +748,8 @@ export async function createOpportunity(input: {
   );
   await linkIndexCandidateToOpportunity(opp.id, {
     candidateId: input.linkIndexCandidate?.candidateId ?? parsedInputs.indexPlanningSnapshot?.candidateId,
-    canonicalKey: parcelCanonicalKey,
+    // Posted assembly key only — linkIndexCandidateToOpportunity refuses mismatched candidateId.
+    canonicalKey: postedCanonicalKey,
   });
   await ensureModelledPlanningOverride(opp.id);
   await recomputeOpportunity(opp.id, { reason: "opportunity created", source: "createOpportunity" });

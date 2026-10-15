@@ -74,12 +74,8 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
 
   const indexCurrentFsr =
     indexSnap?.currentFsr != null && indexSnap.currentFsr > 0 ? indexSnap.currentFsr : null;
-  const indexHeightM =
-    indexSnap?.heightM != null && indexSnap.heightM > 0
-      ? indexSnap.heightM
-      : indexSnap?.proposedHeightM != null && indexSnap.proposedHeightM > 0
-        ? indexSnap.proposedHeightM
-        : null;
+  // Current LEP height from stored official index only — never fall back to proposedHeightM.
+  const indexHeightM = indexSnap?.heightM != null && indexSnap.heightM > 0 ? indexSnap.heightM : null;
 
   if (input.inputs.fsrOverride != null) {
     const fromScan = input.inputs.fsrOverrideKind === "SCAN_MODELLED";
