@@ -48,43 +48,68 @@ export function sameIndexFamily(
   return jaccard(a, b) >= similarity;
 }
 
+function compareFamilyMembers(a: IndexFamilyMember, b: IndexFamilyMember): number {
+  if (b.score !== a.score) return b.score - a.score;
+  const aa = a.siteAreaSqm ?? 0;
+  const ba = b.siteAreaSqm ?? 0;
+  if (ba !== aa) return ba - aa;
+  return (b.lotCount ?? 0) - (a.lotCount ?? 0) || a.canonicalKey.localeCompare(b.canonicalKey);
+}
+
 /**
- * Group candidates into families; best = highest score, then larger area, then more lots.
- * Input should already be score-sorted for stable familyId (= best canonicalKey).
+ * Group candidates into families via connected components on sameIndexFamily edges
+ * (transitive overlap/subset chains). Best = highest score, then larger area, then more lots.
  */
 export function groupIndexCandidateFamilies(
   members: IndexFamilyMember[],
   similarity = 0.55,
 ): IndexCandidateFamily[] {
-  const sorted = [...members].sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    const aa = a.siteAreaSqm ?? 0;
-    const ba = b.siteAreaSqm ?? 0;
-    if (ba !== aa) return ba - aa;
-    return (b.lotCount ?? 0) - (a.lotCount ?? 0) || a.canonicalKey.localeCompare(b.canonicalKey);
-  });
+  if (!members.length) return [];
 
-  const used = new Set<string>();
-  const families: IndexCandidateFamily[] = [];
+  const byKey = new Map<string, IndexFamilyMember>();
+  for (const m of members) {
+    const prev = byKey.get(m.canonicalKey);
+    if (!prev || compareFamilyMembers(m, prev) < 0) byKey.set(m.canonicalKey, m);
+  }
+  const unique = [...byKey.values()];
+  const n = unique.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i: number): number => {
+    let root = i;
+    while (parent[root] !== root) root = parent[root]!;
+    let cur = i;
+    while (parent[cur] !== root) {
+      const next = parent[cur]!;
+      parent[cur] = root;
+      cur = next;
+    }
+    return root;
+  };
+  const union = (a: number, b: number) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[rb] = ra;
+  };
 
-  for (const c of sorted) {
-    if (used.has(c.canonicalKey)) continue;
-    const alts: IndexFamilyMember[] = [];
-    used.add(c.canonicalKey);
-    for (const other of sorted) {
-      if (used.has(other.canonicalKey)) continue;
-      if (sameIndexFamily(c.parcelIds, other.parcelIds, similarity)) {
-        alts.push(other);
-        used.add(other.canonicalKey);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (sameIndexFamily(unique[i]!.parcelIds, unique[j]!.parcelIds, similarity)) {
+        union(i, j);
       }
     }
-    const all = [c, ...alts].sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      const aa = a.siteAreaSqm ?? 0;
-      const ba = b.siteAreaSqm ?? 0;
-      if (ba !== aa) return ba - aa;
-      return (b.lotCount ?? 0) - (a.lotCount ?? 0) || a.canonicalKey.localeCompare(b.canonicalKey);
-    });
+  }
+
+  const groups = new Map<number, IndexFamilyMember[]>();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    const list = groups.get(root) ?? [];
+    list.push(unique[i]!);
+    groups.set(root, list);
+  }
+
+  const families: IndexCandidateFamily[] = [];
+  for (const group of groups.values()) {
+    const all = [...group].sort(compareFamilyMembers);
     const best = all[0]!;
     families.push({
       familyId: `family:${best.canonicalKey}`,

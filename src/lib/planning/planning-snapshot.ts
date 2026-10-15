@@ -2,7 +2,13 @@ import { lmrBandFromDistanceM, type LmrBand } from "@/lib/data-sources/housing-s
 import type { PlanningChangeRecord } from "@/lib/planning/types";
 
 export type ProximityBandLabel = "INNER_0_400" | "OUTER_400_800" | "OUTSIDE" | "UNKNOWN";
-export type PlanningFsrSource = "OFFICIAL" | "NO_MAPPED" | "OVERRIDE" | "STATE_PATHWAY";
+export type PlanningFsrSource =
+  | "OFFICIAL"
+  | "NO_MAPPED"
+  | "OVERRIDE"
+  | "STATE_PATHWAY"
+  /** Persisted SiteCandidateIndex statutory snapshot — not live Planning Portal. */
+  | "INDEX_SNAPSHOT";
 export type PlanningYieldStatus = "CALCULABLE" | "REQUIRES_PLANNING_INPUT";
 
 /** Minimal site controls fed into PlanningSnapshot — not a second planning authority. */
@@ -161,7 +167,13 @@ export function buildPlanningSnapshot(input: {
   const lepHeights = included.map((l) => l.heightM).filter((h): h is number => h != null);
   const minLots = included.map((l) => l.minLotSizeSqm).filter((h): h is number => h != null);
   const anyLepFsr = included.some((l) => l.fsr != null && l.fsr > 0);
-  const lepFsr = anyLepFsr ? input.site.lepFsr : null;
+  // INDEX_SNAPSHOT supplies statutory LEP base when live lot FSR rows are empty.
+  const lepFsr =
+    anyLepFsr || input.site.fsrSource === "INDEX_SNAPSHOT"
+      ? input.site.lepFsr
+      : input.site.lepFsr != null && input.site.lepFsr > 0
+        ? input.site.lepFsr
+        : null;
   const lepHeightM = lepHeights.length ? Math.min(...lepHeights) : null;
   const checkedAt =
     input.checkedAt ??
@@ -300,10 +312,16 @@ export function buildPlanningSnapshot(input: {
       effectiveHeightM: effectiveHeightM ?? null,
       status: statePathwayActive
         ? "Requires planning confirmation"
-        : input.site.yieldStatus === "REQUIRES_PLANNING_INPUT"
-          ? "USER FSR REQUIRED"
-          : "LEP controls",
-      source: statePathwayActive ? "STATE_PATHWAY" : input.site.fsrSource,
+        : input.site.fsrSource === "INDEX_SNAPSHOT"
+          ? "STORED INDEX EVIDENCE — refresh recommended"
+          : input.site.yieldStatus === "REQUIRES_PLANNING_INPUT"
+            ? "USER FSR REQUIRED"
+            : "LEP controls",
+      source: statePathwayActive
+        ? "STATE_PATHWAY"
+        : input.site.fsrSource === "INDEX_SNAPSHOT"
+          ? "STORED INDEX EVIDENCE"
+          : input.site.fsrSource,
       fsrSource: input.site.fsrSource,
       yieldStatus: input.site.yieldStatus,
     },

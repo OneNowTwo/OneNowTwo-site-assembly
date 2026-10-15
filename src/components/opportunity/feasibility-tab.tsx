@@ -32,13 +32,38 @@ export function FeasibilityTab() {
         Headline score / existing value / max payable / headroom / GRV / MOC sit in the opportunity header. This tab is for assumptions and the calculations behind them — CURRENT vs PROPOSED stays in Planning / Overview.
       </p>
       <div className="grid grid-cols-2 gap-4 rounded-[3px] border border-line bg-white p-4 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Costs before land" value={money(f.nonLandCosts, { compact: true })} />
-        <Stat label="Residual land capacity" value={money(f.residualLandValue, { compact: true })} sub="Incl. duty, legal & land holding" />
-        <Stat label="Opening acquisition budget" value={money(openingBudget, { compact: true })} sub="Sum of opening offers" />
+        <Stat
+          label="Costs before land"
+          value={analysis.feasibilityCalculable ? money(f.nonLandCosts, { compact: true }) : "—"}
+          sub={!analysis.feasibilityCalculable ? "Planning required" : undefined}
+        />
+        <Stat
+          label="Residual land capacity"
+          value={analysis.feasibilityCalculable ? money(f.residualLandValue, { compact: true }) : "—"}
+          sub={!analysis.feasibilityCalculable ? "Planning required" : "Incl. duty, legal & land holding"}
+        />
+        <Stat
+          label="Opening acquisition budget"
+          value={analysis.feasibilityCalculable ? money(openingBudget, { compact: true }) : "—"}
+          sub={!analysis.feasibilityCalculable ? "Planning required" : "Sum of opening offers"}
+        />
         <Stat label="Avg premium to market" value={formatOfferVsMarket(analysis.allocation.averagePremiumToMarket)} />
-        <Stat label="Negotiation headroom" value={money(analysis.allocation.totalNegotiationHeadroom, { compact: true })} sub="Max − opening (total)" />
-        <Stat label="Profit at max land price" value={money(f.profit, { compact: true })} sub={`MOR ${pct(f.marginOnRevenue)}`} />
+        <Stat
+          label="Negotiation headroom"
+          value={analysis.feasibilityCalculable ? money(analysis.allocation.totalNegotiationHeadroom, { compact: true }) : "—"}
+          sub={!analysis.feasibilityCalculable ? "Planning required" : "Max − opening (total)"}
+        />
+        <Stat
+          label="Profit at max land price"
+          value={analysis.feasibilityCalculable ? money(f.profit, { compact: true }) : "—"}
+          sub={!analysis.feasibilityCalculable ? "Planning required" : `MOR ${pct(f.marginOnRevenue)}`}
+        />
       </div>
+      {!analysis.feasibilityCalculable && (
+        <div className="rounded-[3px] border border-amber-200 bg-amber-50 p-3 text-[12.5px] text-amber-950">
+          Planning required — GRV, max payable, and dwellings stay unavailable until an official, index, State pathway, or USER FSR is present.
+        </div>
+      )}
       {!f.viable && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[12.5px] text-bad">At these assumptions the project cannot support any land cost at the target margin.</div>}
       {f.costInputIncomplete && (
         <div className="rounded-[3px] border border-line bg-canvas p-3 text-[12.5px] text-muted">
@@ -165,7 +190,9 @@ export function FeasibilityTab() {
                         ? `${sqm(f.display.saleableArea)} × ${money(f.display.salePricePerSqm)}/sqm`
                         : `${base.yield.dwellings} × ${money(a.avgDwellingPrice)}`}
                   </td>
-                  <td className="px-3 py-1.5 text-right font-semibold">{money(f.grv)}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold">
+                    {analysis.feasibilityCalculable ? money(f.grv) : "—"}
+                  </td>
                   <td className="px-3 py-1.5 text-right">100%</td>
                 </tr>
                 {f.costLines.map((c) => (
@@ -185,7 +212,9 @@ export function FeasibilityTab() {
                 <tr className="border-t border-line">
                   <td className="px-3 py-1.5 font-semibold text-brand">Maximum payable to owners (P)</td>
                   <td className="px-3 py-1.5 text-muted">L ÷ k</td>
-                  <td className="px-3 py-1.5 text-right font-semibold text-brand">{money(f.maxPayableToOwners)}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold text-brand">
+                    {analysis.feasibilityCalculable ? money(f.maxPayableToOwners) : "—"}
+                  </td>
                   <td />
                 </tr>
                 <tr className="border-t border-line">

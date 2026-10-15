@@ -335,6 +335,24 @@ export const opportunityInputsSchema = z.object({
       }),
     )
     .default({}),
+  /**
+   * Persisted INDEX planning snapshot from SiteCandidateIndex at Analyse time.
+   * Fallback statutory evidence when live parcel planning is unavailable — not USER, not SCAN_MODELLED.
+   */
+  indexPlanningSnapshot: z
+    .object({
+      candidateId: z.string(),
+      canonicalKey: z.string(),
+      zone: z.string().nullable().optional(),
+      currentFsr: z.number().nullable(),
+      proposedFsr: z.number().nullable().optional(),
+      proposedHeightM: z.number().nullable().optional(),
+      source: z.literal("SITE_CANDIDATE_INDEX"),
+      provenance: z.literal("STORED_OFFICIAL_NSW_PLANNING"),
+      indexedAt: z.string().nullable().optional(),
+    })
+    .nullable()
+    .default(null),
 });
 export type OpportunityInputs = z.infer<typeof opportunityInputsSchema>;
 

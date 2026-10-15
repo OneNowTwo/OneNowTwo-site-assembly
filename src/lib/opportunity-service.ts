@@ -569,6 +569,30 @@ function marketValueFieldsFromParcel(p: ParcelData): {
   };
 }
 
+/** Link exact SiteCandidateIndex row → Opportunity (by id or canonicalKey only). */
+export async function linkIndexCandidateToOpportunity(
+  opportunityId: string,
+  link: { candidateId?: string | null; canonicalKey?: string | null },
+): Promise<void> {
+  try {
+    if (link.candidateId) {
+      await prisma.siteCandidateIndex.updateMany({
+        where: { id: link.candidateId, lifecycleStatus: "ACTIVE" },
+        data: { opportunityId },
+      });
+      return;
+    }
+    if (link.canonicalKey) {
+      await prisma.siteCandidateIndex.updateMany({
+        where: { canonicalKey: link.canonicalKey, lifecycleStatus: "ACTIVE" },
+        data: { opportunityId },
+      });
+    }
+  } catch {
+    // Non-fatal — Opportunity remains usable without index link.
+  }
+}
+
 /** Auto-value any parcels missing a trusted mid via NSW comps waterfall. */
 export async function ensureParcelValuations(parcels: ParcelData[]): Promise<{ parcels: ParcelData[]; valued: number; messages: string[] }> {
   const need = parcels.filter((p) => !(p.valuation?.mid != null && p.valuation.mid > 0));
@@ -582,7 +606,16 @@ export async function ensureParcelValuations(parcels: ParcelData[]): Promise<{ p
   };
 }
 
-export async function createOpportunity(input: { name: string; parcels: ParcelData[]; userId?: string | null; demoFinancialData?: boolean; notes?: string; inputs?: unknown }) {
+export async function createOpportunity(input: {
+  name: string;
+  parcels: ParcelData[];
+  userId?: string | null;
+  demoFinancialData?: boolean;
+  notes?: string;
+  inputs?: unknown;
+  /** Exact SiteCandidateIndex row to link after create (INDEX_CANDIDATE Analyse). */
+  linkIndexCandidate?: { candidateId?: string | null; canonicalKey?: string | null } | null;
+}) {
   // Always attempt automatic NSW comps when Analyse is created without values.
   const ensured = await ensureParcelValuations(input.parcels);
   const parcels = ensured.parcels;
@@ -590,10 +623,40 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
   const suburbs = parcels.map((p) => p.suburb).filter(Boolean) as string[];
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
   const parsedInputs = parseOpportunityInputs(input.inputs ?? {});
+  const { canonicalParcelKey } = await import("@/lib/intelligence/canonical-key");
+  const parcelCanonicalKey =
+    parsedInputs.indexPlanningSnapshot?.canonicalKey ??
+    input.linkIndexCandidate?.canonicalKey ??
+    canonicalParcelKey(parcels.map((p) => p.externalParcelId));
+
+  // Exact link already exists → open that Opportunity; never silently create another.
+  if (parcelCanonicalKey) {
+    const existing = await prisma.opportunity.findFirst({
+      where: { canonicalKey: parcelCanonicalKey, lifecycleStatus: "ACTIVE" },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (existing) {
+      await linkIndexCandidateToOpportunity(existing.id, {
+        candidateId: input.linkIndexCandidate?.candidateId ?? parsedInputs.indexPlanningSnapshot?.candidateId,
+        canonicalKey: parcelCanonicalKey,
+      });
+      return existing;
+    }
+  }
+
   // Ensure parcel valuations (NSW comps) are stored for Analyse transparency.
+  // Preserve trusted NSW mid when a later provider returns NO_VALUE for the same lot.
   const lotValuationDetails = { ...parsedInputs.lotValuationDetails };
   for (const p of parcels) {
     if (!p.valuation) continue;
+    const prev = lotValuationDetails[p.externalParcelId];
+    const trustedPrev =
+      prev?.mid != null &&
+      prev.mid > 0 &&
+      (prev.source === "COMPARABLE_DERIVED" || prev.provider === "NSW");
+    const incomingNoValue =
+      p.valuation.mid == null || p.valuation.source === "NO_VALUE" || p.valuation.status === "NO_VALUE";
+    if (trustedPrev && incomingNoValue) continue;
     lotValuationDetails[p.externalParcelId] = {
       mid: p.valuation.mid,
       low: p.valuation.low,
@@ -620,6 +683,7 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
           notes: input.notes,
           inputs: inputsWithVals as unknown as Prisma.InputJsonValue,
           createdById: input.userId ?? null,
+          canonicalKey: parcelCanonicalKey,
         },
       });
       let i = 0;
@@ -639,6 +703,10 @@ export async function createOpportunity(input: { name: string; parcels: ParcelDa
     },
     { timeout: 60000 },
   );
+  await linkIndexCandidateToOpportunity(opp.id, {
+    candidateId: input.linkIndexCandidate?.candidateId ?? parsedInputs.indexPlanningSnapshot?.candidateId,
+    canonicalKey: parcelCanonicalKey,
+  });
   await ensureModelledPlanningOverride(opp.id);
   await recomputeOpportunity(opp.id, { reason: "opportunity created", source: "createOpportunity" });
   try {
@@ -891,7 +959,12 @@ export async function ensureModelledPlanningOverride(id: string): Promise<{ appl
     // Drop stale mix so dwellings / GRV rebuild from the new saleable area.
     ...(fsrChanged ? { unitMix: [] } : {}),
     pathwaySnapshot: {
-      lepFsr: modelled.lepFsr ?? planningReconcile.effectiveControls.baseFsr,
+      // Prefer live LEP, else INDEX snapshot currentFsr (stored official at index time).
+      lepFsr:
+        modelled.lepFsr ??
+        planningReconcile.effectiveControls.baseFsr ??
+        inputs.indexPlanningSnapshot?.currentFsr ??
+        null,
       statePathwayFsr: planningReconcile.effectiveControls.stateFsr ?? modelled.statePathwayFsr ?? targetFsr,
       statePathwayName:
         planningReconcile.effectiveControls.statePathway ??

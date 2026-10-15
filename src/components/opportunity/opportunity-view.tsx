@@ -290,25 +290,67 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
               <HeaderStat label="Site area" value={sqm(analysis.site.siteAreaSqm)} />
               <HeaderStat
                 label="Effective FSR"
-                value={analysis.calculation.effectiveFsr != null ? `${analysis.calculation.effectiveFsr.toFixed(2)}:1` : "—"}
-                sub={analysis.calculation.effectiveFsr != null ? undefined : "No mapped FSR"}
+                value={
+                  analysis.feasibilityCalculable && analysis.calculation.effectiveFsr != null
+                    ? `${analysis.calculation.effectiveFsr.toFixed(2)}:1`
+                    : "—"
+                }
+                sub={
+                  analysis.feasibilityCalculable && analysis.calculation.effectiveFsr != null
+                    ? analysis.planningSnapshot.effectiveControls.source === "STORED INDEX EVIDENCE"
+                      ? "STORED INDEX EVIDENCE"
+                      : undefined
+                    : "Planning required"
+                }
               />
-              <HeaderStat label="Dwellings" value={String(analysis.base.yield.dwellings)} />
-              <HeaderStat label="GRV" value={money(f.grv, { compact: true })} />
+              <HeaderStat
+                label="Dwellings"
+                value={analysis.feasibilityCalculable ? String(analysis.base.yield.dwellings) : "—"}
+                sub={analysis.feasibilityCalculable ? undefined : "Planning required"}
+              />
+              <HeaderStat
+                label="GRV"
+                value={analysis.feasibilityCalculable ? money(f.grv, { compact: true }) : "—"}
+                sub={analysis.feasibilityCalculable ? undefined : "Planning required"}
+              />
               <HeaderStat
                 label="Existing value"
                 value={analysis.marketValueComplete ? money(analysis.combinedExistingValue, { compact: true }) : autoValuing ? "…" : "—"}
                 sub={analysis.marketValueComplete ? undefined : autoValuing ? "Fetching NSW comps" : "VALUE REQUIRED"}
               />
-              <HeaderStat label="Max payable" value={money(analysis.maxPayableToOwners, { compact: true })} tone={analysis.maxPayableToOwners > 0 ? "brand" : "bad"} large />
               <HeaderStat
-                label="Headroom"
-                value={analysis.marketValueComplete ? money(analysis.acquisitionHeadroom, { compact: true }) : "—"}
-                tone={analysis.marketValueComplete ? ((analysis.acquisitionHeadroom ?? 0) > 0 ? "good" : "bad") : undefined}
-                sub={analysis.marketValueComplete ? pct(analysis.acquisitionHeadroomPercent, 0, true) : autoValuing ? "Waiting for values" : "VALUE REQUIRED"}
+                label="Max payable"
+                value={analysis.feasibilityCalculable ? money(analysis.maxPayableToOwners, { compact: true }) : "—"}
+                tone={analysis.feasibilityCalculable && analysis.maxPayableToOwners > 0 ? "brand" : undefined}
+                sub={analysis.feasibilityCalculable ? undefined : "Planning required"}
                 large
               />
-              <HeaderStat label="MOC" value={pct(f.marginOnCost, 0)} />
+              <HeaderStat
+                label="Headroom"
+                value={
+                  analysis.feasibilityCalculable && analysis.marketValueComplete
+                    ? money(analysis.acquisitionHeadroom, { compact: true })
+                    : "—"
+                }
+                tone={
+                  analysis.feasibilityCalculable && analysis.marketValueComplete
+                    ? (analysis.acquisitionHeadroom ?? 0) > 0
+                      ? "good"
+                      : "bad"
+                    : undefined
+                }
+                sub={
+                  !analysis.feasibilityCalculable
+                    ? "Planning required"
+                    : analysis.marketValueComplete
+                      ? pct(analysis.acquisitionHeadroomPercent, 0, true)
+                      : autoValuing
+                        ? "Waiting for values"
+                        : "VALUE REQUIRED"
+                }
+                large
+              />
+              <HeaderStat label="MOC" value={analysis.feasibilityCalculable ? pct(f.marginOnCost, 0) : "—"} />
             </div>
           </div>
           {scanSnap && (

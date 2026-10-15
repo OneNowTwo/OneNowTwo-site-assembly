@@ -178,6 +178,7 @@ export function SiteIntelligence() {
     }
   }, [scenarioMode, proposedFsr, proposedHeight, dto, a, analysis, area?.title, area?.sourceUrl]);
 
+  const planningOk = analysis.feasibilityCalculable || scenarioMode === "PROPOSED";
   const dwellings =
     scenarioMode === "PROPOSED" && scenario ? scenario.proposedOutputs.dwellings : analysis.base.yield.dwellings;
   const grv = scenarioMode === "PROPOSED" && scenario ? scenario.proposedOutputs.grv : analysis.base.feasibility.grv;
@@ -202,7 +203,8 @@ export function SiteIntelligence() {
   );
 
   const officialLepFsr = analysis.planningSnapshot.effectiveControls.baseFsr;
-  const effectiveFsr = analysis.calculation.effectiveFsr ?? currentFsr;
+  // One Effective FSR truth — never fall back to site.fsr (0 when planning missing).
+  const effectiveFsr = analysis.planningSnapshot.effectiveControls.effectiveFsr ?? analysis.calculation.effectiveFsr;
 
   const whyItems = [
     whyProposedFsrUplift({ currentFsr, proposedFsr, siteAreaSqm: analysis.site.siteAreaSqm }),
@@ -247,23 +249,34 @@ export function SiteIntelligence() {
         <MiniStat label="Site area" value={sqm(analysis.site.siteAreaSqm)} />
         <MiniStat
           label="Effective FSR"
-          value={dash(effectiveFsr != null ? fsr(effectiveFsr) : "—", "No effective FSR on PlanningSnapshot")}
+          value={dash(
+            planningOk && effectiveFsr != null && effectiveFsr > 0 ? fsr(effectiveFsr) : "—",
+            "Planning required",
+          )}
         />
-        <MiniStat label="Indicative dwellings" value={num(dwellings)} />
-        <MiniStat label="GRV" value={money(grv, { compact: true })} />
+        <MiniStat
+          label="Indicative dwellings"
+          value={dash(planningOk ? num(dwellings) : "—", "Planning required")}
+        />
+        <MiniStat label="GRV" value={dash(planningOk ? money(grv, { compact: true }) : "—", "Planning required")} />
         <MiniStat
           label="Existing value"
           value={dash(analysis.marketValueComplete ? money(existing, { compact: true }) : "—", "VALUE REQUIRED")}
         />
-        <MiniStat label="Max payable" value={money(maxPay, { compact: true })} />
+        <MiniStat
+          label="Max payable"
+          value={dash(planningOk ? money(maxPay, { compact: true }) : "—", "Planning required")}
+        />
         <MiniStat
           label="Headroom"
           value={dash(
-            analysis.marketValueComplete || scenarioMode === "PROPOSED" ? money(headroom, { compact: true }) : "—",
-            "VALUE REQUIRED",
+            planningOk && (analysis.marketValueComplete || scenarioMode === "PROPOSED")
+              ? money(headroom, { compact: true })
+              : "—",
+            !planningOk ? "Planning required" : "VALUE REQUIRED",
           )}
         />
-        <MiniStat label="MOC" value={moc != null ? pct(moc, 0) : "—"} />
+        <MiniStat label="MOC" value={planningOk && moc != null ? pct(moc, 0) : "—"} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-12">

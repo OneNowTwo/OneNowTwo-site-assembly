@@ -63,6 +63,29 @@ function nowMs(): number {
   return Date.now();
 }
 
+/** Indexed-site context for Analyse → Opportunity handoff (planning snapshot + link). */
+type IndexAnalyseContext = {
+  candidateId: string;
+  canonicalKey: string;
+  opportunityId: string | null;
+  zone: string | null;
+  currentFsr: number | null;
+  proposedFsr: number | null;
+  proposedHeightM: number | null;
+  indexedAt: string | null;
+};
+
+function dedupeParcelIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 /** Client-side stage labels while /api/scan is in flight (server returns final progress). */
 const SCAN_STAGE_LABELS = [
   "Planning scan complete",
@@ -185,6 +208,7 @@ export function MapWorkspace({
     summary?: string | null;
     href?: string | null;
   } | null>(null);
+  const [indexContext, setIndexContext] = useState<IndexAnalyseContext | null>(null);
   const appliedTargetKeyRef = useRef<string | null>(null);
   /** Key currently being applied (async in flight). Distinct from applied. */
   const applyingTargetKeyRef = useRef<string | null>(null);
@@ -834,10 +858,17 @@ export function MapWorkspace({
     return `${suburb} – ${street ?? "Site"} Assembly`;
   }
 
-  async function save(ids: string[], name?: string, scanCandidate?: ScanCandidate, familyId?: string | null) {
+  async function save(
+    ids: string[],
+    name?: string,
+    scanCandidate?: ScanCandidate,
+    familyId?: string | null,
+    indexCtx?: IndexAnalyseContext | null,
+  ) {
     setSaving(true);
     setFindError(null);
-    const ps = ids
+    const uniqueIds = dedupeParcelIds(ids);
+    const ps = uniqueIds
       .map((id) => {
         const base = parcels.get(id);
         if (!base) return null;
@@ -891,6 +922,21 @@ export function MapWorkspace({
       };
     }
 
+    const indexPlanningSnapshot =
+      indexCtx != null
+        ? {
+            candidateId: indexCtx.candidateId,
+            canonicalKey: indexCtx.canonicalKey,
+            zone: indexCtx.zone,
+            currentFsr: indexCtx.currentFsr,
+            proposedFsr: indexCtx.proposedFsr,
+            proposedHeightM: indexCtx.proposedHeightM,
+            source: "SITE_CANDIDATE_INDEX" as const,
+            provenance: "STORED_OFFICIAL_NSW_PLANNING" as const,
+            indexedAt: indexCtx.indexedAt,
+          }
+        : null;
+
     let inputs: Partial<OpportunityInputs> | undefined;
     if (scanCandidate?.calculationSnapshot) {
       const snap = scanCandidate.calculationSnapshot;
@@ -901,6 +947,7 @@ export function MapWorkspace({
         fsrOverrideCertainty: snap.effectiveCertainty,
         heightOverrideM: snap.effectiveHeightM,
         lotValuationDetails,
+        indexPlanningSnapshot,
         scanProvenance: {
           originType: "AREA_SCAN",
           scanSessionId: scan.sessionId ?? newScanSessionId(),
@@ -919,8 +966,11 @@ export function MapWorkspace({
           },
         },
       };
-    } else if (Object.keys(lotValuationDetails).length) {
-      inputs = { lotValuationDetails };
+    } else if (Object.keys(lotValuationDetails).length || indexPlanningSnapshot) {
+      inputs = {
+        ...(Object.keys(lotValuationDetails).length ? { lotValuationDetails } : {}),
+        ...(indexPlanningSnapshot ? { indexPlanningSnapshot } : {}),
+      };
     }
 
     persistClientState({ activeKey: scanCandidate?.key ?? activeKey });
@@ -929,14 +979,49 @@ export function MapWorkspace({
       const body = await fetchApiJson<{ id: string }>("/api/opportunities", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name?.trim() || defaultName(ids), parcels: ps, inputs }),
+        body: JSON.stringify({
+          name: name?.trim() || defaultName(uniqueIds),
+          parcels: ps,
+          inputs,
+          linkIndexCandidate: indexCtx
+            ? { candidateId: indexCtx.candidateId, canonicalKey: indexCtx.canonicalKey }
+            : undefined,
+        }),
       });
       setSaving(false);
+      if (indexCtx) {
+        setIndexContext({ ...indexCtx, opportunityId: body.id });
+      }
       router.push(`/opportunities/${body.id}`);
     } catch (err) {
       setSaving(false);
       setFindError((err as Error).message || "Could not save opportunity");
     }
+  }
+
+  /** Parcel-panel primary Analyse — open/create Opportunity; never append to assembly. */
+  async function analyseFromPanel() {
+    // A. INDEX_CANDIDATE with existing linked Opportunity → open it.
+    if (indexContext?.opportunityId) {
+      router.push(`/opportunities/${indexContext.opportunityId}`);
+      return;
+    }
+    // B. INDEX_CANDIDATE without link → save exact indexed assembly once + snapshot.
+    if (indexContext || mapTarget?.kind === "INDEX_CANDIDATE") {
+      const ids = dedupeParcelIds(assembly.length ? assembly : selectedId ? [selectedId] : []);
+      await save(ids, undefined, undefined, null, indexContext);
+      return;
+    }
+    // D. Manual multi-lot assembly / C. single selected parcel.
+    if (assembly.length) {
+      await save(dedupeParcelIds(assembly));
+      return;
+    }
+    if (selectedId) {
+      await save([selectedId]);
+      return;
+    }
+    setFindError("Select a parcel or open an indexed site to Analyse");
   }
 
   useEffect(() => {
@@ -1022,6 +1107,7 @@ export function MapWorkspace({
       setFind(null);
       setAssembly([]);
       setSelectedId(null);
+      setIndexContext(null);
       clearScanSession();
       persistClientState({ scanOverride: cleared, activeKey: null });
     }
@@ -1048,14 +1134,18 @@ export function MapWorkspace({
           if (mapTarget.canonicalKey) qs.set("canonicalKey", mapTarget.canonicalKey);
           const body = await fetchApiJson<{
             id: string;
+            canonicalKey?: string;
             title: string;
             address?: string | null;
             suburb?: string | null;
             summary?: string | null;
             lotCount?: number | null;
             siteAreaSqm?: number | null;
+            zone?: string | null;
             currentFsr?: number | null;
             proposedFsr?: number | null;
+            proposedHeightM?: number | null;
+            indexedAt?: string | null;
             parcelIds?: string[];
             bbox?: BBox | null;
             centroid?: { lat: number; lng: number } | null;
@@ -1065,7 +1155,7 @@ export function MapWorkspace({
             geometryStatus?: "OK" | "MISSING";
           }>(`/api/map/index-candidate?${qs.toString()}`);
           if (stale()) return;
-          const ids = (body.parcelIds ?? []).filter(Boolean);
+          const ids = dedupeParcelIds(body.parcelIds ?? []);
           const stored = (body.parcels ?? []).filter((p) => !!p?.externalParcelId && !!p?.geometry);
           if (stored.length) {
             setParcels((prev) => {
@@ -1079,6 +1169,16 @@ export function MapWorkspace({
             setAssembly(ids);
             setSelectedId(ids[0] ?? null);
           }
+          setIndexContext({
+            candidateId: body.id,
+            canonicalKey: body.canonicalKey ?? mapTarget.canonicalKey ?? body.id,
+            opportunityId: body.opportunityId ?? null,
+            zone: body.zone ?? null,
+            currentFsr: body.currentFsr ?? null,
+            proposedFsr: body.proposedFsr ?? null,
+            proposedHeightM: body.proposedHeightM ?? null,
+            indexedAt: body.indexedAt ?? null,
+          });
           // Prefer site centroid / tight site bbox. URL/index tile bboxes are multi-km
           // and must not drive flyTo (Leaflet only fitBounds when width < 0.03°).
           const siteBbox = body.bbox;
@@ -1611,7 +1711,13 @@ export function MapWorkspace({
               parcel={selected}
               assumptions={assumptions}
               inAssembly={assembly.includes(selected.externalParcelId)}
-              onAdd={() => setAssembly((a) => [...a, selected.externalParcelId])}
+              onAnalyse={() => void analyseFromPanel()}
+              analysing={saving}
+              onAdd={() =>
+                setAssembly((a) =>
+                  a.includes(selected.externalParcelId) ? a : [...a, selected.externalParcelId],
+                )
+              }
               onRemove={() => setAssembly((a) => a.filter((x) => x !== selected.externalParcelId))}
               onFind={() => findAssemblies(selected)}
               finding={finding}

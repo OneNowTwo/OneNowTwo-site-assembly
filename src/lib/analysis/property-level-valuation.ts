@@ -78,15 +78,17 @@ export function estimatePropertyLevelValue(input: PropertyLevelValuationInput): 
   if (strongRate && (preferRateForLargeSite || directInflated || directUndercount || direct.mid == null)) {
     const low = Math.round(rateMid! * 0.9);
     const high = Math.round(rateMid! * 1.1);
+    // numberOfComps = engine-reported comparable set (picked.length), never rateSales.length.
+    // Rate sample size stays in the note only (was producing 399/534 absurdities).
     return {
       mid: rateMid!,
       low,
       high,
       confidence: rateSales.length >= 12 ? "MEDIUM" : "LOW",
-      numberOfComps: rateSales.length,
+      numberOfComps: direct.numberOfComps,
       comps: direct.comps,
       method: "nsw_property_level_land_rate",
-      note: `PROPERTY-LEVEL SCREENING ESTIMATE — local house land rate $${Math.round(landRatePerSqm!).toLocaleString("en-AU")}/sqm × ${Math.round(areaSqm)} sqm (${rateSales.length} sales)`,
+      note: `PROPERTY-LEVEL SCREENING ESTIMATE — local house land rate $${Math.round(landRatePerSqm!).toLocaleString("en-AU")}/sqm × ${Math.round(areaSqm)} sqm (rate sample ${rateSales.length} sales)`,
       label: "COMPARABLE-DERIVED SCREENING ESTIMATE",
       methodDetail: "LOCAL_LAND_RATE",
       landRatePerSqm,
