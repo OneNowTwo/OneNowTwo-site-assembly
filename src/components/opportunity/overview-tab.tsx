@@ -147,7 +147,14 @@ export function OverviewTab() {
                 <div className="font-semibold">
                   {analysis.includedIds.length} lots · {sqm(analysis.site.siteAreaSqm)}
                 </div>
-                <div className="text-muted">FSR {fsr(analysis.site.fsr)}</div>
+                <div className="text-muted">
+                  FSR{" "}
+                  {analysis.feasibilityCalculable &&
+                  analysis.planningSnapshot.effectiveControls.effectiveFsr != null
+                    ? fsr(analysis.planningSnapshot.effectiveControls.effectiveFsr)
+                    : "—"}
+                  {!analysis.feasibilityCalculable ? " · Planning required" : ""}
+                </div>
               </div>
             </div>
             <div>
@@ -157,7 +164,11 @@ export function OverviewTab() {
                   Combined mid value: <span className="num font-semibold">{analysis.marketValueComplete ? money(mv, { compact: true }) : "—"}</span>
                 </div>
                 <div>
-                  Max payable to owners: <span className="num font-semibold text-brand">{money(maxPay, { compact: true })}</span>
+                  Max payable to owners:{" "}
+                  <span className="num font-semibold text-brand">
+                    {analysis.feasibilityCalculable ? money(maxPay, { compact: true }) : "—"}
+                  </span>
+                  {!analysis.feasibilityCalculable ? <span className="text-muted"> · Planning required</span> : null}
                 </div>
                 <div>
                   Acquisition headroom:{" "}
@@ -173,10 +184,17 @@ export function OverviewTab() {
             <div>
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Development</div>
               <div className="mt-1 space-y-0.5 text-[13px]">
-                <div className="font-semibold">{num(y.dwellings)} dwellings</div>
-                <div className="text-muted">{sqm(y.saleableArea)} saleable</div>
+                <div className="font-semibold">
+                  {analysis.feasibilityCalculable ? `${num(y.dwellings)} dwellings` : "— dwellings"}
+                </div>
+                <div className="text-muted">
+                  {analysis.feasibilityCalculable ? `${sqm(y.saleableArea)} saleable` : "Planning required"}
+                </div>
                 <div>
-                  GRV <span className="num font-semibold">{money(f.grv, { compact: true })}</span>
+                  GRV{" "}
+                  <span className="num font-semibold">
+                    {analysis.feasibilityCalculable ? money(f.grv, { compact: true }) : "—"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -283,8 +301,18 @@ export function OverviewTab() {
                 <Stat
                   label="Acquisition headroom"
                   value={money(analysis.acquisitionHeadroom, { compact: true })}
-                  sub={`Max payable ${money(analysis.maxPayableToOwners, { compact: true })}`}
-                  tone={(analysis.acquisitionHeadroom ?? 0) >= 0 ? "good" : "bad"}
+                  sub={
+                    analysis.feasibilityCalculable
+                      ? `Max payable ${money(analysis.maxPayableToOwners, { compact: true })}`
+                      : "Planning required"
+                  }
+                  tone={
+                    analysis.feasibilityCalculable
+                      ? (analysis.acquisitionHeadroom ?? 0) >= 0
+                        ? "good"
+                        : "bad"
+                      : undefined
+                  }
                 />
               </div>
             </Panel>

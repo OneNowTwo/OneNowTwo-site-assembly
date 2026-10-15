@@ -100,10 +100,12 @@ export function ParcelPanel({
   parcel,
   assumptions: _unusedAssumptions,
   inAssembly,
+  onAnalyse,
   onAdd,
   onRemove,
   onFind,
   finding,
+  analysing = false,
   onRetry,
   centres = [],
 }: {
@@ -111,10 +113,13 @@ export function ParcelPanel({
   /** Kept for call-site compatibility; official FSR no longer uses silent assumptions. */
   assumptions: Assumptions;
   inAssembly: boolean;
+  /** Primary CTA — create/open Opportunity (never append to assembly). */
+  onAnalyse: () => void;
   onAdd: () => void;
   onRemove: () => void;
   onFind: () => void;
   finding: boolean;
+  analysing?: boolean;
   onRetry: () => void;
   centres?: NominatedCentre[];
 }) {
@@ -172,8 +177,8 @@ export function ParcelPanel({
         <LiveDataBadge cached={parcel.source === "CACHED_NSW"} />
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2">
-        <Button variant="primary" onClick={onAdd}>
-          Analyse
+        <Button variant="primary" onClick={onAnalyse} disabled={analysing}>
+          {analysing ? "…" : "Analyse"}
         </Button>
         <Link
           href="/watching"

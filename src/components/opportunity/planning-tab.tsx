@@ -168,9 +168,26 @@ export function PlanningTab() {
           <dl className="space-y-1.5 text-[12px]">
             <Line k="Zones" v={zones.join(", ")} />
             <Line k="Combined site area" v={sqm(analysis.metrics.totalAreaSqm)} />
-            <Line k="BASE LEP FSR" v={formatLepFsr(ec.baseFsr)} />
+            <Line
+              k="BASE LEP FSR"
+              v={
+                ec.fsrSource === "INDEX_SNAPSHOT"
+                  ? `${formatLepFsr(ec.baseFsr)} · STORED INDEX`
+                  : formatLepFsr(ec.baseFsr)
+              }
+              tag={ec.fsrSource === "OFFICIAL" ? "OFFICIAL" : undefined}
+            />
             <Line k="STATE PATHWAY FSR" v={ec.stateFsr != null ? fsr(ec.stateFsr) : "—"} />
-            <Line k="MODELLED EFFECTIVE FSR" v={ec.effectiveFsr != null ? fsr(ec.effectiveFsr) : "—"} />
+            <Line
+              k="MODELLED EFFECTIVE FSR"
+              v={
+                ec.effectiveFsr != null
+                  ? ec.fsrSource === "INDEX_SNAPSHOT"
+                    ? `${fsr(ec.effectiveFsr)} · STORED INDEX`
+                    : fsr(ec.effectiveFsr)
+                  : "—"
+              }
+            />
             <Line
               k="LEP height (lowest)"
               v={ec.baseHeightM != null ? `${ec.baseHeightM} m` : "—"}
@@ -190,7 +207,15 @@ export function PlanningTab() {
         <Panel title="Basis used for yield">
           <dl className="space-y-1.5 text-[12px]">
             <Line k="Site area" v={sqm(analysis.calculation.siteAreaSqm)} tag={analysis.site.siteAreaSource === "OVERRIDE" ? "ASSUMPTION" : "OFFICIAL"} />
-            <Line k="BASE LEP FSR" v={formatLepFsr(ec.baseFsr)} tag={ec.baseFsr != null ? "OFFICIAL" : undefined} />
+            <Line
+              k="BASE LEP FSR"
+              v={
+                ec.fsrSource === "INDEX_SNAPSHOT"
+                  ? `${formatLepFsr(ec.baseFsr)} · STORED INDEX`
+                  : formatLepFsr(ec.baseFsr)
+              }
+              tag={ec.fsrSource === "OFFICIAL" && ec.baseFsr != null ? "OFFICIAL" : undefined}
+            />
             {ec.fsrSource === "STATE_PATHWAY" ? (
               <>
                 <Line k="State pathway" v={ec.statePathway ?? "Low & Mid-Rise Housing"} />
@@ -213,6 +238,13 @@ export function PlanningTab() {
                 <Line k="Height" v={ec.effectiveHeightM != null ? `${ec.effectiveHeightM} m` : "—"} />
                 <Line k="Status" v={ec.status} />
               </>
+            ) : ec.fsrSource === "INDEX_SNAPSHOT" ? (
+              <>
+                <Line k="FSR source" v="STORED INDEX EVIDENCE" />
+                <Line k="Effective FSR" v={ec.effectiveFsr != null ? fsr(ec.effectiveFsr) : "—"} />
+                <Line k="Provenance" v="Official NSW planning at index time — not LIVE" />
+                <Line k="Status" v="Refresh recommended" />
+              </>
             ) : (
               <Line
                 k="FSR"
@@ -224,9 +256,11 @@ export function PlanningTab() {
           <p className="mt-2 text-[11px] text-muted">
             {ec.fsrSource === "STATE_PATHWAY"
               ? "Same PlanningSnapshot effective controls drive Yield / Feasibility / Acquisition / score."
-              : ec.fsrSource === "NO_MAPPED"
-                ? "USER FSR REQUIRED only when no LEP FSR and no State pathway apply. Unmapped ≠ 0:1."
-                : "Override on the Yield tab as a USER ASSUMPTION — never silently mixed with official FSR."}
+              : ec.fsrSource === "INDEX_SNAPSHOT"
+                ? "STORED INDEX EVIDENCE — official NSW planning captured at index time. Not LIVE. Refresh recommended."
+                : ec.fsrSource === "NO_MAPPED"
+                  ? "USER FSR REQUIRED only when no LEP FSR, index snapshot, or State pathway apply. Unmapped ≠ 0:1."
+                  : "Override on the Yield tab as a USER ASSUMPTION — never silently mixed with official FSR."}
           </p>
         </Panel>
         <Panel title="Flags">
@@ -236,6 +270,9 @@ export function PlanningTab() {
             )}
             {ec.fsrSource === "NO_MAPPED" && (
               <li className="text-amber-800">− No mapped LEP FSR and no State pathway — not FSR 0:1; USER FSR required to model yield</li>
+            )}
+            {ec.fsrSource === "INDEX_SNAPSHOT" && (
+              <li className="text-amber-800">− Using STORED INDEX EVIDENCE (official NSW planning at index time) — refresh recommended; not LIVE</li>
             )}
             {ec.fsrSource === "STATE_PATHWAY" && (
               <li className="text-amber-800">− State LMR pathway modelled from 800 m straight-line screen (ESTIMATED) — planning confirmation required</li>

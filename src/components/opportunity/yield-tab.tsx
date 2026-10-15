@@ -191,10 +191,47 @@ export function YieldTab() {
         <div className="col-span-7 space-y-4">
           <Panel title="Theoretical vs achievable yield">
             <div className="grid grid-cols-4 gap-4">
-              <Stat label="Theoretical GFA" value={sqm(y.theoreticalGfa)} sub={`Site × FSR ${fsr(analysis.base.fsr)}`} />
-              <Stat label="Achievable GFA" value={sqm(y.achievableGfa)} tone="brand" sub={y.gfaSource === "OVERRIDE" ? "Manual override" : `× ${pct(y.planningAdjustment)} planning adj.`} />
-              <Stat label="Saleable area" value={sqm(y.saleableArea)} />
-              <Stat label="Dwellings" value={num(y.dwellings)} sub={a.revenueMode === "UNIT_MIX" ? "From unit mix" : `${y.dwellingsExact.toFixed(1)} before rounding`} />
+              <Stat
+                label="Theoretical GFA"
+                value={analysis.feasibilityCalculable ? sqm(y.theoreticalGfa) : "—"}
+                sub={
+                  analysis.feasibilityCalculable
+                    ? `Site × FSR ${
+                        analysis.planningSnapshot.effectiveControls.effectiveFsr != null
+                          ? fsr(analysis.planningSnapshot.effectiveControls.effectiveFsr)
+                          : "—"
+                      }`
+                    : "Planning required"
+                }
+              />
+              <Stat
+                label="Achievable GFA"
+                value={analysis.feasibilityCalculable ? sqm(y.achievableGfa) : "—"}
+                tone="brand"
+                sub={
+                  !analysis.feasibilityCalculable
+                    ? "Planning required"
+                    : y.gfaSource === "OVERRIDE"
+                      ? "Manual override"
+                      : `× ${pct(y.planningAdjustment)} planning adj.`
+                }
+              />
+              <Stat
+                label="Saleable area"
+                value={analysis.feasibilityCalculable ? sqm(y.saleableArea) : "—"}
+                sub={!analysis.feasibilityCalculable ? "Planning required" : undefined}
+              />
+              <Stat
+                label="Dwellings"
+                value={analysis.feasibilityCalculable ? num(y.dwellings) : "—"}
+                sub={
+                  !analysis.feasibilityCalculable
+                    ? "Planning required"
+                    : a.revenueMode === "UNIT_MIX"
+                      ? "From unit mix"
+                      : `${y.dwellingsExact.toFixed(1)} before rounding`
+                }
+              />
             </div>
             <div className="mt-5 grid grid-cols-4 gap-4 border-t border-line pt-4">
               <Stat size="md" label="Building footprint" value={sqm(y.footprintSqm)} />
@@ -212,10 +249,52 @@ export function YieldTab() {
           <Panel title="How the yield is calculated">
             <table className="num w-full text-[12px]">
               <tbody>
-                <Calc label="Theoretical GFA" formula={`${sqm(site.siteAreaSqm)} × FSR ${fsr(analysis.base.fsr)}`} value={sqm(y.theoreticalGfa)} />
-                <Calc label="Achievable GFA" formula={y.gfaSource === "OVERRIDE" ? "Manual override" : `Theoretical × ${(y.planningAdjustment * 100).toFixed(0)}% planning adjustment`} value={sqm(y.achievableGfa)} />
-                <Calc label="Saleable area" formula={a.revenueMode === "UNIT_MIX" && totals.totalSaleableArea > 0 ? "From unit mix saleable areas" : `Achievable GFA × ${(a.efficiency * 100).toFixed(0)}% efficiency`} value={sqm(y.saleableArea)} />
-                <Calc label="Dwellings" formula={a.revenueMode === "UNIT_MIX" ? "Sum of unit mix counts" : `Saleable ÷ ${a.avgDwellingSizeSqm} sqm average, rounded down`} value={num(y.dwellings)} />
+                <Calc
+                  label="Theoretical GFA"
+                  formula={
+                    analysis.feasibilityCalculable
+                      ? `${sqm(site.siteAreaSqm)} × FSR ${
+                          analysis.planningSnapshot.effectiveControls.effectiveFsr != null
+                            ? fsr(analysis.planningSnapshot.effectiveControls.effectiveFsr)
+                            : "—"
+                        }`
+                      : "Planning required"
+                  }
+                  value={analysis.feasibilityCalculable ? sqm(y.theoreticalGfa) : "—"}
+                />
+                <Calc
+                  label="Achievable GFA"
+                  formula={
+                    !analysis.feasibilityCalculable
+                      ? "Planning required"
+                      : y.gfaSource === "OVERRIDE"
+                        ? "Manual override"
+                        : `Theoretical × ${(y.planningAdjustment * 100).toFixed(0)}% planning adjustment`
+                  }
+                  value={analysis.feasibilityCalculable ? sqm(y.achievableGfa) : "—"}
+                />
+                <Calc
+                  label="Saleable area"
+                  formula={
+                    !analysis.feasibilityCalculable
+                      ? "Planning required"
+                      : a.revenueMode === "UNIT_MIX" && totals.totalSaleableArea > 0
+                        ? "From unit mix saleable areas"
+                        : `Achievable GFA × ${(a.efficiency * 100).toFixed(0)}% efficiency`
+                  }
+                  value={analysis.feasibilityCalculable ? sqm(y.saleableArea) : "—"}
+                />
+                <Calc
+                  label="Dwellings"
+                  formula={
+                    !analysis.feasibilityCalculable
+                      ? "Planning required"
+                      : a.revenueMode === "UNIT_MIX"
+                        ? "Sum of unit mix counts"
+                        : `Saleable ÷ ${a.avgDwellingSizeSqm} sqm average, rounded down`
+                  }
+                  value={analysis.feasibilityCalculable ? num(y.dwellings) : "—"}
+                />
               </tbody>
             </table>
           </Panel>

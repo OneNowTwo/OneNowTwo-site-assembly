@@ -278,7 +278,7 @@ const count = (n: number, noun: string) => `${words[n] ?? n} ${noun}${n === 1 ? 
 export interface ScoreAssemblyOptions {
   /** Effective modelled FSR driving yield (State pathway / override) — not LEP-only. */
   effectiveFsr?: number | null;
-  fsrSource?: "OFFICIAL" | "NO_MAPPED" | "OVERRIDE" | "STATE_PATHWAY" | null;
+  fsrSource?: "OFFICIAL" | "NO_MAPPED" | "OVERRIDE" | "STATE_PATHWAY" | "INDEX_SNAPSHOT" | null;
   statePathwayName?: string | null;
   lepFsr?: number | null;
   proximityLabel?: string | null;
@@ -291,7 +291,9 @@ export interface ScoreAssemblyOptions {
 export function scoreAssembly(m: AssemblyMetrics, a: Assumptions, opts?: ScoreAssemblyOptions): OpportunityScore {
   const factors: ScoreFactor[] = [];
   const modelled =
-    opts?.fsrSource === "STATE_PATHWAY" || opts?.fsrSource === "OVERRIDE"
+    opts?.fsrSource === "STATE_PATHWAY" ||
+    opts?.fsrSource === "OVERRIDE" ||
+    opts?.fsrSource === "INDEX_SNAPSHOT"
       ? (opts.effectiveFsr ?? m.weightedFsr)
       : m.weightedFsr;
   const hasUsableModelledFsr = modelled != null && modelled > 0 && opts?.fsrSource !== "NO_MAPPED";
@@ -345,6 +347,11 @@ export function scoreAssembly(m: AssemblyMetrics, a: Assumptions, opts?: ScoreAs
     factors.push({
       sign: modelled >= 1.2 ? "+" : "-",
       text: `USER modelled FSR ${modelled.toFixed(2)}:1 — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA`,
+    });
+  } else if (opts?.fsrSource === "INDEX_SNAPSHOT" && hasUsableModelledFsr) {
+    factors.push({
+      sign: modelled >= 1.2 ? "+" : "-",
+      text: `STORED INDEX EVIDENCE FSR ${modelled.toFixed(2)}:1 (official NSW at index time — not LIVE) — ${Math.round(m.achievableGfa).toLocaleString("en-AU")} sqm achievable GFA · Refresh recommended`,
     });
   } else if (allFsrUnmapped || opts?.fsrSource === "NO_MAPPED") {
     factors.push({

@@ -20,11 +20,52 @@ export function AcquisitionTab() {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-6 gap-4 rounded-[3px] border border-line bg-white p-4">
-        <Stat label="Max payable to owners" value={money(al.budget, { compact: true })} tone="brand" sub="Base case maximum" />
-        <Stat label="Combined existing property value" value={money(al.totalMarketValue, { compact: true })} sub={dto.demoFinancialData ? <DemoFinancialBadge /> : "Developer estimates"} />
-        <Stat label="Total opening offers" value={money(al.totalOpening, { compact: true })} sub={al.totalMarketValue ? `${pct(al.totalOpening / al.totalMarketValue - 1, 0, true)} vs value` : undefined} />
-        <Stat label="Total maximum offers" value={money(al.totalMaximum, { compact: true })} sub={al.totalMarketValue ? `${pct(al.totalMaximum / al.totalMarketValue - 1, 0, true)} vs value` : undefined} />
-        <Stat label="Negotiation headroom" value={money(al.totalNegotiationHeadroom, { compact: true })} sub="Max − opening (total)" />
+        <Stat
+          label="Max payable to owners"
+          value={analysis.feasibilityCalculable ? money(al.budget, { compact: true }) : "—"}
+          tone={analysis.feasibilityCalculable ? "brand" : undefined}
+          sub={analysis.feasibilityCalculable ? "Base case maximum" : "Planning required"}
+        />
+        <Stat
+          label="Combined existing property value"
+          value={analysis.marketValueComplete ? money(al.totalMarketValue, { compact: true }) : "—"}
+          sub={
+            dto.demoFinancialData ? (
+              <DemoFinancialBadge />
+            ) : analysis.marketValueComplete ? (
+              "Developer estimates"
+            ) : (
+              "VALUE REQUIRED"
+            )
+          }
+        />
+        <Stat
+          label="Total opening offers"
+          value={analysis.feasibilityCalculable ? money(al.totalOpening, { compact: true }) : "—"}
+          sub={
+            !analysis.feasibilityCalculable
+              ? "Planning required"
+              : al.totalMarketValue
+                ? `${pct(al.totalOpening / al.totalMarketValue - 1, 0, true)} vs value`
+                : undefined
+          }
+        />
+        <Stat
+          label="Total maximum offers"
+          value={analysis.feasibilityCalculable ? money(al.totalMaximum, { compact: true }) : "—"}
+          sub={
+            !analysis.feasibilityCalculable
+              ? "Planning required"
+              : al.totalMarketValue
+                ? `${pct(al.totalMaximum / al.totalMarketValue - 1, 0, true)} vs value`
+                : undefined
+          }
+        />
+        <Stat
+          label="Negotiation headroom"
+          value={analysis.feasibilityCalculable ? money(al.totalNegotiationHeadroom, { compact: true }) : "—"}
+          sub={!analysis.feasibilityCalculable ? "Planning required" : "Max − opening (total)"}
+        />
         <Field label="Opening offer % of maximum">
           <NumberField kind="pct" value={a.openingOfferPct} onCommit={(v) => updateOverrides({ openingOfferPct: v ?? undefined })} />
         </Field>

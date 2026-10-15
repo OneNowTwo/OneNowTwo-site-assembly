@@ -54,7 +54,12 @@ export interface ScenarioResult {
   acquisitionHeadroomPercent: number | null;
 }
 
-export type SiteFsrSource = "OFFICIAL" | "NO_MAPPED" | "OVERRIDE" | "STATE_PATHWAY";
+export type SiteFsrSource =
+  | "OFFICIAL"
+  | "NO_MAPPED"
+  | "OVERRIDE"
+  | "STATE_PATHWAY"
+  | "INDEX_SNAPSHOT";
 export type SiteHeightSource = "OFFICIAL" | "OVERRIDE" | "STATE_PATHWAY" | "NONE";
 /** CALCULABLE = a usable FSR exists; REQUIRES_PLANNING_INPUT = missing LEP FSR and no State pathway yet. */
 export type YieldStatus = "CALCULABLE" | "REQUIRES_PLANNING_INPUT";
@@ -67,6 +72,7 @@ export interface SiteBasis {
    * OFFICIAL = mapped EPI FSR;
    * STATE_PATHWAY = current Housing SEPP / LMR (or similar) modelled control;
    * OVERRIDE = explicit user assumption;
+   * INDEX_SNAPSHOT = persisted SiteCandidateIndex statutory FSR (not LIVE);
    * NO_MAPPED = no LEP FSR and no pathway/override — NOT the same as FSR 0:1.
    */
   fsrSource: SiteFsrSource;
@@ -571,7 +577,9 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
         ? site.fsrCertainty === "REQUIRES_PLANNING_CONFIRMATION"
           ? "REQUIRES_CONFIRMATION"
           : "MODELLED_PATHWAY"
-        : "LEP_CONTROLS";
+        : site.fsrSource === "INDEX_SNAPSHOT"
+          ? "REQUIRES_CONFIRMATION"
+          : "LEP_CONTROLS";
   const economicsConclusion = !feasibilityCalculable
     ? "NOT_CALCULABLE"
     : viability === "LIKELY_VIABLE"
@@ -580,7 +588,7 @@ export function analyseOpportunity(allLots: OpportunityLot[], a: Assumptions, in
         ? "MARGINAL"
         : "UNECONOMIC";
   const conclusionSummary = !feasibilityCalculable
-    ? "FEASIBILITY NOT YET CALCULABLE — no mapped LEP FSR and no modelled State pathway applied. Missing FSR is not FSR 0:1."
+    ? "FEASIBILITY NOT YET CALCULABLE — no mapped LEP FSR, index snapshot, or modelled State pathway applied. Missing FSR is not FSR 0:1."
     : economicsConclusion === "UNECONOMIC" && existingValue != null
       ? `DEVELOPABLE UNDER MODELLED CONTROLS BUT UNECONOMIC — existing ~$${Math.round(existingValue / 1e5) / 10}m vs max payable ~$${Math.round(budget / 1e5) / 10}m.`
       : economicsConclusion === "VIABLE"

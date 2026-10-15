@@ -69,6 +69,10 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
   let statePathwayFsr: number | null;
   let statePathwayName: string | null;
 
+  const indexSnap = input.inputs.indexPlanningSnapshot;
+  const indexCurrentFsr =
+    indexSnap?.currentFsr != null && indexSnap.currentFsr > 0 ? indexSnap.currentFsr : null;
+
   if (input.inputs.fsrOverride != null) {
     const fromScan = input.inputs.fsrOverrideKind === "SCAN_MODELLED";
     fsrSource = fromScan ? "STATE_PATHWAY" : "OVERRIDE";
@@ -96,7 +100,25 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
       statePathwayFsr = snap?.statePathwayFsr ?? null;
       effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
     }
+  } else if (!(anyUnmapped && officialFsr <= 0) && officialFsr > 0) {
+    // 1. Parcel-level official LEP FSR when available.
+    fsrSource = "OFFICIAL";
+    yieldStatus = "CALCULABLE";
+    effectiveFsr = officialFsr;
+    statePathwayFsr = null;
+    statePathwayName = null;
+    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
+  } else if (indexCurrentFsr != null) {
+    // 2. Persisted INDEX planning snapshot — fallback when live parcel planning is missing.
+    // Never erase this merely because Planning Portal failed at Analyse time.
+    fsrSource = "INDEX_SNAPSHOT";
+    yieldStatus = "CALCULABLE";
+    effectiveFsr = indexCurrentFsr;
+    statePathwayFsr = snap?.statePathwayFsr ?? null;
+    statePathwayName = snap?.statePathwayName ?? null;
+    effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
   } else if (anyUnmapped && officialFsr <= 0) {
+    // 3. No usable FSR — planning required (never coerce to a real 0 economics path).
     fsrSource = "NO_MAPPED";
     yieldStatus = "REQUIRES_PLANNING_INPUT";
     effectiveFsr = 0;
@@ -112,12 +134,16 @@ export function resolvePlanning(input: ResolvePlanningInput): PlanningSnapshot {
     effectiveHeightM = input.inputs.heightOverrideM ?? lepHeightM;
   }
 
+  // When INDEX snapshot supplies LEP base, surface it as lepFsr for statutory display.
+  const resolvedLepFsr =
+    fsrSource === "INDEX_SNAPSHOT" ? indexCurrentFsr : lepFsr;
+
   const site: PlanningSiteBasis = {
     siteAreaSqm: input.inputs.siteAreaOverride ?? parcelArea,
     fsr: effectiveFsr,
     fsrSource,
     yieldStatus,
-    lepFsr,
+    lepFsr: resolvedLepFsr,
     statePathwayFsr,
     statePathwayName,
     lmrCentreName: snap?.lmrCentre ?? null,

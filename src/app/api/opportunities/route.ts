@@ -100,6 +100,14 @@ const createSchema = z.object({
   parcels: z.array(parcelSchema).min(1).max(12),
   /** Opportunity inputs — must include fsrOverride + scanProvenance when created from Area Scan. */
   inputs: z.record(z.string(), z.unknown()).optional(),
+  /** Exact indexed candidate to link after create (INDEX_CANDIDATE Analyse). */
+  linkIndexCandidate: z
+    .object({
+      candidateId: z.string().optional().nullable(),
+      canonicalKey: z.string().optional().nullable(),
+    })
+    .optional()
+    .nullable(),
 });
 
 export async function POST(req: Request) {
@@ -113,6 +121,7 @@ export async function POST(req: Request) {
       parcels: parsed.data.parcels as ParcelData[],
       userId: session.userId,
       inputs: parsed.data.inputs,
+      linkIndexCandidate: parsed.data.linkIndexCandidate,
     });
     return NextResponse.json({ id: opp.id }, { status: 201 });
   } catch (err) {
