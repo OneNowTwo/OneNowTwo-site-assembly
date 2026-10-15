@@ -57,7 +57,10 @@ export async function POST(req: Request) {
     return jsonError("Could not load cadastral parcels for the linked ids", 503);
   }
   if (parcels.length < parcelIds.length) {
-    // Proceed with resolved subset but surface the gap.
+    return jsonError(
+      `Cannot Analyse — only ${parcels.length} of ${parcelIds.length} key-site parcels resolved. Exact assembly must match; no silent lot drop.`,
+      422,
+    );
   }
 
   const name =

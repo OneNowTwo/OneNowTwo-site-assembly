@@ -9,7 +9,10 @@ import type { StrategyProfile } from "@/lib/source-watcher/strategy-profile";
 import { buildMapHref } from "@/lib/map/map-target";
 import { humanizeSiteReason } from "@/lib/intelligence/site-reasons";
 import { resolveDisplayScore, type ScoreProvenance } from "@/lib/intelligence/display-score";
-import { pickBestPerIndexFamily } from "@/lib/intelligence/index-candidate-families";
+import {
+  groupIndexCandidateFamilies,
+  pickBestPerIndexFamily,
+} from "@/lib/intelligence/index-candidate-families";
 import {
   loadLinkedOpportunityScoreIndex,
   resolveLinkedOpportunityScore,
@@ -22,8 +25,11 @@ export type SiteCandidateView = {
   canonicalKey: string;
   name: string;
   address: string;
+  /** Short parcel-set hint so same-street disjoint assemblies are distinguishable. */
+  parcelHint: string | null;
   suburb: string | null;
   lga: string | null;
+  zone: string | null;
   siteAreaSqm: number | null;
   lotCount: number | null;
   /** Confirmed owners only — null/unknown for INDEX_DISCOVERY (lot count ≠ owners). */
@@ -36,6 +42,12 @@ export type SiteCandidateView = {
   scoreProvenance?: ScoreProvenance;
   maxPayable: number | null;
   headroom: number | null;
+  /** Only when DETAILED and both maxPayable + headroom known. */
+  existingValue: number | null;
+  /** Single human "why it matters" line for Today. */
+  whyItMatters: string;
+  /** Other overlapping/subset assembly configs in the same family (not shown as primary rows). */
+  familyAlternativeCount: number;
   reasons: string[];
   status: string;
   kind: string;
@@ -45,6 +57,63 @@ export type SiteCandidateView = {
   sourceLabel?: string | null;
   sourceHref?: string | null;
 };
+
+/** One concise human reason for Today ranking — not a bullet dump. */
+export function whyItMattersSentence(row: {
+  zone?: string | null;
+  suburb?: string | null;
+  lga?: string | null;
+  siteAreaSqm?: number | null;
+  lotCount?: number | null;
+  currentFsr?: number | null;
+  proposedFsr?: number | null;
+  stationDistanceM?: number | null;
+  quickHeadroom?: number | null;
+  keySiteStatus?: string | null;
+}): string {
+  const place = row.suburb ?? row.lga;
+  const area =
+    row.siteAreaSqm != null && Number.isFinite(row.siteAreaSqm)
+      ? `${Math.round(row.siteAreaSqm).toLocaleString("en-AU")} sqm`
+      : null;
+  const lots =
+    row.lotCount != null && row.lotCount > 1 ? `${row.lotCount}-lot assembly` : row.lotCount === 1 ? "single lot" : null;
+  const zone = row.zone?.trim() || null;
+  const lepFsr = row.currentFsr != null && row.currentFsr > 0 ? `${row.currentFsr}:1` : null;
+  const pathway =
+    row.proposedFsr != null && row.proposedFsr > 0 && (row.currentFsr == null || row.proposedFsr > row.currentFsr)
+      ? `modelled pathway ${row.proposedFsr}:1`
+      : null;
+
+  if (zone && lepFsr && area) {
+    const near = place ? ` near ${place}` : "";
+    const station =
+      row.stationDistanceM != null && row.stationDistanceM <= 800
+        ? ` · ~${Math.round(row.stationDistanceM)}m to station`
+        : "";
+    return `${zone} · ${lepFsr} · ${area}${lots && row.lotCount! > 1 ? ` ${lots}` : ""}${near}${station}`;
+  }
+  if (pathway && zone) {
+    return `${zone} · ${pathway}${place ? ` within ${place}` : ""}${
+      row.stationDistanceM != null && row.stationDistanceM <= 800 ? " outer/centre screening" : ""
+    }`;
+  }
+  if (row.quickHeadroom != null && row.quickHeadroom > 0 && lots && zone) {
+    return `Large ${lots.replace(" assembly", "")} ${zone} site with positive modelled acquisition headroom${
+      place ? ` · ${place}` : ""
+    }`;
+  }
+  if (row.keySiteStatus) {
+    return `Key site${place ? ` in ${place}` : ""} — ${row.keySiteStatus.replaceAll("_", " ").toLowerCase()}`;
+  }
+  if (area && place) {
+    return `Planning incomplete — worth checking because of site size (${area}) and location (${place})`;
+  }
+  if (area) {
+    return `Planning incomplete — worth checking because of site size (${area})`;
+  }
+  return place ? `Worth checking in ${place}` : "Worth checking on the map";
+}
 
 /** Raw screening/strategy score before clamp / Opportunity override. */
 export function screeningStrategyScore(
@@ -65,30 +134,35 @@ export function screeningStrategyScore(
     row.strategyScores && typeof row.strategyScores === "object"
       ? (row.strategyScores as Record<string, number>)[profile.strategy]
       : undefined;
-  if (typeof cached === "number") return cached;
 
-  let score = row.quickScore ?? 40;
-  const zone = (row.zone ?? "").toUpperCase();
-  if (profile.preferredZones.length) {
-    if (profile.preferredZones.some((z) => zone.startsWith(z.toUpperCase()))) score += 18;
-    else score -= 8;
+  // Compress additive bonuses so 100 stays exceptional (not common for typical R3+area+station rows).
+  // Base quickScore already encodes discovery quality; profile bonuses are soft reweights.
+  let score = typeof cached === "number" ? cached : (row.quickScore ?? 40);
+  if (typeof cached !== "number") {
+    const zone = (row.zone ?? "").toUpperCase();
+    if (profile.preferredZones.length) {
+      if (profile.preferredZones.some((z) => zone.startsWith(z.toUpperCase()))) score += 8;
+      else score -= 10;
+    }
+    if (profile.minSiteAreaSqm != null && row.siteAreaSqm != null) {
+      if (row.siteAreaSqm >= profile.minSiteAreaSqm) score += 4;
+      else score -= 14;
+    }
+    if (row.proposedFsr != null && row.currentFsr != null && row.proposedFsr > row.currentFsr) score += 6;
+    if (profile.maxStationDistanceM != null && row.stationDistanceM != null) {
+      if (row.stationDistanceM <= profile.maxStationDistanceM) score += 5;
+      else score -= 8;
+    }
+    if (row.keySiteStatus) score += 4;
+    if (profile.strategy === "TOWNHOUSES" && /R2|R3/.test(zone)) score += 3;
+    if (profile.strategy === "APARTMENTS" && /R3|R4|MU1|B4|E1/.test(zone)) score += 3;
+    if (profile.strategy === "CO_LIVING" && row.stationDistanceM != null && row.stationDistanceM <= 800) {
+      score += 4;
+    }
   }
-  if (profile.minSiteAreaSqm != null && row.siteAreaSqm != null) {
-    if (row.siteAreaSqm >= profile.minSiteAreaSqm) score += 8;
-    else score -= 12;
-  }
-  if (row.proposedFsr != null && row.currentFsr != null && row.proposedFsr > row.currentFsr) score += 12;
-  if (profile.maxStationDistanceM != null && row.stationDistanceM != null) {
-    if (row.stationDistanceM <= profile.maxStationDistanceM) score += 10;
-    else score -= 6;
-  }
-  if (row.keySiteStatus) score += 8;
-  if (profile.strategy === "TOWNHOUSES" && /R2|R3/.test(zone)) score += 6;
-  if (profile.strategy === "APARTMENTS" && /R3|R4|MU1|B4|E1/.test(zone)) score += 6;
-  if (profile.strategy === "CO_LIVING" && row.stationDistanceM != null && row.stationDistanceM <= 800) {
-    score += 8;
-  }
-  return score;
+  // Soft compress toward mid-high band so stacked / legacy-cached scores rarely pin at 100.
+  if (score > 85) score = 85 + (score - 85) * 0.45;
+  return Math.round(score);
 }
 
 function reasonsFor(
@@ -153,16 +227,20 @@ export async function listTodaySiteCandidates(
     .sort((a, b) => b.score - a.score || b.screening - a.screening);
 
   // One best member per overlapping/subset parcel family before LGA spread.
-  const familyBest = pickBestPerIndexFamily(
-    ranked.map(({ row, score }) => ({
-      id: row.id,
-      canonicalKey: row.canonicalKey,
-      parcelIds: Array.isArray(row.parcelIds) ? (row.parcelIds as string[]) : [],
-      score,
-      siteAreaSqm: row.siteAreaSqm,
-      lotCount: row.lotCount,
-    })),
-  );
+  const familyMembers = ranked.map(({ row, score }) => ({
+    id: row.id,
+    canonicalKey: row.canonicalKey,
+    parcelIds: Array.isArray(row.parcelIds) ? (row.parcelIds as string[]) : [],
+    score,
+    siteAreaSqm: row.siteAreaSqm,
+    lotCount: row.lotCount,
+  }));
+  const families = groupIndexCandidateFamilies(familyMembers);
+  const altCountByKey = new Map<string, number>();
+  for (const f of families) {
+    altCountByKey.set(f.best.canonicalKey, f.alternatives.length);
+  }
+  const familyBest = pickBestPerIndexFamily(familyMembers);
   const familyKeys = new Set(familyBest.map((m) => m.canonicalKey));
   const rankedFamilies = ranked.filter((r) => familyKeys.has(r.row.canonicalKey));
 
@@ -182,13 +260,30 @@ export async function listTodaySiteCandidates(
       lng: row.centroidLng,
       zoom: 18,
     });
+    const parcelIds = Array.isArray(row.parcelIds) ? (row.parcelIds as string[]) : [];
+    const parcelHint =
+      parcelIds.length > 0
+        ? `parcels ${parcelIds
+            .map((id) => id.replace(/^nsw-cadid:/i, ""))
+            .slice(0, 2)
+            .join("+")}${parcelIds.length > 2 ? "…" : ""}`
+        : null;
+    const detailed = provenance === "DETAILED";
+    const maxPayable = detailed ? row.maxPayable : null;
+    const headroom = detailed ? row.quickHeadroom : null;
+    const existingValue =
+      detailed && maxPayable != null && headroom != null && Number.isFinite(maxPayable) && Number.isFinite(headroom)
+        ? maxPayable - headroom
+        : null;
     return {
       id: row.id,
       canonicalKey: row.canonicalKey,
       name: row.address ?? row.suburb ?? row.canonicalKey,
       address: row.address ?? row.suburb ?? "Sydney site",
+      parcelHint,
       suburb: row.suburb,
       lga: row.lga,
+      zone: row.zone ?? null,
       siteAreaSqm: row.siteAreaSqm,
       lotCount: row.lotCount,
       // INDEX_DISCOVERY never has title-proven owner counts — do not surface lotCount as owners.
@@ -198,8 +293,11 @@ export async function listTodaySiteCandidates(
       stationDistanceM: row.stationDistanceM,
       score,
       scoreProvenance: provenance,
-      maxPayable: row.maxPayable,
-      headroom: row.quickHeadroom,
+      maxPayable,
+      headroom,
+      existingValue,
+      whyItMatters: whyItMattersSentence(row),
+      familyAlternativeCount: altCountByKey.get(row.canonicalKey) ?? 0,
       reasons: reasonsFor(row),
       status: "CANDIDATE",
       kind: row.kind,

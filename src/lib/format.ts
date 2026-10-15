@@ -9,6 +9,30 @@ export function money(n: number | null | undefined, opts: { compact?: boolean; d
   return neg ? `−${s}` : s;
 }
 
+/**
+ * User-facing max payable when residual is ≤ 0.
+ * Underlying negative residual remains available via `money(residual)` for diagnostics.
+ */
+export function supportedLandValueDisplay(
+  maxPayable: number | null | undefined,
+  opts?: { compact?: boolean; showResidual?: boolean },
+): { primary: string; secondary: string | null; unsupported: boolean } {
+  if (maxPayable == null || !Number.isFinite(maxPayable)) {
+    return { primary: "—", secondary: null, unsupported: false };
+  }
+  if (maxPayable > 0) {
+    return { primary: money(maxPayable, { compact: opts?.compact }), secondary: null, unsupported: false };
+  }
+  return {
+    primary: "NO SUPPORTED LAND VALUE",
+    secondary:
+      opts?.showResidual === false
+        ? "$0 supported land value"
+        : `Modelled residual before floor: ${money(maxPayable, { compact: opts?.compact })}`,
+    unsupported: true,
+  };
+}
+
 export function pct(n: number | null | undefined, dp = 1, signed = false): string {
   if (n == null || !Number.isFinite(n)) return "—";
   const s = `${(n * 100).toFixed(dp)}%`;

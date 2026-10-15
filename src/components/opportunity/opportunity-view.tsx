@@ -8,7 +8,7 @@ import { analyseOpportunity } from "@/lib/analysis/opportunity";
 import { mergeAssumptions, type Assumptions, type OpportunityInputs } from "@/lib/analysis/assumptions";
 import { buildAdjacency } from "@/lib/analysis/geometry";
 import { OPPORTUNITY_STATUSES, DISCLAIMER } from "@/lib/constants";
-import { money, pct, sqm } from "@/lib/format";
+import { money, pct, sqm, supportedLandValueDisplay } from "@/lib/format";
 import { Badge, DemoFinancialBadge, LiveDataBadge, ScoreBadge, Select, cx } from "@/components/ui";
 import { Ctx, type LotPatch, type OpportunityCtx } from "./context";
 import { OverviewTab } from "./overview-tab";
@@ -320,9 +320,29 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
               />
               <HeaderStat
                 label="Max payable"
-                value={analysis.feasibilityCalculable ? money(analysis.maxPayableToOwners, { compact: true }) : "—"}
-                tone={analysis.feasibilityCalculable && analysis.maxPayableToOwners > 0 ? "brand" : undefined}
-                sub={analysis.feasibilityCalculable ? undefined : "Planning required"}
+                value={
+                  analysis.feasibilityCalculable
+                    ? (() => {
+                        const d = supportedLandValueDisplay(analysis.maxPayableToOwners, { compact: true });
+                        return d.primary;
+                      })()
+                    : "—"
+                }
+                tone={
+                  analysis.feasibilityCalculable
+                    ? analysis.maxPayableToOwners > 0
+                      ? "brand"
+                      : "bad"
+                    : undefined
+                }
+                sub={
+                  !analysis.feasibilityCalculable
+                    ? "Planning required"
+                    : analysis.maxPayableToOwners <= 0
+                      ? supportedLandValueDisplay(analysis.maxPayableToOwners, { compact: true }).secondary ??
+                        "$0 supported land value"
+                      : undefined
+                }
                 large
               />
               <HeaderStat

@@ -125,6 +125,9 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ id: opp.id }, { status: 201 });
   } catch (err) {
-    return jsonError(err instanceof Error ? err.message : "Could not save opportunity", 503);
+    const msg = err instanceof Error ? err.message : "Could not save opportunity";
+    const clientFault =
+      msg.includes("Cannot Analyse") || msg.includes("exact assembly") || msg.includes("silent lot drop");
+    return jsonError(msg, clientFault ? 422 : 503);
   }
 }

@@ -5,8 +5,8 @@ import { useOpportunity } from "./context";
 import type { LotDTO } from "@/lib/opportunity-dto";
 import { ACQUISITION_STAGES, ACTIVITY_TYPES, OWNER_TYPES, STAGE_LABELS, type AcquisitionStageValue } from "@/lib/constants";
 import { generateApproachBrief, generateOwnerLetter, suggestedNextAction } from "@/lib/analysis/approach";
-import { date, lotDp, money, pct, sqm } from "@/lib/format";
-import { formatOfferVsMarket } from "@/lib/analysis/registered-sales-evidence";
+import { date, lotDp, money, pct, sqm, supportedLandValueDisplay } from "@/lib/format";
+import { formatOfferVsMarket, unsupportedAcquisitionOfferDisplay } from "@/lib/analysis/registered-sales-evidence";
 import { Badge, Button, DemoFinancialBadge, Field, NumberField, Panel, Select, Stat, TextArea, TextInput, cx } from "@/components/ui";
 
 export function AcquisitionTab() {
@@ -16,15 +16,30 @@ export function AcquisitionTab() {
   const crit = new Map(analysis.critical.map((c) => [c.id, c]));
   const al = analysis.allocation;
   const selected = dto.lots.find((l) => l.id === selectedId) ?? dto.lots[0];
+  const landUnsupported = analysis.feasibilityCalculable && !(al.budget > 0);
+  const landDisplay = supportedLandValueDisplay(al.budget, { compact: true });
+  const noOffer = unsupportedAcquisitionOfferDisplay();
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-6 gap-4 rounded-[3px] border border-line bg-white p-4">
         <Stat
           label="Max payable to owners"
-          value={analysis.feasibilityCalculable ? money(al.budget, { compact: true }) : "—"}
-          tone={analysis.feasibilityCalculable ? "brand" : undefined}
-          sub={analysis.feasibilityCalculable ? "Base case maximum" : "Planning required"}
+          value={
+            !analysis.feasibilityCalculable
+              ? "—"
+              : landUnsupported
+                ? landDisplay.primary
+                : money(al.budget, { compact: true })
+          }
+          tone={analysis.feasibilityCalculable ? (landUnsupported ? "bad" : "brand") : undefined}
+          sub={
+            !analysis.feasibilityCalculable
+              ? "Planning required"
+              : landUnsupported
+                ? landDisplay.secondary ?? "$0 supported land value"
+                : "Base case maximum"
+          }
         />
         <Stat
           label="Combined existing property value"
@@ -41,30 +56,44 @@ export function AcquisitionTab() {
         />
         <Stat
           label="Total opening offers"
-          value={analysis.feasibilityCalculable ? money(al.totalOpening, { compact: true }) : "—"}
+          value={
+            !analysis.feasibilityCalculable ? "—" : landUnsupported ? noOffer.opening : money(al.totalOpening, { compact: true })
+          }
           sub={
             !analysis.feasibilityCalculable
               ? "Planning required"
-              : al.totalMarketValue
-                ? `${pct(al.totalOpening / al.totalMarketValue - 1, 0, true)} vs value`
-                : undefined
+              : landUnsupported
+                ? "No supported acquisition strategy"
+                : al.totalMarketValue
+                  ? `${pct(al.totalOpening / al.totalMarketValue - 1, 0, true)} vs value`
+                  : undefined
           }
         />
         <Stat
           label="Total maximum offers"
-          value={analysis.feasibilityCalculable ? money(al.totalMaximum, { compact: true }) : "—"}
+          value={
+            !analysis.feasibilityCalculable ? "—" : landUnsupported ? noOffer.maximum : money(al.totalMaximum, { compact: true })
+          }
           sub={
             !analysis.feasibilityCalculable
               ? "Planning required"
-              : al.totalMarketValue
-                ? `${pct(al.totalMaximum / al.totalMarketValue - 1, 0, true)} vs value`
-                : undefined
+              : landUnsupported
+                ? "No supported acquisition strategy"
+                : al.totalMarketValue
+                  ? `${pct(al.totalMaximum / al.totalMarketValue - 1, 0, true)} vs value`
+                  : undefined
           }
         />
         <Stat
           label="Negotiation headroom"
-          value={analysis.feasibilityCalculable ? money(al.totalNegotiationHeadroom, { compact: true }) : "—"}
-          sub={!analysis.feasibilityCalculable ? "Planning required" : "Max − opening (total)"}
+          value={
+            !analysis.feasibilityCalculable
+              ? "—"
+              : landUnsupported
+                ? noOffer.headroom
+                : money(al.totalNegotiationHeadroom, { compact: true })
+          }
+          sub={!analysis.feasibilityCalculable ? "Planning required" : landUnsupported ? "—" : "Max − opening (total)"}
         />
         <Field label="Opening offer % of maximum">
           <NumberField kind="pct" value={a.openingOfferPct} onCommit={(v) => updateOverrides({ openingOfferPct: v ?? undefined })} />
@@ -122,25 +151,42 @@ export function AcquisitionTab() {
                   <td className="px-2 py-1.5 text-right">{x ? pct(x.weight) : "—"}</td>
                   <td className="bg-brand-soft/30 px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                     {l.included ? (
-                      <>
-                        <NumberField kind="money" value={x?.maximumOffer} onCommit={(v) => updateLot(l.id, { maxAllocationOverride: v })} className={x?.maximumOverridden ? "border-violet-400" : ""} ariaLabel={`Max allocation ${l.label}`} />
-                        <div className="mt-0.5 text-[10px] text-muted">What you can pay</div>
-                      </>
+                      landUnsupported ? (
+                        <span className="block text-right font-semibold">{noOffer.maximum}</span>
+                      ) : (
+                        <>
+                          <NumberField kind="money" value={x?.maximumOffer} onCommit={(v) => updateLot(l.id, { maxAllocationOverride: v })} className={x?.maximumOverridden ? "border-violet-400" : ""} ariaLabel={`Max allocation ${l.label}`} />
+                          <div className="mt-0.5 text-[10px] text-muted">What you can pay</div>
+                        </>
+                      )
                     ) : (
                       <span className="block text-right">Excluded</span>
                     )}
                   </td>
                   <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                    {l.included && <NumberField kind="money" value={x?.openingOffer} onCommit={(v) => updateLot(l.id, { openingOfferOverride: v })} className={x?.openingOverridden ? "border-violet-400" : ""} ariaLabel={`Opening offer ${l.label}`} />}
+                    {l.included &&
+                      (landUnsupported ? (
+                        <span className="block text-right font-semibold">{noOffer.opening}</span>
+                      ) : (
+                        <NumberField kind="money" value={x?.openingOffer} onCommit={(v) => updateLot(l.id, { openingOfferOverride: v })} className={x?.openingOverridden ? "border-violet-400" : ""} ariaLabel={`Opening offer ${l.label}`} />
+                      ))}
                   </td>
-                  <td className="px-2 py-1.5 text-right font-semibold text-brand">{l.included ? money(x?.negotiationHeadroom, { compact: true }) : "—"}</td>
+                  <td className="px-2 py-1.5 text-right font-semibold text-brand">
+                    {l.included ? (landUnsupported ? noOffer.headroom : money(x?.negotiationHeadroom, { compact: true })) : "—"}
+                  </td>
                   <td className="px-2 py-1.5 text-right">
-                    <div className={cx("font-semibold", (x?.openingPremium ?? 0) > 0 ? "text-good" : (x?.openingPremium ?? 0) < 0 ? "text-muted" : "")}>
-                      {formatOfferVsMarket(x?.openingPremium)}
-                    </div>
-                    <div className="text-[10.5px] text-muted">
-                      {money(x?.ownerPremiumAmount, { compact: true })} · max {formatOfferVsMarket(x?.maximumPremium)}
-                    </div>
+                    {landUnsupported ? (
+                      <div className="font-semibold text-muted">{noOffer.vsMarket}</div>
+                    ) : (
+                      <>
+                        <div className={cx("font-semibold", (x?.openingPremium ?? 0) > 0 ? "text-good" : (x?.openingPremium ?? 0) < 0 ? "text-muted" : "")}>
+                          {formatOfferVsMarket(x?.openingPremium)}
+                        </div>
+                        <div className="text-[10.5px] text-muted">
+                          {money(x?.ownerPremiumAmount, { compact: true })} · max {formatOfferVsMarket(x?.maximumPremium)}
+                        </div>
+                      </>
+                    )}
                   </td>
                   <td className="px-2 py-1.5">{!l.included ? <Badge>Excluded</Badge> : c?.status === "CRITICAL" ? <Badge tone="bad">Yes</Badge> : <Badge tone="good">Optional</Badge>}</td>
                   <td className="px-2 py-1.5 text-[11.5px]">{l.owner?.name?.trim() && !/^unknown$/i.test(l.owner.name.trim()) ? l.owner.name : <span className="text-muted">Owner unknown</span>}</td>

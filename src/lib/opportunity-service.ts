@@ -569,25 +569,53 @@ function marketValueFieldsFromParcel(p: ParcelData): {
   };
 }
 
-/** Link exact SiteCandidateIndex row → Opportunity (by id or canonicalKey only). */
+/**
+ * True when an index candidate may receive this Opportunity's opportunityId.
+ * Exact parcel-set match only — never subset/superset/family.
+ */
+export function exactIndexLinkAllowed(
+  candidateCanonicalKey: string | null | undefined,
+  postedCanonicalKey: string | null | undefined,
+): boolean {
+  const posted = postedCanonicalKey?.trim() || "";
+  const cand = candidateCanonicalKey?.trim() || "";
+  return posted.length > 0 && cand.length > 0 && posted === cand;
+}
+
+/**
+ * Link SiteCandidateIndex → Opportunity only when canonical parcel sets match exactly.
+ *
+ * - If candidateId is supplied: fetch it; link only when candidate.canonicalKey === posted key.
+ * - On mismatch: do NOT mutate that candidate; look up ACTIVE row by posted canonicalKey.
+ * - If no exact row exists: leave Opportunity unlinked.
+ */
 export async function linkIndexCandidateToOpportunity(
   opportunityId: string,
   link: { candidateId?: string | null; canonicalKey?: string | null },
 ): Promise<void> {
   try {
+    const postedKey = link.canonicalKey?.trim() || null;
+    if (!postedKey) return;
+
     if (link.candidateId) {
-      await prisma.siteCandidateIndex.updateMany({
+      const candidate = await prisma.siteCandidateIndex.findFirst({
         where: { id: link.candidateId, lifecycleStatus: "ACTIVE" },
-        data: { opportunityId },
+        select: { id: true, canonicalKey: true },
       });
-      return;
+      if (candidate && exactIndexLinkAllowed(candidate.canonicalKey, postedKey)) {
+        await prisma.siteCandidateIndex.update({
+          where: { id: candidate.id },
+          data: { opportunityId },
+        });
+        return;
+      }
+      // Mismatch or missing candidate — never stamp opportunityId onto the wrong index row.
     }
-    if (link.canonicalKey) {
-      await prisma.siteCandidateIndex.updateMany({
-        where: { canonicalKey: link.canonicalKey, lifecycleStatus: "ACTIVE" },
-        data: { opportunityId },
-      });
-    }
+
+    await prisma.siteCandidateIndex.updateMany({
+      where: { canonicalKey: postedKey, lifecycleStatus: "ACTIVE" },
+      data: { opportunityId },
+    });
   } catch {
     // Non-fatal — Opportunity remains usable without index link.
   }
@@ -624,21 +652,36 @@ export async function createOpportunity(input: {
   const suburb = suburbs.sort((a, b) => suburbs.filter((s) => s === b).length - suburbs.filter((s) => s === a).length)[0] ?? null;
   const parsedInputs = parseOpportunityInputs(input.inputs ?? {});
   const { canonicalParcelKey } = await import("@/lib/intelligence/canonical-key");
-  const parcelCanonicalKey =
-    parsedInputs.indexPlanningSnapshot?.canonicalKey ??
-    input.linkIndexCandidate?.canonicalKey ??
-    canonicalParcelKey(parcels.map((p) => p.externalParcelId));
+  const postedExternalIds = parcels.map((p) => p.externalParcelId);
+  // Canonical key must reflect the posted assembly — never prefer an index key that
+  // describes a different (usually smaller) parcel set than Map Analyse sent.
+  const postedCanonicalKey = canonicalParcelKey(postedExternalIds);
+  const indexCanonicalKey =
+    parsedInputs.indexPlanningSnapshot?.canonicalKey ?? input.linkIndexCandidate?.canonicalKey ?? null;
+  const parcelCanonicalKey = postedCanonicalKey ?? indexCanonicalKey;
 
-  // Exact link already exists → open that Opportunity; never silently create another.
+  // Exact link already exists → open that Opportunity only when parcel sets match.
+  // Never reopen a smaller/different Opportunity for a larger Map assembly.
   if (parcelCanonicalKey) {
     const existing = await prisma.opportunity.findFirst({
       where: { canonicalKey: parcelCanonicalKey, lifecycleStatus: "ACTIVE" },
       orderBy: { updatedAt: "desc" },
+      include: { parcels: { include: { parcel: { select: { externalParcelId: true } } } } },
     });
     if (existing) {
+      const existingIds = new Set(existing.parcels.map((op) => op.parcel.externalParcelId));
+      const postedSet = new Set(postedExternalIds);
+      const sameSet =
+        existingIds.size === postedSet.size && [...postedSet].every((id) => existingIds.has(id));
+      if (!sameSet) {
+        throw new Error(
+          `Cannot Analyse — Map assembly has ${postedSet.size} parcel(s) but linked Opportunity has ${existingIds.size}. Exact assembly must match; no silent lot drop.`,
+        );
+      }
       await linkIndexCandidateToOpportunity(existing.id, {
         candidateId: input.linkIndexCandidate?.candidateId ?? parsedInputs.indexPlanningSnapshot?.candidateId,
-        canonicalKey: parcelCanonicalKey,
+        // Always the Opportunity's exact posted parcel key — never an index subset key.
+        canonicalKey: postedCanonicalKey,
       });
       return existing;
     }
@@ -705,7 +748,8 @@ export async function createOpportunity(input: {
   );
   await linkIndexCandidateToOpportunity(opp.id, {
     candidateId: input.linkIndexCandidate?.candidateId ?? parsedInputs.indexPlanningSnapshot?.candidateId,
-    canonicalKey: parcelCanonicalKey,
+    // Posted assembly key only — linkIndexCandidateToOpportunity refuses mismatched candidateId.
+    canonicalKey: postedCanonicalKey,
   });
   await ensureModelledPlanningOverride(opp.id);
   await recomputeOpportunity(opp.id, { reason: "opportunity created", source: "createOpportunity" });
