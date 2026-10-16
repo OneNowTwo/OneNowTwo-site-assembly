@@ -37,7 +37,12 @@ interface PlanningPolygon {
 
 const PAGE_SIZE = 2000;
 
-async function fetchLayerPage(key: LayerKey, bbox: BBox, resultOffset: number): Promise<EsriQueryResponse<Attrs>> {
+async function fetchLayerPage(
+  key: LayerKey,
+  bbox: BBox,
+  resultOffset: number,
+  signal?: AbortSignal,
+): Promise<EsriQueryResponse<Attrs>> {
   const layer = LAYERS[key];
   // FSR needs accurate rings for parcel ∩ control area — do not generalise geometry.
   const params: Record<string, string | number | boolean> = {
@@ -56,14 +61,20 @@ async function fetchLayerPage(key: LayerKey, bbox: BBox, resultOffset: number): 
   };
   if (key !== "fsr") params.maxAllowableOffset = 0.000003;
   const url = buildUrl(`${NSW_PLANNING_BASE}/${layer.id}/query`, params);
-  return fetchJson<EsriQueryResponse<Attrs>>(url, { service: `NSW Planning (${layer.label})`, timeoutMs: 25000 });
+  // Keep per-layer timeout short so /api/parcels can soft-fail before Render's proxy 502s (~30s).
+  return fetchJson<EsriQueryResponse<Attrs>>(url, {
+    service: `NSW Planning (${layer.label})`,
+    timeoutMs: 10000,
+    signal,
+  });
 }
 
-async function fetchLayer(key: LayerKey, bbox: BBox): Promise<PlanningPolygon[]> {
+async function fetchLayer(key: LayerKey, bbox: BBox, signal?: AbortSignal): Promise<PlanningPolygon[]> {
   const out: PlanningPolygon[] = [];
   let offset = 0;
   for (;;) {
-    const res = await fetchLayerPage(key, bbox, offset);
+    if (signal?.aborted) throw new UpstreamError("NSW Planning aborted", "NSW Planning");
+    const res = await fetchLayerPage(key, bbox, offset, signal);
     for (const f of res.features ?? []) {
       if (!f.geometry) continue;
       const g = esriToGeoJSON(f.geometry);
@@ -112,9 +123,14 @@ export class NswPlanningProvider implements PlanningDataProvider {
    * intersection (statewide EPI Floor Space Ratio layer). Other layers still use
    * an interior point for zoning/height/heritage/lot-size.
    */
-  async getControlsForParcels(bbox: BBox, parcels: { id: string; geometry: Polygon | MultiPolygon }[]) {
+  async getControlsForParcels(
+    bbox: BBox,
+    parcels: { id: string; geometry: Polygon | MultiPolygon }[],
+    opts?: { signal?: AbortSignal },
+  ) {
+    const signal = opts?.signal;
     const keys = Object.keys(LAYERS) as LayerKey[];
-    const settled = await Promise.allSettled(keys.map((k) => fetchLayer(k, pad(bbox))));
+    const settled = await Promise.allSettled(keys.map((k) => fetchLayer(k, pad(bbox), signal)));
     const layers = {} as Record<LayerKey, PlanningPolygon[] | null>;
     keys.forEach((k, i) => {
       const r = settled[i];
@@ -149,6 +165,8 @@ export class NswPlanningProvider implements PlanningDataProvider {
           : resolveParcelFsr(geometry, fsrInputs);
 
       const sources: PlanningControls["sources"] = {};
+      // Successful layer fetch (including empty / no intersection) gets a source timestamp.
+      // Failed layer fetch leaves the source absent so persist can keep prior verified evidence.
       if (layers.zoning) sources.zone = src("zoning");
       if (layers.fsr) sources.fsr = src("fsr", FSR_SOURCE_LABEL);
       if (layers.height) sources.heightM = src("height");

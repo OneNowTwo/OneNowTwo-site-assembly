@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Badge, Button, Panel, ScoreBadge, cx } from "@/components/ui";
 import { fsr, money, sqm } from "@/lib/format";
 import { StrategySelector } from "@/components/strategy-selector";
@@ -50,15 +51,30 @@ type FindApiBody = {
 const NL_PLACEHOLDER =
   "Show me non-strata sites over 450 sqm inside proposed FSR 2.5+ within 400m of a station";
 
+function parseCsvParam(raw: string | null): string[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function FindClient() {
+  const searchParams = useSearchParams();
+  const bootstrapped = useRef(false);
   const [strategy, setStrategy] = useState<DevelopmentStrategy>("APARTMENTS");
   const [nl, setNl] = useState("");
   const [suburb, setSuburb] = useState("");
+  const [lga, setLga] = useState<string | null>(null);
   const [minSiteArea, setMinSiteArea] = useState("450");
   const [minProposedFsr, setMinProposedFsr] = useState("");
   const [excludeStrata, setExcludeStrata] = useState(true);
   const [insidePca, setInsidePca] = useState(false);
   const [keySiteOnly, setKeySiteOnly] = useState(false);
+  const [planningChangeAreaId, setPlanningChangeAreaId] = useState<string | null>(null);
+  const [keySiteId, setKeySiteId] = useState<string | null>(null);
+  const [keySiteIds, setKeySiteIds] = useState<string[]>([]);
+  const [candidateIds, setCandidateIds] = useState<string[]>([]);
   const [minHeadroom, setMinHeadroom] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingMode, setLoadingMode] = useState<"index" | "live" | null>(null);
@@ -72,29 +88,63 @@ export function FindClient() {
   const [appliedFilters, setAppliedFilters] = useState<AppliedFilter[]>([]);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
-  const canSearch = useMemo(() => suburb.trim().length >= 2 || nl.trim().length >= 8, [suburb, nl]);
+  const hasDeepLinkFilters =
+    candidateIds.length > 0 || !!planningChangeAreaId || !!keySiteId || keySiteIds.length > 0 || !!lga;
+  const canSearch = useMemo(
+    () => suburb.trim().length >= 2 || nl.trim().length >= 8 || hasDeepLinkFilters,
+    [suburb, nl, hasDeepLinkFilters],
+  );
 
-  async function runSearch(mode: "index" | "live") {
+  async function runSearch(
+    mode: "index" | "live",
+    overrides?: {
+      strategy?: DevelopmentStrategy;
+      suburb?: string;
+      lga?: string | null;
+      insidePca?: boolean;
+      keySiteOnly?: boolean;
+      planningChangeAreaId?: string | null;
+      keySiteId?: string | null;
+      keySiteIds?: string[];
+      candidateIds?: string[];
+      minSiteArea?: string;
+    },
+  ) {
     setLoading(true);
     setLoadingMode(mode);
     setError(null);
     setHasSearched(true);
+    const strat = overrides?.strategy ?? strategy;
+    const sub = overrides?.suburb ?? suburb;
+    const lgaVal = overrides?.lga !== undefined ? overrides.lga : lga;
+    const pcaFlag = overrides?.insidePca ?? insidePca;
+    const ksOnly = overrides?.keySiteOnly ?? keySiteOnly;
+    const pcaId = overrides?.planningChangeAreaId !== undefined ? overrides.planningChangeAreaId : planningChangeAreaId;
+    const ksId = overrides?.keySiteId !== undefined ? overrides.keySiteId : keySiteId;
+    const ksIds = overrides?.keySiteIds ?? keySiteIds;
+    const cids = overrides?.candidateIds ?? candidateIds;
+    const minArea = overrides?.minSiteArea ?? minSiteArea;
     try {
       const body = await fetchApiJson<FindApiBody>("/api/find", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          strategy,
+          strategy: strat,
           naturalLanguage: nl.trim() || null,
-          suburb: suburb.trim() || null,
-          centreQuery: suburb.trim() || null,
-          minSiteAreaSqm: minSiteArea ? Number(minSiteArea) : null,
+          suburb: sub.trim() || null,
+          lga: lgaVal,
+          centreQuery: sub.trim() || lgaVal || null,
+          minSiteAreaSqm: minArea ? Number(minArea) : null,
           minProposedFsr: minProposedFsr ? Number(minProposedFsr) : null,
           excludeStrata,
-          insidePlanningChangeArea: insidePca ? true : null,
-          keySiteOnly: keySiteOnly ? true : null,
+          insidePlanningChangeArea: pcaFlag ? true : null,
+          keySiteOnly: ksOnly ? true : null,
+          planningChangeAreaId: pcaId,
+          keySiteId: ksId,
+          keySiteIds: ksIds.length ? ksIds : null,
+          candidateIds: cids.length ? cids : null,
           minHeadroom: minHeadroom ? Number(minHeadroom) : null,
-          maxResults: 15,
+          maxResults: Math.max(15, cids.length || 15),
           mode,
         }),
       });
@@ -111,6 +161,58 @@ export function FindClient() {
       setLoadingMode(null);
     }
   }
+
+  // Deep-link from Today “View affected sites” — apply URL filters and auto-search once.
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    const strat = (searchParams.get("strategy") as DevelopmentStrategy | null) ?? null;
+    const urlLga = searchParams.get("lga");
+    const urlSuburb = searchParams.get("suburb");
+    const pca = searchParams.get("pca") ?? searchParams.get("planningChangeAreaId");
+    const ks = searchParams.get("keySite") ?? searchParams.get("keySiteId");
+    const kss = parseCsvParam(searchParams.get("keySites"));
+    const cids = parseCsvParam(searchParams.get("candidateIds"));
+    const inside = searchParams.get("insidePlanningChangeArea");
+    const hasLink = !!(strat || urlLga || urlSuburb || pca || ks || kss.length || cids.length || inside);
+    if (!hasLink) {
+      bootstrapped.current = true;
+      return;
+    }
+    bootstrapped.current = true;
+    if (strat) setStrategy(strat);
+    if (urlSuburb) setSuburb(urlSuburb);
+    // Reject Area L / Key site Area M masquerading as LGA.
+    const safeLga =
+      urlLga && !/^key\s*site\b/i.test(urlLga) && !/^Area\s+[A-Z0-9]+$/i.test(urlLga) ? urlLga : null;
+    if (safeLga) setLga(safeLga);
+    if (pca) {
+      setPlanningChangeAreaId(pca);
+      setInsidePca(true);
+    }
+    if (inside === "1" || inside === "true") setInsidePca(true);
+    if (ks) {
+      setKeySiteId(ks);
+      setKeySiteOnly(true);
+    }
+    if (kss.length) setKeySiteIds(kss);
+    if (cids.length) {
+      setCandidateIds(cids);
+      setMinSiteArea(""); // don't hide small key-site assemblies
+    }
+    void runSearch("index", {
+      strategy: strat ?? undefined,
+      suburb: urlSuburb ?? "",
+      lga: safeLga,
+      insidePca: !!(pca || inside === "1" || inside === "true"),
+      keySiteOnly: !!ks,
+      planningChangeAreaId: pca,
+      keySiteId: ks,
+      keySiteIds: kss,
+      candidateIds: cids,
+      minSiteArea: cids.length ? "" : undefined,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once from URL
+  }, [searchParams]);
 
   return (
     <div className="h-full overflow-y-auto">
