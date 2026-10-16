@@ -69,7 +69,12 @@ export function haversineM(a: { lng: number; lat: number }, b: { lng: number; la
 export function activityCentroid(activity: DevelopmentActivity): { lng: number; lat: number } | null {
   const g = activity.geometry;
   if (!g) return null;
-  if (g.type === "Point") return { lng: g.coordinates[0], lat: g.coordinates[1] };
+  if (g.type === "Point") {
+    const lng = g.coordinates[0];
+    const lat = g.coordinates[1];
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+    return { lng, lat };
+  }
   const ring =
     g.type === "Polygon"
       ? g.coordinates[0]
@@ -81,13 +86,24 @@ export function activityCentroid(activity: DevelopmentActivity): { lng: number; 
   let sy = 0;
   let n = 0;
   for (const c of ring) {
-    if (c[0] == null || c[1] == null) continue;
+    if (c[0] == null || c[1] == null || !Number.isFinite(c[0]) || !Number.isFinite(c[1])) continue;
     sx += c[0];
     sy += c[1];
     n += 1;
   }
   if (!n) return null;
   return { lng: sx / n, lat: sy / n };
+}
+
+/** Leaflet-friendly [lat, lng] for Point / Polygon / MultiPolygon; null when unplottable. */
+export function activityPlotLatLng(activity: DevelopmentActivity): [number, number] | null {
+  const c = activityCentroid(activity);
+  if (!c) return null;
+  return [c.lat, c.lng];
+}
+
+export function activityHasPlottableGeometry(activity: DevelopmentActivity): boolean {
+  return activityCentroid(activity) != null;
 }
 
 export function filterActivitiesNear(

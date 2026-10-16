@@ -8,6 +8,7 @@ import type { BBox, ParcelData } from "@/lib/types";
 import type { NominatedCentre } from "@/lib/data-sources/housing-sepp-lmr";
 import type { TrainStation } from "@/lib/data-sources/nsw-train-stations";
 import type { DevelopmentActivity } from "@/lib/source-watcher/development-activity";
+import { activityPlotLatLng } from "@/lib/source-watcher/development-activity";
 import type { WatchedSiteMarker } from "@/lib/map/watched-site-marker";
 import { zoneColour } from "./zone-colours";
 import {
@@ -392,7 +393,7 @@ function CentresCatchmentsLayer({
           fillOpacity: 0.9,
         })
           .bindPopup(
-            `<strong>${c.label}</strong><br/>Nominated centre<br/><em>Approximate screening distance — confirm planning eligibility.</em>`,
+            `<strong>${c.label}</strong><br/>Nominated LMR centre<br/><em>Approximate 400 m / 800 m screening around nominated centres — confirm planning eligibility.</em>`,
           )
           .addTo(group);
       }
@@ -436,15 +437,6 @@ function StationsLayer({ stations, enabled }: { stations?: TrainStation[]; enabl
   return null;
 }
 
-function activityPoint(a: DevelopmentActivity): [number, number] | null {
-  if (!a.geometry) return null;
-  if (a.geometry.type === "Point") {
-    const [lng, lat] = a.geometry.coordinates;
-    if (Number.isFinite(lng) && Number.isFinite(lat)) return [lat, lng];
-  }
-  return null;
-}
-
 function ActivityLayer({
   activities,
   showDaCdc,
@@ -467,7 +459,8 @@ function ActivityLayer({
       if (isDa && !showDaCdc) continue;
       if (isMajor && !showMajorProjects) continue;
       if (!isDa && !isMajor) continue;
-      const pt = activityPoint(a);
+      // Point / Polygon / MultiPolygon → marker at centroid (do not drop valid HDA/SSD polygons).
+      const pt = activityPlotLatLng(a);
       if (!pt) continue;
       const colour = isDa ? "#b45309" : "#9f1239";
       L.circleMarker(pt, {
@@ -587,8 +580,10 @@ function MapLegend({ theme, showCatchments }: { theme: ParcelTheme; showCatchmen
       )}
       {showCatchments && (
         <div className={theme !== "none" && theme !== "zoning" ? "mt-1.5 border-t border-line pt-1.5" : ""}>
-          <div className="mb-0.5 font-semibold uppercase tracking-wide text-muted">Catchments</div>
-          <div className="text-[10px] text-muted">400 m / 800 m screening — confirm planning eligibility.</div>
+          <div className="mb-0.5 font-semibold uppercase tracking-wide text-muted">LMR screening</div>
+          <div className="text-[10px] text-muted">
+            Approximate 400 m / 800 m screening around nominated centres. Confirm planning eligibility.
+          </div>
         </div>
       )}
     </div>

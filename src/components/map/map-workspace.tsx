@@ -50,10 +50,25 @@ import {
   isLiveDeepScanEnabled,
   LIVE_DEEP_SCAN_DISABLED_MESSAGE,
 } from "@/lib/live-deep-scan";
-import type { ParcelTheme } from "@/lib/map/layer-styles";
+import { applyParcelTheme, resolveParcelTheme, type ParcelThemeId } from "@/lib/map/layer-styles";
 import type { TrainStation } from "@/lib/data-sources/nsw-train-stations";
 import type { DevelopmentActivity } from "@/lib/source-watcher/development-activity";
+import { activityHasPlottableGeometry } from "@/lib/source-watcher/development-activity";
 import type { WatchedSiteMarker } from "@/lib/map/watched-site-marker";
+
+function overlayViewportKey(bbox: BBox, zoom: number): string {
+  const lat = (bbox.south + bbox.north) / 2;
+  const lng = (bbox.west + bbox.east) / 2;
+  return [
+    lat.toFixed(4),
+    lng.toFixed(4),
+    String(zoom),
+    bbox.west.toFixed(4),
+    bbox.south.toFixed(4),
+    bbox.east.toFixed(4),
+    bbox.north.toFixed(4),
+  ].join("|");
+}
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
@@ -204,7 +219,8 @@ export function MapWorkspace({
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(restoredScan?.activeKey ?? null);
   const [zoning, setZoning] = useState(() => loadMapState()?.zoneFill ?? true);
-  const [zoningWms, setZoningWms] = useState(() => loadMapState()?.zoningWms ?? false);
+  /** When Zoning is the active parcel theme, WMS follows it; never leave WMS on under another theme. */
+  const [zoningWms, setZoningWms] = useState(() => (loadMapState()?.zoneFill ?? true));
   const [fsrLayer, setFsrLayer] = useState(false);
   const [heightLayer, setHeightLayer] = useState(false);
   const [heritageLayer, setHeritageLayer] = useState(false);
@@ -221,6 +237,20 @@ export function MapWorkspace({
   const [activities, setActivities] = useState<DevelopmentActivity[]>([]);
   const [watchedMarkers, setWatchedMarkers] = useState<WatchedSiteMarker[]>([]);
   const [activityHasGeometry, setActivityHasGeometry] = useState(false);
+  /** Rounded moveend/zoomend viewport key so station/activity overlays refetch on same-zoom pans. */
+  const [overlayViewport, setOverlayViewport] = useState<{
+    key: string;
+    bbox: BBox | null;
+    lat: number;
+    lng: number;
+    zoom: number;
+  }>(() => ({
+    key: `${start.lat.toFixed(4)}|${start.lng.toFixed(4)}|${start.zoom}`,
+    bbox: null,
+    lat: start.lat,
+    lng: start.lng,
+    zoom: start.zoom,
+  }));
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
   const [query, setQuery] = useState(() => initialScanQuery ?? loadMapState()?.query ?? restoredScan?.query ?? "");
   const [targetPanel, setTargetPanel] = useState<{
@@ -299,7 +329,7 @@ export function MapWorkspace({
     };
   }, [proposedPlanning]);
 
-  // Probe once whether any development-activity records have geometry (gate visible toggles).
+  // Probe once whether any development-activity records are plottable (Point / Polygon / MultiPolygon).
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/development-activity")
@@ -307,7 +337,7 @@ export function MapWorkspace({
       .then((j: { activities?: DevelopmentActivity[] }) => {
         if (cancelled) return;
         const list = Array.isArray(j.activities) ? j.activities : [];
-        setActivityHasGeometry(list.some((a) => a.geometry?.type === "Point"));
+        setActivityHasGeometry(list.some((a) => activityHasPlottableGeometry(a)));
       })
       .catch(() => {
         if (!cancelled) setActivityHasGeometry(false);
@@ -319,39 +349,44 @@ export function MapWorkspace({
 
   useEffect(() => {
     if (!showStationsCentres && !showCatchments) return;
-    const bbox = lastBBox.current;
+    const bbox = overlayViewport.bbox ?? lastBBox.current;
     if (!bbox) return;
     let cancelled = false;
-    const q = [bbox.west, bbox.south, bbox.east, bbox.north].map((n) => n.toFixed(5)).join(",");
-    void fetch(`/api/map/stations?bbox=${q}`)
-      .then((r) => r.json())
-      .then((j: { stations?: TrainStation[] }) => {
-        if (!cancelled && Array.isArray(j.stations)) setStations(j.stations);
-      })
-      .catch(() => {
-        if (!cancelled) setStations([]);
-      });
+    const timer = window.setTimeout(() => {
+      const q = [bbox.west, bbox.south, bbox.east, bbox.north].map((n) => n.toFixed(5)).join(",");
+      void fetch(`/api/map/stations?bbox=${q}`)
+        .then((r) => r.json())
+        .then((j: { stations?: TrainStation[] }) => {
+          if (!cancelled && Array.isArray(j.stations)) setStations(j.stations);
+        })
+        .catch(() => {
+          if (!cancelled) setStations([]);
+        });
+    }, 250);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [showStationsCentres, showCatchments, load.zoom, parcels.size]);
+  }, [showStationsCentres, showCatchments, overlayViewport.key, overlayViewport.bbox]);
 
   useEffect(() => {
     if (!showDaCdc && !showMajorProjects) return;
-    const view = mapViewRef.current;
     let cancelled = false;
-    void fetch(`/api/development-activity?lng=${view.lng}&lat=${view.lat}&radiusM=2000`)
-      .then((r) => r.json())
-      .then((j: { activities?: DevelopmentActivity[] }) => {
-        if (!cancelled && Array.isArray(j.activities)) setActivities(j.activities);
-      })
-      .catch(() => {
-        if (!cancelled) setActivities([]);
-      });
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/development-activity?lng=${overlayViewport.lng}&lat=${overlayViewport.lat}&radiusM=2000`)
+        .then((r) => r.json())
+        .then((j: { activities?: DevelopmentActivity[] }) => {
+          if (!cancelled && Array.isArray(j.activities)) setActivities(j.activities);
+        })
+        .catch(() => {
+          if (!cancelled) setActivities([]);
+        });
+    }, 250);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [showDaCdc, showMajorProjects, load.zoom, parcels.size]);
+  }, [showDaCdc, showMajorProjects, overlayViewport.key, overlayViewport.lat, overlayViewport.lng]);
 
   useEffect(() => {
     if (!watchedSitesLayer) return;
@@ -369,17 +404,23 @@ export function MapWorkspace({
     };
   }, [watchedSitesLayer]);
 
-  const parcelTheme: ParcelTheme = strataLayer
-    ? "strata"
-    : heritageLayer
-      ? "heritage"
-      : fsrLayer
-        ? "fsr"
-        : heightLayer
-          ? "height"
-          : zoning
-            ? "zoning"
-            : "none";
+  const selectParcelTheme = useCallback((theme: ParcelThemeId | "none") => {
+    const next = applyParcelTheme(theme);
+    setZoning(next.zoning);
+    setZoningWms(next.zoningWms);
+    setFsrLayer(next.fsr);
+    setHeightLayer(next.height);
+    setHeritageLayer(next.heritage);
+    setStrataLayer(next.strata);
+  }, []);
+
+  const parcelTheme = resolveParcelTheme({
+    zoning,
+    fsr: fsrLayer,
+    height: heightLayer,
+    heritage: heritageLayer,
+    strata: strataLayer,
+  });
 
   const persistClientState = useCallback(
     (opts?: { activeKey?: string | null; scanOverride?: ScanState }) => {
@@ -580,11 +621,11 @@ export function MapWorkspace({
   const onViewportChange = useCallback(
     (bbox: BBox, zoom: number) => {
       lastBBox.current = bbox;
-      mapViewRef.current = {
-        lat: (bbox.south + bbox.north) / 2,
-        lng: (bbox.west + bbox.east) / 2,
-        zoom,
-      };
+      const lat = (bbox.south + bbox.north) / 2;
+      const lng = (bbox.west + bbox.east) / 2;
+      mapViewRef.current = { lat, lng, zoom };
+      const key = overlayViewportKey(bbox, zoom);
+      setOverlayViewport((prev) => (prev.key === key ? prev : { key, bbox, lat, lng, zoom }));
       setLoad((s) => ({ ...s, zoom }));
       // Hidden Map / INDEX_CANDIDATE: never broad-fetch — check before any timer/
       // cooldown arming so early Leaflet moveend/zoomend cannot race the apply effect.
@@ -707,12 +748,7 @@ export function MapWorkspace({
     setHoverKey(null);
     setQuery("");
     setResults(null);
-    setZoning(true);
-    setZoningWms(false);
-    setFsrLayer(false);
-    setHeightLayer(false);
-    setHeritageLayer(false);
-    setStrataLayer(false);
+    selectParcelTheme("zoning");
     setProposedPlanning(false);
     setShowStationsCentres(false);
     setShowCatchments(false);
@@ -720,12 +756,19 @@ export function MapWorkspace({
     setShowMajorProjects(false);
     setWatchedSitesLayer(false);
     mapViewRef.current = { ...DEFAULT_START };
+    setOverlayViewport({
+      key: `${DEFAULT_START.lat.toFixed(4)}|${DEFAULT_START.lng.toFixed(4)}|${DEFAULT_START.zoom}`,
+      bbox: null,
+      lat: DEFAULT_START.lat,
+      lng: DEFAULT_START.lng,
+      zoom: DEFAULT_START.zoom,
+    });
     setFlyTo({ ...DEFAULT_START, nonce: nowMs() });
     saveMapState({
       ...DEFAULT_START,
       query: "",
       zoneFill: true,
-      zoningWms: false,
+      zoningWms: true,
       updatedAt: new Date().toISOString(),
     });
     try {
@@ -1587,7 +1630,7 @@ export function MapWorkspace({
           highlightIds={highlightIds}
           neighbourIds={find && selectedId === find.startId && !highlightIds.length ? find.neighbours : []}
           zoning={zoning}
-          zoningWms={zoning || zoningWms}
+          zoningWms={zoningWms}
           parcelTheme={parcelTheme}
           proposedPlanning={proposedPlanning}
           proposedPlanningData={proposedPlanningData}
@@ -1684,17 +1727,7 @@ export function MapWorkspace({
                       <input
                         type="checkbox"
                         checked={zoning}
-                        onChange={(e) => {
-                          const on = e.target.checked;
-                          setZoning(on);
-                          setZoningWms(on);
-                          if (on) {
-                            setFsrLayer(false);
-                            setHeightLayer(false);
-                            setHeritageLayer(false);
-                            setStrataLayer(false);
-                          }
-                        }}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "zoning" : "none")}
                       />{" "}
                       Zoning
                     </label>
@@ -1702,15 +1735,7 @@ export function MapWorkspace({
                       <input
                         type="checkbox"
                         checked={fsrLayer}
-                        onChange={(e) => {
-                          const on = e.target.checked;
-                          setFsrLayer(on);
-                          if (on) {
-                            setHeightLayer(false);
-                            setHeritageLayer(false);
-                            setStrataLayer(false);
-                          }
-                        }}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "fsr" : "none")}
                       />{" "}
                       FSR
                     </label>
@@ -1718,15 +1743,7 @@ export function MapWorkspace({
                       <input
                         type="checkbox"
                         checked={heightLayer}
-                        onChange={(e) => {
-                          const on = e.target.checked;
-                          setHeightLayer(on);
-                          if (on) {
-                            setFsrLayer(false);
-                            setHeritageLayer(false);
-                            setStrataLayer(false);
-                          }
-                        }}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "height" : "none")}
                       />{" "}
                       Height
                     </label>
@@ -1740,15 +1757,7 @@ export function MapWorkspace({
                       <input
                         type="checkbox"
                         checked={heritageLayer}
-                        onChange={(e) => {
-                          const on = e.target.checked;
-                          setHeritageLayer(on);
-                          if (on) {
-                            setFsrLayer(false);
-                            setHeightLayer(false);
-                            setStrataLayer(false);
-                          }
-                        }}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "heritage" : "none")}
                       />{" "}
                       Heritage
                     </label>
@@ -1756,15 +1765,7 @@ export function MapWorkspace({
                       <input
                         type="checkbox"
                         checked={strataLayer}
-                        onChange={(e) => {
-                          const on = e.target.checked;
-                          setStrataLayer(on);
-                          if (on) {
-                            setFsrLayer(false);
-                            setHeightLayer(false);
-                            setHeritageLayer(false);
-                          }
-                        }}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "strata" : "none")}
                       />{" "}
                       Strata
                     </label>
@@ -1786,7 +1787,7 @@ export function MapWorkspace({
                       <input type="checkbox" checked={showStationsCentres} onChange={(e) => setShowStationsCentres(e.target.checked)} /> Stations / centres
                     </label>
                     <label className="flex items-center gap-1.5 py-1 text-[12px]">
-                      <input type="checkbox" checked={showCatchments} onChange={(e) => setShowCatchments(e.target.checked)} /> 400 / 800 m catchments
+                      <input type="checkbox" checked={showCatchments} onChange={(e) => setShowCatchments(e.target.checked)} /> LMR 400 / 800 m screening
                     </label>
                   </div>
                   <div className="border-t border-line pt-2">

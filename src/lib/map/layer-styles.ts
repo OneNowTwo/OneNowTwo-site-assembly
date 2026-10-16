@@ -5,6 +5,46 @@
 
 export type ParcelTheme = "zoning" | "fsr" | "height" | "heritage" | "strata" | "none";
 
+/** Exclusive parcel-colour themes (Proposed planning / activity / stations remain independent). */
+export type ParcelThemeId = Exclude<ParcelTheme, "none">;
+
+export interface ParcelThemeFlags {
+  zoning: boolean;
+  zoningWms: boolean;
+  fsr: boolean;
+  height: boolean;
+  heritage: boolean;
+  strata: boolean;
+}
+
+/** One active parcel-colour theme — enabling one clears the others (including zoning WMS). */
+export function applyParcelTheme(theme: ParcelThemeId | "none"): ParcelThemeFlags {
+  return {
+    zoning: theme === "zoning",
+    zoningWms: theme === "zoning",
+    fsr: theme === "fsr",
+    height: theme === "height",
+    heritage: theme === "heritage",
+    strata: theme === "strata",
+  };
+}
+
+/** Resolve which parcel theme is active from exclusive flags. */
+export function resolveParcelTheme(flags: {
+  zoning: boolean;
+  fsr: boolean;
+  height: boolean;
+  heritage: boolean;
+  strata: boolean;
+}): ParcelTheme {
+  if (flags.strata) return "strata";
+  if (flags.heritage) return "heritage";
+  if (flags.fsr) return "fsr";
+  if (flags.height) return "height";
+  if (flags.zoning) return "zoning";
+  return "none";
+}
+
 export type FsrBucket = "not_mapped" | "le_0_5" | "0_5_1" | "1_1_5" | "1_5_2" | "gt_2";
 export type HeightBucket = "not_mapped" | "le_9" | "9_12" | "12_18" | "gt_18";
 export type HeritageKind = "item" | "conservation" | "none" | "unknown";
