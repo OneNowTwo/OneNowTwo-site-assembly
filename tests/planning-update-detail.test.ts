@@ -137,7 +137,7 @@ describe("planning update detail + navigation", () => {
     expect(evidence.plainSummary).toMatch(/Source updated — change details awaiting verification/i);
   });
 
-  it("shows structured Area L controls from key-site FeatureServer evidence", () => {
+  it("shows structured Area L controls from key-site FeatureServer evidence when uniform", () => {
     const evidence = buildPlanningUpdateEvidence({
       storyTitle: "Key site Area L updated",
       storySummary: "Inner West key site Area L",
@@ -153,6 +153,15 @@ describe("planning update detail + navigation", () => {
             fsr: 1.75,
             heightM: 17,
             machineReadable: true,
+            screeningSample: {
+              lng: 151.168,
+              lat: -33.899,
+              zone: "R3",
+              fsr: 1.75,
+              heightM: 17,
+              mixedAcrossKeySite: false,
+              scope: "INTERIOR_POINT_SAMPLE",
+            },
           },
         },
       ],
@@ -170,9 +179,54 @@ describe("planning update detail + navigation", () => {
     expect(evidence.proposedControls).toEqual(
       expect.objectContaining({ zone: "R3", fsr: 1.75, heightM: 17 }),
     );
+    expect(evidence.screeningSample?.scope).toBe("INTERIOR_POINT_SAMPLE");
     expect(evidence.plainSummary).toMatch(/1\.75/);
+    expect(evidence.plainSummary).toMatch(/Interior-point screening sample/i);
     expect(evidence.plainSummary).not.toMatch(/awaiting verification/i);
     expect(evidence.whyItMatters).toMatch(/Area L/);
     expect(evidence.webpageUrl).toContain("arcgis.com");
+  });
+
+  it("does not present mixed key-site point samples as uniform proposed controls", () => {
+    const evidence = buildPlanningUpdateEvidence({
+      storyTitle: "Key site Area L updated",
+      keySites: [
+        {
+          externalKeySiteId: "Area L",
+          name: "Inner West key site Area L",
+          proposedControls: {
+            legalStatus: "PROPOSED",
+            zone: null,
+            fsr: null,
+            heightM: null,
+            machineReadable: true,
+            notes: "Mixed proposed controls",
+            screeningSample: {
+              lng: 151.168,
+              lat: -33.899,
+              zone: "R3",
+              fsr: 1.75,
+              heightM: 17,
+              mixedAcrossKeySite: true,
+              distinctFsrs: [1.75, 2.0],
+              distinctZones: ["R3"],
+              scope: "INTERIOR_POINT_SAMPLE",
+            },
+          },
+        },
+      ],
+      pca: {
+        id: "council:inner-west-our-fairer-future",
+        title: "Inner West — Our Fairer Future",
+        status: "PROPOSED",
+        lgas: ["INNER WEST"],
+      },
+    });
+    expect(evidence.awaitingVerification).toBe(true);
+    expect(evidence.proposedControls).toBeNull();
+    expect(evidence.screeningSample?.mixedAcrossKeySite).toBe(true);
+    expect(evidence.plainSummary).toMatch(/Mixed proposed controls/i);
+    expect(evidence.plainSummary).toMatch(/screening sample/i);
+    expect(evidence.plainSummary).not.toMatch(/Proposed controls for Inner West · Area L: FSR/);
   });
 });

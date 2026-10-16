@@ -23,6 +23,19 @@ type ControlSnap = {
   notes?: string | null;
 };
 
+type ScreeningSample = {
+  lng: number;
+  lat: number;
+  zone?: string | null;
+  fsr?: number | null;
+  heightM?: number | null;
+  mixedAcrossKeySite: boolean;
+  distinctZones?: string[];
+  distinctFsrs?: number[];
+  distinctHeights?: number[];
+  scope: "INTERIOR_POINT_SAMPLE";
+};
+
 type StoryDetail = {
   officialTitle: string | null;
   locationLabel: string | null;
@@ -32,6 +45,7 @@ type StoryDetail = {
   plainSummary: string | null;
   previousControls: ControlSnap | null;
   proposedControls: ControlSnap | null;
+  screeningSample?: ScreeningSample | null;
   officialDate: string | null;
   officialDateLabel: string | null;
   detectedAt: string | null;
@@ -665,6 +679,16 @@ function PlanningUpdateDetailPanel({
   const findHref = d?.findHref || story.findHref || `/find?strategy=${strategy}`;
   const previousLabel = formatControlSnap(d?.previousControls);
   const proposedLabel = formatControlSnap(d?.proposedControls);
+  const sample = d?.screeningSample ?? null;
+  const sampleLabel = sample
+    ? [
+        sample.zone ? `Zone ${sample.zone}` : null,
+        sample.fsr != null ? `FSR ${sample.fsr}` : null,
+        sample.heightM != null ? `Height ${sample.heightM} m` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null
+    : null;
   const keySiteIds = d?.keySiteIds ?? [];
   const candidateIds = d?.affectedCandidateIds ?? [];
   const awaiting = !!d?.awaitingVerification;
@@ -716,15 +740,34 @@ function PlanningUpdateDetailPanel({
                 Proposed controls
               </div>
               <div className="mt-1 font-medium leading-snug">
-                {awaiting
-                  ? "Source updated — change details awaiting verification"
-                  : proposedLabel ?? "Not recorded in monitored sources"}
+                {sample?.mixedAcrossKeySite
+                  ? "Mixed across key site — not uniform"
+                  : awaiting
+                    ? "Source updated — change details awaiting verification"
+                    : proposedLabel ?? "Not recorded in monitored sources"}
               </div>
-              {!awaiting && proposedLabel && (
-                <div className="mt-0.5 text-[11px] text-muted">Proposed — not current LEP law</div>
+              {!awaiting && proposedLabel && !sample?.mixedAcrossKeySite && (
+                <div className="mt-0.5 text-[11px] text-muted">
+                  Proposed — not current LEP law
+                  {sample ? " · interior-point sample (not parcel-level)" : ""}
+                </div>
               )}
             </div>
           </section>
+
+          {sample && sampleLabel && (
+            <section className="rounded-[3px] border border-line bg-canvas px-3 py-2">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+                Screening sample (interior point only)
+              </div>
+              <div className="mt-1 font-medium leading-snug">{sampleLabel}</div>
+              <p className="mt-1 text-[11px] text-muted">
+                {sample.mixedAcrossKeySite
+                  ? `Mixed control polygons detected${sample.distinctFsrs?.length ? ` (FSR ${sample.distinctFsrs.join(", ")})` : ""}${sample.distinctZones?.length ? `; zones ${sample.distinctZones.join(", ")}` : ""}. Sample is for screening only — not parcel-level evidence and not an area-wide control.`
+                  : "Verified uniform across intersecting control polygons for this key site. Sample is for screening only — not parcel-level evidence."}
+              </p>
+            </section>
+          )}
 
           <section className="grid gap-2 sm:grid-cols-2">
             <div>

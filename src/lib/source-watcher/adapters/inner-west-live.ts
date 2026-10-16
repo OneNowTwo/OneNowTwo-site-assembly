@@ -85,31 +85,156 @@ function bboxFromPolygon(geom: GeoJSON.Polygon | GeoJSON.MultiPolygon | null): K
   };
 }
 
-function centroidFromBBox(bbox: NonNullable<KeySiteFact["bbox"]>): { lng: number; lat: number } {
-  return {
-    lng: (bbox.west + bbox.east) / 2,
-    lat: (bbox.south + bbox.north) / 2,
-  };
+/** Interior point on the key-site polygon — never bbox centre (may fall outside). */
+async function interiorPoint(
+  geom: GeoJSON.Polygon | GeoJSON.MultiPolygon | null,
+  bbox: NonNullable<KeySiteFact["bbox"]>,
+): Promise<{ lng: number; lat: number }> {
+  if (geom) {
+    try {
+      const pointOnFeature = (await import("@turf/point-on-feature")).default;
+      const pt = pointOnFeature({ type: "Feature", properties: {}, geometry: geom });
+      const [lng, lat] = pt.geometry.coordinates;
+      if (Number.isFinite(lng) && Number.isFinite(lat)) return { lng: lng!, lat: lat! };
+    } catch {
+      // fall through
+    }
+  }
+  return { lng: (bbox.west + bbox.east) / 2, lat: (bbox.south + bbox.north) / 2 };
 }
 
 /**
- * Enrich a key-site fact with proposed LZN/FSR/HOB (and incentives) at its
- * geometry centroid from the same Adopted_Planning_Layers FeatureServer.
- * Notes-only rows are incomplete evidence — never invent controls without a hit.
+ * Distinct control attribute values that intersect the key-site geometry
+ * (or its bbox when geometry is missing). Filters envelope hits by true
+ * polygon intersection so neighbouring controls are not counted as "mixed".
+ */
+async function queryDistinctAttrsOverKeySite(
+  layerId: number,
+  bbox: NonNullable<KeySiteFact["bbox"]>,
+  field: string,
+  geom: GeoJSON.Polygon | GeoJSON.MultiPolygon | null,
+): Promise<string[]> {
+  const usePoly = !!geom;
+  const geometry = usePoly
+    ? JSON.stringify(
+        geom!.type === "Polygon"
+          ? { rings: geom!.coordinates }
+          : { rings: geom!.coordinates.flatMap((p) => p) },
+      )
+    : `${bbox.west},${bbox.south},${bbox.east},${bbox.north}`;
+  const url = buildUrl(`${IW_ADOPTED_FS}/${layerId}/query`, {
+    where: "1=1",
+    geometry,
+    geometryType: usePoly ? "esriGeometryPolygon" : "esriGeometryEnvelope",
+    inSR: 4326,
+    spatialRel: "esriSpatialRelIntersects",
+    outFields: field,
+    returnGeometry: !usePoly, // need rings to filter when envelope-only
+    outSR: 4326,
+    resultRecordCount: 80,
+    f: "json",
+  });
+  try {
+    const res = await fetchJson<EsriQueryResponse<Record<string, unknown>>>(url, {
+      service: "iw-key-site-distinct",
+      ttlMs: 30 * 60 * 1000,
+      timeoutMs: 15000,
+    });
+    const vals = new Set<string>();
+    if (usePoly || !geom) {
+      for (const f of res.features ?? []) {
+        const v = f.attributes?.[field];
+        if (v == null || v === "") continue;
+        vals.add(String(v));
+      }
+      return [...vals];
+    }
+    // Envelope fallback: keep only features that truly intersect the key-site polygon.
+    const booleanIntersects = (await import("@turf/boolean-intersects")).default;
+    const siteFeat = { type: "Feature" as const, properties: {}, geometry: geom! };
+    for (const f of res.features ?? []) {
+      if (!f.geometry) continue;
+      const g = esriToGeoJSON(f.geometry);
+      if (!g) continue;
+      try {
+        if (!booleanIntersects(siteFeat, { type: "Feature", properties: {}, geometry: g })) continue;
+      } catch {
+        continue;
+      }
+      const v = f.attributes?.[field];
+      if (v == null || v === "") continue;
+      vals.add(String(v));
+    }
+    return [...vals];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Enrich a key-site with an interior-point screening sample + mixed-control check.
+ * Never present a point sample as uniform controls across the whole key site when
+ * intersecting control polygons disagree. Sample values are not parcel-level evidence.
  */
 export async function enrichKeySiteProposedControls(site: KeySiteFact): Promise<KeySiteFact> {
   const bbox = site.bbox ?? bboxFromPolygon(site.geometry ?? null);
   if (!bbox) return site;
-  const { lng, lat } = centroidFromBBox(bbox);
   try {
-    const live = await queryInnerWestProposedAtPoint(lng, lat);
+    const { lng, lat } = await interiorPoint(site.geometry ?? null, bbox);
+    const siteGeom = site.geometry ?? null;
+    const [live, zones, fsrs, heights] = await Promise.all([
+      queryInnerWestProposedAtPoint(lng, lat),
+      queryDistinctAttrsOverKeySite(IW_LAYER.LZN, bbox, "SYM_CODE", siteGeom),
+      queryDistinctAttrsOverKeySite(IW_LAYER.FSR, bbox, "FSR", siteGeom),
+      queryDistinctAttrsOverKeySite(IW_LAYER.HOB, bbox, "MAX_B_H", siteGeom),
+    ]);
     const hasControls =
       live.zone != null || live.fsr != null || live.heightM != null || live.incentiveFsr != null || live.incentiveHeightM != null;
     if (!hasControls) return site;
+
+    const distinctFsrs = fsrs.map(Number).filter((n) => Number.isFinite(n));
+    const distinctHeights = heights.map(Number).filter((n) => Number.isFinite(n));
+    const mixedAcrossKeySite =
+      zones.length > 1 || new Set(distinctFsrs).size > 1 || new Set(distinctHeights).size > 1;
+
+    const screeningSample: NonNullable<ProposedControls["screeningSample"]> = {
+      lng,
+      lat,
+      zone: live.zone,
+      fsr: live.fsr,
+      heightM: live.heightM,
+      mixedAcrossKeySite,
+      distinctZones: zones,
+      distinctFsrs,
+      distinctHeights,
+      scope: "INTERIOR_POINT_SAMPLE",
+    };
+
     const ahPct =
       live.affordableHousingLabel && /\d+/.test(live.affordableHousingLabel)
         ? Number(live.affordableHousingLabel.match(/\d+/)![0])
         : null;
+
+    if (mixedAcrossKeySite) {
+      return {
+        ...site,
+        bbox,
+        proposedControls: {
+          legalStatus: "PROPOSED",
+          machineReadable: true,
+          // Do not assign uniform zone/FSR/height — mixed polygons across the key site.
+          zone: null,
+          fsr: null,
+          heightM: null,
+          incentiveFsr: null,
+          incentiveHeightM: null,
+          affordableHousingContributionPct: Number.isFinite(ahPct) ? ahPct : null,
+          screeningSample,
+          notes: `Mixed proposed controls across this key site (zones: ${zones.join(", ") || "—"}; FSR: ${distinctFsrs.join(", ") || "—"}; height m: ${distinctHeights.join(", ") || "—"}). Interior-point screening sample at ${lng.toFixed(5)},${lat.toFixed(5)}: zone ${live.zone ?? "—"}, FSR ${live.fsr ?? "—"}, height ${live.heightM ?? "—"} m. Sample is for screening only — not parcel-level evidence and not uniform across the area. Source: ${IW_ADOPTED_FS}. NOT CURRENT LAW until gazetted.`,
+        },
+      };
+    }
+
     return {
       ...site,
       bbox,
@@ -122,7 +247,8 @@ export async function enrichKeySiteProposedControls(site: KeySiteFact): Promise<
         incentiveFsr: live.incentiveFsr,
         incentiveHeightM: live.incentiveHeightM,
         affordableHousingContributionPct: Number.isFinite(ahPct) ? ahPct : null,
-        notes: `Draft controls at key-site centroid from Adopted_Planning_Layers (${IW_ADOPTED_FS}). NOT CURRENT LAW until gazetted.`,
+        screeningSample,
+        notes: `Interior-point screening sample (verified uniform across intersecting control polygons for this key site) at ${lng.toFixed(5)},${lat.toFixed(5)} from Adopted_Planning_Layers. Not parcel-level evidence. Source: ${IW_ADOPTED_FS}. NOT CURRENT LAW until gazetted.`,
       },
     };
   } catch {

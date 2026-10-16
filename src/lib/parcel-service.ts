@@ -1,10 +1,15 @@
 import type { Polygon, MultiPolygon } from "geojson";
 import { prisma } from "@/lib/db";
-import type { BBox, FsrControl, FsrMappedStatus, ParcelData, PlanningControls } from "@/lib/types";
+import type { BBox, ParcelData, PlanningControls } from "@/lib/types";
 import { clampBBox, nswCadastreProvider } from "@/lib/data-sources/nsw-cadastre";
 import { nswPlanningProvider } from "@/lib/data-sources/nsw-planning";
 import { UpstreamError } from "@/lib/data-sources/http";
-import type { Parcel } from "@/generated/prisma/client";
+import type { Parcel, Prisma } from "@/generated/prisma/client";
+import {
+  latestSourceRetrievedAt,
+  mergePlanningControls,
+  planningControlsFromSnapshot,
+} from "@/lib/planning/planning-persist";
 
 export interface ParcelQueryResult {
   parcels: ParcelData[];
@@ -14,25 +19,22 @@ export interface ParcelQueryResult {
   bbox: BBox;
 }
 
-function planningFromRow(row: Parcel): PlanningControls | null {
-  if (row.planningCheckedAt == null) return null;
-  return {
-    zone: row.zone,
-    zoneName: row.zoneName,
-    fsr: row.fsr,
-    fsrStatus: (row.fsr != null ? "MAPPED" : "NO_MAPPED") as FsrMappedStatus,
-    fsrControls: [] as FsrControl[],
-    heightM: row.heightM,
-    minLotSizeSqm: row.minLotSizeSqm,
-    heritage: row.heritage,
-    planningInstrument: row.planningInstrument,
-    lga: row.lga,
-    sources: {},
-  };
+/** Hosting proxy budget — keep full /api/parcels under ~30s. */
+const PARCELS_ENDPOINT_BUDGET_MS = 25_000;
+const CADASTRE_BUDGET_MS = 8_000;
+
+type ParcelWithSnap = Parcel & { latestSnap?: { data: unknown; retrievedAt: Date; source: string } | null };
+
+function planningFromRow(row: ParcelWithSnap): PlanningControls | null {
+  if (row.planningCheckedAt == null && !row.latestSnap) return null;
+  return planningControlsFromSnapshot(row.latestSnap?.data ?? null, row);
 }
 
-export function parcelFromRow(row: Parcel): ParcelData {
+export function parcelFromRow(row: ParcelWithSnap): ParcelData {
   const planning = planningFromRow(row);
+  const retrievedAt =
+    latestSourceRetrievedAt(planning) ??
+    (row.latestSnap?.retrievedAt ?? row.planningCheckedAt ?? row.updatedAt).toISOString();
   return {
     externalParcelId: row.externalParcelId,
     source: row.source === "MANUAL" ? "MANUAL" : "CACHED_NSW",
@@ -48,61 +50,119 @@ export function parcelFromRow(row: Parcel): ParcelData {
     isStrata: row.isStrata,
     planning,
     planningStatus: planning ? "ok" : "unavailable",
-    retrievedAt: (row.planningCheckedAt ?? row.updatedAt).toISOString(),
+    retrievedAt,
   };
 }
 
+async function attachLatestSnapshots(rows: Parcel[]): Promise<ParcelWithSnap[]> {
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const snaps = await prisma.planningSnapshot.findMany({
+    where: { parcelId: { in: ids } },
+    orderBy: { retrievedAt: "desc" },
+    distinct: ["parcelId"],
+    select: { parcelId: true, data: true, retrievedAt: true, source: true },
+  });
+  const byParcel = new Map(snaps.map((s) => [s.parcelId, s]));
+  return rows.map((r) => ({ ...r, latestSnap: byParcel.get(r.id) ?? null }));
+}
+
 async function storedParcelsInBBox(b: BBox) {
-  return prisma.parcel.findMany({
+  const rows = await prisma.parcel.findMany({
     where: {
       centroidLng: { gte: b.west, lte: b.east },
       centroidLat: { gte: b.south, lte: b.north },
     },
     take: 2000,
   });
+  return attachLatestSnapshots(rows);
 }
 
-/** Persist verified live planning onto Parcel rows so later failures can fall back. */
+/**
+ * Persist live planning by merging successful layers only.
+ * Failed layers keep previous verified values + original FieldSource dates.
+ */
 async function persistLivePlanning(
-  parcels: Array<{ externalParcelId: string; planning: PlanningControls | null; retrievedAt: string }>,
+  parcels: Array<{
+    externalParcelId: string;
+    planning: PlanningControls | null;
+    previous: PlanningControls | null;
+    retrievedAt: string;
+  }>,
 ): Promise<void> {
   const withPlanning = parcels.filter((p) => p.planning);
   if (!withPlanning.length) return;
   try {
-    for (const p of withPlanning) {
-      const pl = p.planning!;
-      const checked = new Date(p.retrievedAt);
-      const row = await prisma.parcel.updateMany({
-        where: { externalParcelId: p.externalParcelId },
-        data: {
-          zone: pl.zone,
-          zoneName: pl.zoneName,
-          fsr: pl.fsr,
-          heightM: pl.heightM,
-          minLotSizeSqm: pl.minLotSizeSqm,
-          heritage: pl.heritage,
-          planningInstrument: pl.planningInstrument,
-          lga: pl.lga,
-          planningCheckedAt: checked,
-        },
-      });
-      if (!row.count) continue;
-      const existing = await prisma.parcel.findUnique({
-        where: { externalParcelId: p.externalParcelId },
-        select: { id: true },
-      });
-      if (!existing) continue;
-      await prisma.planningSnapshot.create({
-        data: {
-          parcelId: existing.id,
-          source: "LIVE_NSW",
-          data: pl as unknown as import("@/generated/prisma/client").Prisma.InputJsonValue,
-          retrievedAt: checked,
-        },
-      });
-    }
+    await Promise.all(
+      withPlanning.map(async (p) => {
+        const live = p.planning!;
+        const merged = mergePlanningControls(p.previous, live);
+        const checked = new Date(
+          latestSourceRetrievedAt(merged) ?? p.retrievedAt,
+        );
+        const existing = await prisma.parcel.findUnique({
+          where: { externalParcelId: p.externalParcelId },
+          select: {
+            id: true,
+            zone: true,
+            zoneName: true,
+            fsr: true,
+            heightM: true,
+            minLotSizeSqm: true,
+            heritage: true,
+            planningInstrument: true,
+            lga: true,
+          },
+        });
+        if (!existing) return;
+        await prisma.parcel.update({
+          where: { id: existing.id },
+          data: {
+            zone: merged.zone,
+            zoneName: merged.zoneName,
+            fsr: merged.fsr,
+            heightM: merged.heightM,
+            minLotSizeSqm: merged.minLotSizeSqm,
+            heritage: merged.heritage,
+            planningInstrument: merged.planningInstrument,
+            lga: merged.lga,
+            planningCheckedAt: checked,
+          },
+        });
+        await prisma.planningSnapshot.create({
+          data: {
+            parcelId: existing.id,
+            source: "LIVE_NSW",
+            data: merged as unknown as Prisma.InputJsonValue,
+            retrievedAt: checked,
+          },
+        });
+      }),
+    );
   } catch {
     // Persistence is best-effort — never fail the map response.
+  }
+}
+
+function remainingMs(deadline: number): number {
+  return Math.max(0, deadline - Date.now());
+}
+
+async function withBudget<T>(ms: number, label: string, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  if (ms <= 0) throw new UpstreamError(`${label} budget exhausted`, label);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await Promise.race([
+      fn(ac.signal),
+      new Promise<never>((_, reject) => {
+        const onAbort = () => reject(new UpstreamError(`${label} request budget exceeded`, label));
+        if (ac.signal.aborted) onAbort();
+        else ac.signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -110,23 +170,40 @@ async function persistLivePlanning(
 export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult> {
   const bbox = clampBBox(input);
   const messages: string[] = [];
+  const deadline = Date.now() + PARCELS_ENDPOINT_BUDGET_MS;
   const cadastreStatus: ParcelQueryResult["cadastreStatus"] = "live";
   let base: Omit<ParcelData, "planning" | "planningStatus">[];
-  let stored: Parcel[] | null = null;
+  let stored: ParcelWithSnap[] | null = null;
 
   try {
-    base = await nswCadastreProvider.getParcelsInBBox(bbox);
+    base = await withBudget(Math.min(CADASTRE_BUDGET_MS, remainingMs(deadline)), "NSW Cadastre", async () =>
+      nswCadastreProvider.getParcelsInBBox(bbox),
+    );
   } catch (err) {
     stored = await storedParcelsInBBox(bbox);
     const msg = err instanceof UpstreamError ? err.message : "Cadastre service error";
     if (!stored.length) {
-      return { parcels: [], cadastreStatus: "unavailable", planningStatus: "unavailable", messages: [`Cadastre service temporarily unavailable (${msg}).`], bbox };
+      return {
+        parcels: [],
+        cadastreStatus: "unavailable",
+        planningStatus: "unavailable",
+        messages: [`Cadastre service temporarily unavailable (${msg}).`],
+        bbox,
+      };
     }
-    messages.push(`Cadastre service temporarily unavailable (${msg}). Showing ${stored.length} previously saved NSW parcels.`);
-    return { parcels: stored.map(parcelFromRow), cadastreStatus: "cached", planningStatus: "cached", messages, bbox };
+    messages.push(
+      `Cadastre service temporarily unavailable (${msg}). Showing ${stored.length} previously saved NSW parcels.`,
+    );
+    return {
+      parcels: stored.map(parcelFromRow),
+      cadastreStatus: "cached",
+      planningStatus: "cached",
+      messages,
+      bbox,
+    };
   }
 
-  // Always load stored planning for fallback / whether live succeeds.
+  // Always load stored planning for fallback / merge.
   stored = await storedParcelsInBBox(bbox);
   const storedById = new Map(stored.map((r) => [r.externalParcelId, r]));
 
@@ -134,24 +211,24 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
   let controls = new Map<string, PlanningControls>();
   let planningError: string | null = null;
   try {
-    // Controlled failure for evidence recordings / local failover tests only.
-    // Never set in production — product UI must not expose this switch.
     if (process.env.SA_FORCE_PLANNING_FAIL === "1") {
       throw new UpstreamError("Live NSW Planning did not respond", "NSW Planning");
     }
-    // Overall budget so the platform proxy does not HTML-502 before we soft-fail.
-    const planningPromise = nswPlanningProvider.getControlsForParcels(
-      bbox,
-      base.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
+    const planningBudget = remainingMs(deadline);
+    if (planningBudget < 1500) {
+      throw new UpstreamError("Planning request budget exceeded", "NSW Planning");
+    }
+    controls = await withBudget(planningBudget, "NSW Planning", (signal) =>
+      nswPlanningProvider.getControlsForParcels(
+        bbox,
+        base.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
+        { signal },
+      ),
     );
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new UpstreamError("Planning request budget exceeded", "NSW Planning")), 20000);
-    });
-    controls = await Promise.race([planningPromise, timeoutPromise]);
     const sample = controls.values().next().value as PlanningControls | undefined;
     if (sample && Object.keys(sample.sources).length < 5) {
       planningStatus = "partial";
-      messages.push("Some planning layers did not respond; missing fields are shown as not loaded.");
+      messages.push("Some planning layers did not respond; missing fields are shown as not loaded — prior verified values are kept where available.");
     }
   } catch (err) {
     planningError = err instanceof Error ? err.message : "error";
@@ -161,30 +238,37 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
   const retrievedAt = new Date().toISOString();
   const parcels: ParcelData[] = base.map((p) => {
     const live = controls.get(p.externalParcelId);
+    const row = storedById.get(p.externalParcelId);
+    const previous = row ? planningFromRow(row) : null;
+
     if (live) {
+      const merged = mergePlanningControls(previous, live);
+      const sourceCount = Object.keys(merged.sources).length;
       return {
         ...p,
-        planning: live,
-        planningStatus: Object.keys(live.sources).length < 5 ? "partial" : "ok",
-        retrievedAt,
+        planning: merged,
+        planningStatus: sourceCount < 5 ? ("partial" as const) : ("ok" as const),
+        retrievedAt: latestSourceRetrievedAt(merged) ?? retrievedAt,
       };
     }
-    const row = storedById.get(p.externalParcelId);
-    if (row?.planningCheckedAt) {
-      const cached = parcelFromRow(row);
-      const checked = row.planningCheckedAt.toISOString().slice(0, 10);
+    if (row?.planningCheckedAt || previous) {
+      const cached = previous ?? planningFromRow(row!);
+      const checkedIso =
+        latestSourceRetrievedAt(cached) ??
+        row!.planningCheckedAt?.toISOString() ??
+        retrievedAt;
       return {
         ...p,
-        planning: cached.planning,
-        planningStatus: "cached",
-        planningMessage: `Stored official planning (${checked}) — live NSW Planning did not respond.`,
-        retrievedAt: cached.retrievedAt,
+        planning: cached,
+        planningStatus: "cached" as const,
+        planningMessage: `Stored official planning (${checkedIso.slice(0, 10)}) — live NSW Planning did not respond.`,
+        retrievedAt: checkedIso,
       };
     }
     return {
       ...p,
       planning: null,
-      planningStatus: "unavailable",
+      planningStatus: "unavailable" as const,
       planningMessage: planningError
         ? `Planning not loaded — ${planningError}. Retry to fetch live NSW controls.`
         : "Planning not loaded. Retry to fetch live NSW controls.",
@@ -204,8 +288,25 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
       messages.push(`Planning service temporarily unavailable (${planningError}).`);
     }
   } else if (liveCount > 0) {
-    // Persist successful live planning so a later outage can fall back.
-    await persistLivePlanning(parcels.map((p) => ({ externalParcelId: p.externalParcelId, planning: p.planning, retrievedAt: p.retrievedAt })));
+    // Persist off the critical path if budget is nearly exhausted; otherwise await briefly.
+    const persistWork = persistLivePlanning(
+      parcels.map((p) => ({
+        externalParcelId: p.externalParcelId,
+        planning: p.planning,
+        previous: storedById.get(p.externalParcelId)
+          ? planningFromRow(storedById.get(p.externalParcelId)!)
+          : null,
+        retrievedAt: p.retrievedAt,
+      })),
+    );
+    if (remainingMs(deadline) > 2000) {
+      await Promise.race([
+        persistWork,
+        new Promise<void>((resolve) => setTimeout(resolve, remainingMs(deadline) - 500)),
+      ]);
+    } else {
+      void persistWork;
+    }
   }
 
   return { parcels, cadastreStatus, planningStatus, messages, bbox };
@@ -219,7 +320,8 @@ export async function getStoredParcelsByExternalIds(externalParcelIds: string[])
   const ids = [...new Set(externalParcelIds.filter((id) => /^nsw-cadid:\d+$/.test(id)))];
   if (!ids.length) return [];
   const stored = await prisma.parcel.findMany({ where: { externalParcelId: { in: ids } } });
-  return stored.map(parcelFromRow);
+  const withSnaps = await attachLatestSnapshots(stored);
+  return withSnaps.map(parcelFromRow);
 }
 
 export type GetParcelsByExternalIdsOptions = {
@@ -239,8 +341,11 @@ export async function getParcelsByExternalIds(
   const ids = [...new Set(externalParcelIds.filter((id) => /^nsw-cadid:\d+$/.test(id)))];
   if (!ids.length) return [];
 
-  const stored = await prisma.parcel.findMany({ where: { externalParcelId: { in: ids } } });
+  const stored = await attachLatestSnapshots(
+    await prisma.parcel.findMany({ where: { externalParcelId: { in: ids } } }),
+  );
   const byId = new Map(stored.map((r) => [r.externalParcelId, parcelFromRow(r)]));
+  const previousById = new Map(stored.map((r) => [r.externalParcelId, planningFromRow(r)]));
   const missing = ids.filter((id) => !byId.has(id) || !byId.get(id)?.geometry);
 
   if (missing.length) {
@@ -274,7 +379,6 @@ export async function getParcelsByExternalIds(
         service: "nsw-cadastre-by-id",
         ttlMs: 5 * 60 * 1000,
       });
-      // Property addresses via spatial match per lot bbox envelope of all lots
       let props: QueryResp<PropAttrs> = { features: [] };
       const geoms = (lots.features ?? [])
         .map((f) => (f.geometry ? esriToGeoJSON(f.geometry) : null))
@@ -346,7 +450,6 @@ export async function getParcelsByExternalIds(
   const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as ParcelData[];
   if (opts.skipPlanning || !ordered.length) return ordered;
 
-  // Attach planning where possible; keep any already-stored controls on failure.
   try {
     if (process.env.SA_FORCE_PLANNING_FAIL === "1") {
       throw new Error("Live NSW Planning did not respond");
@@ -359,26 +462,35 @@ export async function getParcelsByExternalIds(
       south: Math.min(...lats),
       north: Math.max(...lats),
     };
-    const controls = await nswPlanningProvider.getControlsForParcels(
-      bbox,
-      ordered.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
+    const controls = await withBudget(18_000, "NSW Planning", (signal) =>
+      nswPlanningProvider.getControlsForParcels(
+        bbox,
+        ordered.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
+        { signal },
+      ),
     );
     const retrievedAt = new Date().toISOString();
     const withLive = ordered.map((p) => {
       const live = controls.get(p.externalParcelId);
       if (!live) return p;
-      return { ...p, planning: live, planningStatus: "ok" as const, retrievedAt };
+      const merged = mergePlanningControls(previousById.get(p.externalParcelId), live);
+      return {
+        ...p,
+        planning: merged,
+        planningStatus: "ok" as const,
+        retrievedAt: latestSourceRetrievedAt(merged) ?? retrievedAt,
+      };
     });
     await persistLivePlanning(
       withLive.map((p) => ({
         externalParcelId: p.externalParcelId,
         planning: p.planning,
+        previous: previousById.get(p.externalParcelId) ?? null,
         retrievedAt: p.retrievedAt,
       })),
     );
     return withLive;
   } catch {
-    // Prefer stored official planning over blank "unavailable".
     return ordered.map((p) => {
       if (p.planning) {
         return {
@@ -424,7 +536,6 @@ export async function hydrateExactParcelsForIndexCandidate(
           }
         });
         parcels = await getStoredParcelsByExternalIds(ids);
-        // If persist failed partially, still return live geometry for this response.
         if (!parcels.length) parcels = live.filter((p) => !!p.geometry);
         else {
           const byId = new Map(parcels.map((p) => [p.externalParcelId, p]));

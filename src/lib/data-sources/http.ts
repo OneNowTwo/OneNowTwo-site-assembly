@@ -23,17 +23,30 @@ const MAX_CACHE_ENTRIES = 500;
  */
 export async function fetchJson<T>(
   url: string,
-  opts: { service: string; timeoutMs?: number; ttlMs?: number; headers?: Record<string, string> },
+  opts: {
+    service: string;
+    timeoutMs?: number;
+    ttlMs?: number;
+    headers?: Record<string, string>;
+    /** Optional parent abort — combined with per-request timeout. */
+    signal?: AbortSignal;
+  },
 ): Promise<T> {
-  const { service, timeoutMs = 15000, ttlMs = 10 * 60 * 1000, headers } = opts;
+  const { service, timeoutMs = 15000, ttlMs = 10 * 60 * 1000, headers, signal: parentSignal } = opts;
   const hit = cache.get(url);
   if (hit && hit.expires > Date.now()) return hit.value as T;
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
+      if (parentSignal?.aborted) throw new UpstreamError(`${service} aborted`, service);
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const signal =
+        parentSignal && typeof AbortSignal.any === "function"
+          ? AbortSignal.any([parentSignal, timeout])
+          : timeout;
       const res = await fetch(url, {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
         headers: { "User-Agent": "SiteAssembly/0.1 (internal MVP)", Accept: "application/json", ...headers },
         cache: "no-store",
       });

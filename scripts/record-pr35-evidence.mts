@@ -1,11 +1,13 @@
 /**
- * Real-app Playwright recordings for PR #35 evidence pass.
- * Captures Today → Area L detail → source/affected sites, and
- * Bexley Map live → forced failure fallback → retry → Analyse.
+ * Real-app Playwright evidence for PR #35 — hard-fails on workflow failure.
+ * No API-created opportunity substitutes for a failed Analyse navigation.
+ *
+ * FLOWs: today | bexley-live | bexley-fallback | bexley-recover | bexley-analyse | all
  */
 import { chromium, type Page, type APIRequestContext } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const BASE = process.env.BASE_URL ?? "http://127.0.0.1:3456";
 const EMAIL = process.env.AUTH_EMAIL ?? "demo@siteassembly.app";
@@ -19,13 +21,31 @@ const BEXLEY = [
   { id: "nsw-cadid:102813140", address: "39 Beaconsfield Street, Bexley", areaSqm: 645 },
   { id: "nsw-cadid:103811478", address: "42 Connemarra Street, Bexley", areaSqm: 810 },
   { id: "nsw-cadid:103821903", address: "40 Connemarra Street, Bexley", areaSqm: 830 },
-];
+] as const;
+const BEXLEY_TOTAL = 2285;
+const BEXLEY_MAP_HREF =
+  "/map?candidateId=cmv4nd9c700io0pfhc19igg8r&canonicalKey=nsw-cadid%3A102813140%7Cnsw-cadid%3A103811478%7Cnsw-cadid%3A103821903&lat=-33.95653&lng=151.12853&zoom=18";
+const BEXLEY_BBOX = "151.127389,-33.957686,151.129685,-33.955229";
 
 fs.mkdirSync(MEDIA, { recursive: true });
-
-// Remove prior SVG mockups so they cannot be mistaken for evidence.
 for (const f of fs.readdirSync(MEDIA)) {
   if (f.endsWith(".svg")) fs.unlinkSync(path.join(MEDIA, f));
+}
+
+function fail(msg: string): never {
+  throw new Error(`EVIDENCE_FAIL: ${msg}`);
+}
+
+function assertAssembly(text: string, where: string) {
+  for (const b of BEXLEY) {
+    const short = b.address.split(",")[0]!;
+    if (!text.includes(short)) fail(`${where}: missing address ${short}`);
+  }
+  if (!new RegExp(String(BEXLEY_TOTAL)).test(text.replace(/,/g, ""))) {
+    // allow "2,285" or "2285"
+    if (!/2,?285/.test(text)) fail(`${where}: missing total area 2,285 sqm`);
+  }
+  if (!/3\s*lots?/i.test(text)) fail(`${where}: missing 3 lots`);
 }
 
 async function apiLogin(request: APIRequestContext) {
@@ -33,7 +53,7 @@ async function apiLogin(request: APIRequestContext) {
     data: { email: EMAIL, password: PASSWORD },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok()) throw new Error(`Login failed ${res.status()}: ${JSON.stringify(body)}`);
+  if (!res.ok()) fail(`Login failed ${res.status()}: ${JSON.stringify(body)}`);
 }
 
 async function ensureAuthedPage(page: Page) {
@@ -45,7 +65,7 @@ async function ensureAuthedPage(page: Page) {
     await page.click('button[type="submit"]');
     await page.waitForURL(/\/(dashboard|map|find)/, { timeout: 30000 });
   }
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1200);
 }
 
 async function shot(page: Page, name: string) {
@@ -54,226 +74,164 @@ async function shot(page: Page, name: string) {
   console.log("SHOT", file);
 }
 
+async function livePlanningTrace(request: APIRequestContext) {
+  const res = await request.get(`${BASE}/api/parcels?bbox=${BEXLEY_BBOX}`, { timeout: 120000 });
+  if (!res.ok()) fail(`parcels bbox ${res.status()}`);
+  const body = await res.json();
+  const wanted = new Set<string>(BEXLEY.map((b) => b.id));
+  const parcels = (body.parcels ?? []).filter((p: { externalParcelId: string }) => wanted.has(p.externalParcelId));
+  if (parcels.length !== 3) fail(`expected 3 Bexley parcels, got ${parcels.length}`);
+  for (const p of parcels) {
+    if (p.planning?.zone !== "R3" || p.planning?.fsr !== 0.7) {
+      fail(`live planning mismatch for ${p.address}: ${JSON.stringify(p.planning)}`);
+    }
+    if (!p.retrievedAt) fail(`missing retrievedAt for ${p.address}`);
+  }
+  const retrievedAts = parcels.map((p: { retrievedAt: string }) => p.retrievedAt);
+  return {
+    parcels: parcels.map((p: { externalParcelId: string; address: string; retrievedAt: string; planning: unknown }) => ({
+      id: p.externalParcelId,
+      address: p.address,
+      retrievedAt: p.retrievedAt,
+      planning: p.planning,
+    })),
+    retrievedAts,
+    planningStatus: body.planningStatus,
+  };
+}
+
 async function recordToday(page: Page) {
   await ensureAuthedPage(page);
-  // Ensure apartments strategy (Area L is apartments key-site)
   const apt = page.getByRole("button", { name: /Apartments/i }).first();
   if (await apt.count()) {
     await apt.click().catch(() => null);
     await page.waitForTimeout(2000);
   }
   await page.getByText(/Area L/i).first().waitFor({ timeout: 30000 });
-  // Scroll planning updates into view for the evidence screenshot
   const know = page.getByText(/What you need to know/i).first();
-  if (await know.count()) {
-    await know.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(400);
-  }
+  if (await know.count()) await know.scrollIntoViewIfNeeded();
   await shot(page, "01-today-what-you-need.png");
 
-  // Open Area L detail — click the title button for that story
   const areaTitle = page.getByRole("button", { name: /Inner West planning update — Area L|Area L/i }).first();
-  if (await areaTitle.count()) {
-    await areaTitle.click();
-  } else {
-    // Fallback: locate the story row by text then its Details control
-    const row = page.locator("div").filter({ hasText: /Inner West planning update — Area L/ }).last();
-    await row.getByRole("button", { name: /^Details$/ }).click({ force: true });
-  }
-
-  await page.getByText(/What changed|Proposed controls|Official source/i).first().waitFor({ timeout: 15000 });
-  await page.waitForTimeout(600);
-
-  // Assert no placeholder copy from the rejected mockup
+  if (!(await areaTitle.count())) fail("Area L title button not found on Today");
+  await areaTitle.click();
+  await page.getByText(/What changed|Proposed controls|Official source|Screening sample/i).first().waitFor({ timeout: 15000 });
   const panelText = await page.locator('[role="dialog"]').innerText();
-  for (const bad of [
-    "— (where known)",
-    "From PCA / key-site evidence",
-    "Separate from official publication date",
-    "Document-only refreshes show",
-  ]) {
-    if (panelText.includes(bad)) {
-      throw new Error(`Detail panel still contains placeholder copy: ${bad}`);
-    }
+  for (const bad of ["— (where known)", "From PCA / key-site evidence", "Separate from official publication date"]) {
+    if (panelText.includes(bad)) fail(`placeholder copy still present: ${bad}`);
   }
-  console.log("DETAIL_PANEL_OK", panelText.slice(0, 400).replace(/\s+/g, " "));
   await shot(page, "02-update-detail-panel.png");
 
-  const source = page.getByRole("link", { name: /Official webpage|source/i }).first();
-  if (await source.count()) {
-    console.log("SOURCE_HREF", await source.getAttribute("href"));
-  }
-
   const inspect = page.getByRole("link", { name: /Inspect affected site/i }).first();
-  await inspect.click();
-  await page.waitForURL(/\/find/, { timeout: 30000 });
-  await page.waitForTimeout(2500);
+  if (!(await inspect.count())) fail("Inspect affected sites link missing");
+  await Promise.all([page.waitForURL(/\/find/, { timeout: 30000 }), inspect.click()]);
+  await page.waitForTimeout(3500);
   await shot(page, "03-find-affected-sites.png");
-  console.log("FIND_URL", page.url());
-}
-
-/** Exact indexed candidate for 39 Beaconsfield + 42/40 Connemarra (2,285 sqm). */
-const BEXLEY_MAP_HREF =
-  "/map?candidateId=cmv4nd9c700io0pfhc19igg8r&canonicalKey=nsw-cadid%3A102813140%7Cnsw-cadid%3A103811478%7Cnsw-cadid%3A103821903&lat=-33.95653&lng=151.12853&zoom=18";
-const BEXLEY_BBOX = "151.127389,-33.957686,151.129685,-33.955229";
-
-async function createBexleyOpportunityFromStored(request: APIRequestContext) {
-  const res = await request.get(`${BASE}/api/parcels?bbox=${BEXLEY_BBOX}`, { timeout: 120000 });
-  if (!res.ok()) throw new Error(`parcels bbox failed ${res.status()}`);
-  const body = await res.json();
-  const wanted = new Set(BEXLEY.map((b) => b.id));
-  const parcels = (body.parcels ?? []).filter((p: { externalParcelId: string }) =>
-    wanted.has(p.externalParcelId),
-  );
-  console.log(
-    "PARCEL_API_COUNT",
-    parcels.length,
-    "planningStatus",
-    body.planningStatus,
-    "messages",
-    body.messages,
-  );
-  for (const p of parcels) {
-    console.log("PARCEL_API", p.address, p.planningStatus, p.planning?.zone, p.planning?.fsr, p.retrievedAt);
+  const findUrl = page.url();
+  if (!/[?&](pca|keySite|keySites)=/.test(findUrl)) fail(`Find URL missing pca/keySite: ${findUrl}`);
+  const findText = await page.locator("body").innerText();
+  // Must show some result row or an explicit empty state — not a blank crash.
+  if (!/result|site|assembl|Area L|Inner West|No /i.test(findText)) {
+    fail("Find page after Today link did not show usable affected-site results");
   }
-  if (parcels.length !== 3) {
-    throw new Error(`Expected 3 Bexley parcels in bbox, got ${parcels.length}`);
-  }
-  const create = await request.post(`${BASE}/api/opportunities`, {
-    data: {
-      name: "Bexley 3-lot evidence — Beaconsfield / Connemarra",
-      parcels,
-    },
-    timeout: 60000,
-  });
-  const created = await create.json();
-  if (!create.ok()) throw new Error(`create opportunity failed ${create.status()}: ${JSON.stringify(created)}`);
-  console.log("OPP_ID", created.id);
-  return { id: created.id as string, parcels };
+  console.log("FIND_URL", findUrl);
 }
 
 async function recordBexleyLive(page: Page) {
   await ensureAuthedPage(page);
-  let oppId: string | null = null;
-  let retrievedAt: string | undefined = "2026-10-16T05:49:38.669Z";
+  const trace = await livePlanningTrace(page.request);
+  fs.writeFileSync(
+    path.join(MEDIA, "bexley-planning-trace.json"),
+    JSON.stringify(
+      {
+        parcels: BEXLEY,
+        retrievedAts: trace.retrievedAts,
+        planningStatus: trace.planningStatus,
+        source: "LIVE_NSW via /api/parcels (observed at recording time — not hard-coded)",
+        expected: { zone: "R3", fsr: 0.7, heightM: 8.5 },
+      },
+      null,
+      2,
+    ),
+  );
 
-  // Deep-link the exact indexed 3-lot assembly (same as Today → Show on map).
   await page.goto(`${BASE}${BEXLEY_MAP_HREF}`, { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForTimeout(8000);
-  console.log("MAP_URL", page.url());
-
-  await page.getByText(/Beaconsfield|Connemarra|Current assembly|R3|0\.7|2,?285/i).first().waitFor({ timeout: 45000 }).catch(() => null);
   const liveText = await page.locator("body").innerText();
-  console.log("MAP_LIVE_HAS_R3", /R3/.test(liveText));
-  console.log("MAP_LIVE_HAS_FSR", /0\.7/.test(liveText));
-  console.log("MAP_LIVE_HAS_2285", /2,?285/.test(liveText));
-  console.log("MAP_LIVE_HAS_3_LOTS", /3 lots|3\s*lot/i.test(liveText));
+  assertAssembly(liveText, "live map");
+  if (!/R3/.test(liveText) || !/0\.7/.test(liveText)) fail("live map missing R3 / 0.7");
   await shot(page, "04-bexley-map-planning.png");
 
-  const lotBtn = page.getByText(/39 Beaconsfield|42 Connemarra|40 Connemarra/i).first();
+  const lotBtn = page.getByText(/39 Beaconsfield/i).first();
   if (await lotBtn.count()) {
-    await lotBtn.click().catch(() => null);
-    await page.waitForTimeout(1500);
+    await lotBtn.click();
+    await page.waitForTimeout(1200);
   }
   await shot(page, "05-bexley-parcel-panel-live.png");
 
-  // Analyse → opportunity (preserves exact parcel set)
+  // Analyse must navigate via UI — no API substitute.
   const analyse = page.getByRole("button", { name: /^Analyse$/i }).first();
-  if (await analyse.count()) {
-    await analyse.click();
-    await page.waitForTimeout(6000);
-    const m = page.url().match(/opportunities\/([a-z0-9]+)/i);
-    if (m) oppId = m[1]!;
-    console.log("ANALYSE_URL", page.url(), "OPP", oppId);
-    await shot(page, "06-bexley-analyse.png");
-    if (oppId) {
-      await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-      await page.waitForTimeout(5000);
-      await shot(page, "07-bexley-reopen-assembly.png");
-    }
-  }
+  if (!(await analyse.count())) fail("Analyse button not found on live map");
+  await Promise.all([
+    page.waitForURL(/\/opportunities\/[a-z0-9]+/i, { timeout: 45000 }),
+    analyse.click(),
+  ]);
+  const oppMatch = page.url().match(/opportunities\/([a-z0-9]+)/i);
+  if (!oppMatch) fail(`Analyse did not navigate to opportunity: ${page.url()}`);
+  const oppId = oppMatch[1]!;
+  fs.writeFileSync(path.join(MEDIA, "bexley-opp-id.txt"), oppId);
+  await page.waitForTimeout(2500);
+  await shot(page, "06-bexley-analyse.png");
+  console.log("ANALYSE_OK", page.url());
 
-  if (!oppId) {
-    const created = await createBexleyOpportunityFromStored(page.request);
-    oppId = created.id;
-    retrievedAt = created.parcels[0]?.retrievedAt as string | undefined;
-  }
-
-  return { oppId, parcels: BEXLEY, retrievedAt };
+  // Reopen map with opportunity — exact three lots must survive.
+  await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
+  await page.waitForTimeout(6000);
+  const reopen = await page.locator("body").innerText();
+  assertAssembly(reopen, "reopen opportunity map");
+  await shot(page, "07-bexley-reopen-assembly.png");
+  return { oppId, retrievedAts: trace.retrievedAts };
 }
 
 async function recordBexleyFallback(page: Page, oppId: string) {
-  // Server must be running with SA_FORCE_PLANNING_FAIL=1 for this step.
+  // Requires SA_FORCE_PLANNING_FAIL=1 on the server.
   await ensureAuthedPage(page);
-  await page.goto(`${BASE}/map?opportunityId=${oppId}`, {
-    waitUntil: "domcontentloaded",
-    timeout: 90000,
-  });
+  await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForTimeout(5000);
-
-  // Trigger viewport parcels refresh so force-fail path runs
-  await page.mouse.wheel(0, 200);
-  await page.waitForTimeout(3000);
-
+  await page.mouse.wheel(0, 180);
+  await page.waitForTimeout(3500);
   const text = await page.locator("body").innerText();
-  console.log("FALLBACK_STORED", /Stored official planning/i.test(text));
-  console.log("FALLBACK_DATE", /2026-10-16|Stored official/i.test(text));
+  assertAssembly(text, "forced-failure map");
+  if (!/Stored official planning/i.test(text)) fail("forced failure did not show Stored official planning");
+  // Date must come from persisted source timestamp (YYYY-MM-DD), not a hard-coded script constant.
+  if (!/Stored official planning \(\d{4}-\d{2}-\d{2}\)/.test(text)) {
+    fail("stored planning message missing retrieval date from evidence");
+  }
   await shot(page, "05-bexley-parcel-panel.png");
 
   const retry = page.getByRole("button", { name: /Retry/i }).first();
-  if (await retry.count()) {
-    await retry.click();
-    await page.waitForTimeout(2000);
-    console.log("RETRY_CLICKED");
-  }
+  if (!(await retry.count())) fail("Retry button missing under forced failure");
+  await retry.click();
+  await page.waitForTimeout(2500);
+  const after = await page.locator("body").innerText();
+  assertAssembly(after, "after retry under forced failure");
   await shot(page, "05b-bexley-after-retry-forced.png");
 }
 
-async function recordBexleyAnalyse(page: Page, oppId: string) {
+async function recordBexleyRecover(page: Page, oppId: string) {
+  // Requires SA_FORCE_PLANNING_FAIL unset — live recovery after forced failure.
   await ensureAuthedPage(page);
-
-  // Start from the exact indexed 3-lot MapTarget (preserves parcel set through Analyse).
-  await page.goto(`${BASE}${BEXLEY_MAP_HREF}`, { waitUntil: "domcontentloaded", timeout: 90000 });
+  await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForTimeout(6000);
-  let bodyText = await page.locator("body").innerText();
-  console.log(
-    "ASSEMBLY_ADDRESS_HITS",
-    BEXLEY.filter((b) => bodyText.includes(b.address.split(",")[0]!)).length,
-    "HAS_2285",
-    /2,?285/.test(bodyText),
-  );
-
-  const analyse = page.getByRole("button", { name: /^Analyse$/i }).first();
-  if (await analyse.count()) {
-    await analyse.click();
-    await page.waitForTimeout(5000);
-    console.log("AFTER_ANALYSE_URL", page.url());
+  const retry = page.getByRole("button", { name: /Retry/i }).first();
+  if (await retry.count()) {
+    await retry.click();
+    await page.waitForTimeout(4000);
   }
-  // Opportunity page (created earlier) as Analyse destination evidence
-  await page.goto(`${BASE}/opportunities/${oppId}`, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForTimeout(2500);
-  await shot(page, "06-bexley-analyse.png");
-
-  // Reopen map with opportunity + confirm exact three lots
-  await page.goto(`${BASE}/map?opportunityId=${oppId}`, {
-    waitUntil: "domcontentloaded",
-    timeout: 90000,
-  });
-  await page.waitForTimeout(6000);
-  await shot(page, "07-bexley-reopen-assembly.png");
-  const reopen = await page.locator("body").innerText();
-  console.log(
-    "REOPEN_3_LOTS",
-    BEXLEY.every((b) => reopen.includes(b.address.split(",")[0]!)),
-    "REOPEN_2285",
-    /2,?285/.test(reopen),
-  );
-
-  // Also reopen via the same index candidate deep-link
-  await page.goto(`${BASE}${BEXLEY_MAP_HREF}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForTimeout(5000);
-  bodyText = await page.locator("body").innerText();
-  console.log("CANDIDATE_REOPEN_2285", /2,?285/.test(bodyText), "R3", /R3/.test(bodyText));
+  const text = await page.locator("body").innerText();
+  assertAssembly(text, "live recovery");
+  if (!/R3/.test(text) || !/0\.7/.test(text)) fail("live recovery missing R3 / 0.7");
+  await shot(page, "05c-bexley-live-recovery.png");
 }
 
 async function withVideo(name: string, fn: (page: Page) => Promise<void>) {
@@ -293,23 +251,57 @@ async function withVideo(name: string, fn: (page: Page) => Promise<void>) {
     await ctx.close();
     await browser.close();
   }
-  // Rename newest webm
   const vids = fs
     .readdirSync(MEDIA)
-    .filter((f) => f.endsWith(".webm"))
+    .filter((f) => f.endsWith(".webm") && !/^(01-|02)/.test(f))
     .map((f) => ({ f, m: fs.statSync(path.join(MEDIA, f)).mtimeMs }))
     .sort((a, b) => b.m - a.m);
-  if (vids[0] && !vids[0].f.startsWith("01-") && !vids[0].f.startsWith("02-")) {
+  if (vids[0]) {
     const dest = path.join(MEDIA, name);
     fs.renameSync(path.join(MEDIA, vids[0].f), dest);
     console.log("VIDEO", dest);
   }
 }
 
+function concatCombinedVideo() {
+  const parts = [
+    "02a-bexley-map-live.webm",
+    "02b-bexley-fallback-retry.webm",
+    "02c-bexley-live-recovery.webm",
+    "02d-bexley-analyse-reopen.webm",
+  ]
+    .map((f) => path.join(MEDIA, f))
+    .filter((p) => fs.existsSync(p));
+  const out = path.join(MEDIA, "02-bexley-map-live-fallback-retry-analyse.webm");
+  if (parts.length < 2) {
+    fail("combined video requires at least two segment recordings — refusing to copy live-only");
+  }
+  // Prefer ffmpeg concat when available.
+  const list = path.join(MEDIA, "_concat.txt");
+  fs.writeFileSync(list, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"));
+  const ff = spawnSync("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", out], {
+    encoding: "utf8",
+  });
+  fs.unlinkSync(list);
+  if (ff.status === 0 && fs.existsSync(out)) {
+    console.log("COMBINED_VIDEO_FFMPEG", out);
+    return;
+  }
+  // Fallback: binary-append is invalid for webm — instead write a manifest and
+  // copy the longest multi-segment set by requiring all parts exist and using
+  // the fallback/analyse segment as the named combined file is still wrong.
+  // Soft requirement: produce a real multi-flow recording by re-encoding via playwright is heavy.
+  // If ffmpeg missing, stitch by recording a note manifest and fail loudly unless FORCE_COMBINED_COPY=1.
+  if (process.env.FORCE_COMBINED_COPY === "1") {
+    fs.copyFileSync(parts[parts.length - 1]!, out);
+    console.warn("COMBINED_VIDEO_FALLBACK_COPY", out);
+    return;
+  }
+  fail(`ffmpeg concat failed (status ${ff.status}): ${(ff.stderr || "").slice(0, 400)}`);
+}
+
 async function main() {
   console.log({ BASE, MEDIA, FLOW });
-
-  // Smoke auth
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
   const reqCtx = await browser.newContext();
   await apiLogin(reqCtx.request);
@@ -318,6 +310,9 @@ async function main() {
   await browser.close();
 
   let oppId: string | null = process.env.BEXLEY_OPP_ID ?? null;
+  if (!oppId && fs.existsSync(path.join(MEDIA, "bexley-opp-id.txt"))) {
+    oppId = fs.readFileSync(path.join(MEDIA, "bexley-opp-id.txt"), "utf8").trim();
+  }
 
   if (FLOW === "today" || FLOW === "all") {
     await withVideo("01-today-update-detail-affected-sites.webm", recordToday);
@@ -327,47 +322,55 @@ async function main() {
     await withVideo("02a-bexley-map-live.webm", async (page) => {
       const r = await recordBexleyLive(page);
       oppId = r.oppId;
-      fs.writeFileSync(path.join(MEDIA, "bexley-opp-id.txt"), oppId);
-      fs.writeFileSync(
-        path.join(MEDIA, "bexley-planning-trace.json"),
-        JSON.stringify(
-          {
-            parcels: BEXLEY,
-            retrievedAt: r.retrievedAt,
-            source: "LIVE_NSW via /api/parcels bbox → persistLivePlanning",
-            expected: { zone: "R3", fsr: 0.7, heightM: 8.5, instrument: "Bayside Local Environmental Plan 2021" },
-          },
-          null,
-          2,
-        ),
-      );
     });
   }
 
   if (FLOW === "bexley-fallback") {
-    oppId = oppId || fs.readFileSync(path.join(MEDIA, "bexley-opp-id.txt"), "utf8").trim();
+    if (!oppId) fail("bexley-fallback requires opp id from live Analyse");
     await withVideo("02b-bexley-fallback-retry.webm", async (page) => {
       await recordBexleyFallback(page, oppId!);
     });
   }
 
-  if (FLOW === "bexley-analyse" || FLOW === "bexley" || FLOW === "all") {
-    oppId = oppId || fs.readFileSync(path.join(MEDIA, "bexley-opp-id.txt"), "utf8").trim();
-    // Analyse path expects live planning available (no force fail)
-    await withVideo("02c-bexley-analyse-reopen.webm", async (page) => {
-      await recordBexleyAnalyse(page, oppId!);
+  if (FLOW === "bexley-recover") {
+    if (!oppId) fail("bexley-recover requires opp id");
+    await withVideo("02c-bexley-live-recovery.webm", async (page) => {
+      await recordBexleyRecover(page, oppId!);
     });
   }
 
-  // Concat note: keep separate videos; also copy a combined-named alias for the brief
-  const parts = [
-    "02a-bexley-map-live.webm",
-    "02b-bexley-fallback-retry.webm",
-    "02c-bexley-analyse-reopen.webm",
-  ].map((f) => path.join(MEDIA, f));
-  if (parts.every((p) => fs.existsSync(p))) {
-    // Alias first live video path for the brief's "Bexley Map flow" recording set
-    fs.copyFileSync(parts[0]!, path.join(MEDIA, "02-bexley-map-live-fallback-retry-analyse.webm"));
+  if (FLOW === "bexley-analyse") {
+    // Analyse already recorded in live; re-verify reopen only (must still be UI opportunity).
+    if (!oppId) fail("bexley-analyse requires opp id from live Analyse");
+    await withVideo("02d-bexley-analyse-reopen.webm", async (page) => {
+      await ensureAuthedPage(page);
+      await page.goto(`${BASE}${BEXLEY_MAP_HREF}`, { waitUntil: "domcontentloaded", timeout: 90000 });
+      await page.waitForTimeout(6000);
+      const before = await page.locator("body").innerText();
+      assertAssembly(before, "pre-analyse candidate");
+      const analyse = page.getByRole("button", { name: /^Analyse$/i }).first();
+      if (!(await analyse.count())) fail("Analyse missing on re-verify");
+      await Promise.all([
+        page.waitForURL(/\/opportunities\/[a-z0-9]+/i, { timeout: 45000 }),
+        analyse.click(),
+      ]);
+      await shot(page, "06-bexley-analyse.png");
+      await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
+      await page.waitForTimeout(6000);
+      const after = await page.locator("body").innerText();
+      assertAssembly(after, "post-analyse reopen");
+      await shot(page, "07-bexley-reopen-assembly.png");
+    });
+  }
+
+  if (FLOW === "combine" || FLOW === "all") {
+    // `all` does not run fallback/recover (needs server env flips) — combine only when segments exist.
+    const needed = ["02a-bexley-map-live.webm", "02b-bexley-fallback-retry.webm", "02d-bexley-analyse-reopen.webm"];
+    if (needed.every((f) => fs.existsSync(path.join(MEDIA, f)))) {
+      concatCombinedVideo();
+    } else {
+      console.log("COMBINED_SKIP_missing_segments", needed.filter((f) => !fs.existsSync(path.join(MEDIA, f))));
+    }
   }
 
   console.log("DONE");

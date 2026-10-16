@@ -14,6 +14,19 @@ export type PlanningControlSnapshot = {
   notes?: string | null;
 };
 
+export type ScreeningSampleEvidence = {
+  lng: number;
+  lat: number;
+  zone?: string | null;
+  fsr?: number | null;
+  heightM?: number | null;
+  mixedAcrossKeySite: boolean;
+  distinctZones?: string[];
+  distinctFsrs?: number[];
+  distinctHeights?: number[];
+  scope: "INTERIOR_POINT_SAMPLE";
+};
+
 export type PlanningUpdateEvidence = {
   /** Official / source document title when known. */
   officialTitle: string | null;
@@ -25,6 +38,8 @@ export type PlanningUpdateEvidence = {
   plainSummary: string | null;
   previousControls: PlanningControlSnapshot | null;
   proposedControls: PlanningControlSnapshot | null;
+  /** Interior-point screening sample — limited scope; not parcel-level evidence. */
+  screeningSample: ScreeningSampleEvidence | null;
   /** Official publication / exhibition / effective date (ISO), not detection time. */
   officialDate: string | null;
   officialDateLabel: string | null;
@@ -109,6 +124,33 @@ export function controlsFromUnknown(v: unknown): PlanningControlSnapshot | null 
   // Notes-only is not structured evidence — callers treat as awaiting verification.
   if (zone == null && fsr == null && heightM == null && ah == null) return null;
   return { zone, fsr, heightM, affordableHousingContributionPct: ah, notes };
+}
+
+export function screeningSampleFromUnknown(v: unknown): ScreeningSampleEvidence | null {
+  const r = asRecord(v);
+  if (!r) return null;
+  const nested = asRecord(r.proposedControls) ?? r;
+  const sample = asRecord(nested.screeningSample);
+  if (!sample) return null;
+  const lng = numOrNull(sample.lng);
+  const lat = numOrNull(sample.lat);
+  if (lng == null || lat == null) return null;
+  return {
+    lng,
+    lat,
+    zone: typeof sample.zone === "string" ? sample.zone : null,
+    fsr: numOrNull(sample.fsr),
+    heightM: numOrNull(sample.heightM),
+    mixedAcrossKeySite: sample.mixedAcrossKeySite === true,
+    distinctZones: Array.isArray(sample.distinctZones) ? sample.distinctZones.map(String) : [],
+    distinctFsrs: Array.isArray(sample.distinctFsrs)
+      ? sample.distinctFsrs.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      : [],
+    distinctHeights: Array.isArray(sample.distinctHeights)
+      ? sample.distinctHeights.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      : [],
+    scope: "INTERIOR_POINT_SAMPLE",
+  };
 }
 
 export function isDocumentOnlyChange(kind: string, title: string, summary: string | null): boolean {
@@ -242,6 +284,11 @@ export function buildPlanningUpdateEvidence(input: {
     controlsFromUnknown(input.oldControls) ??
     controlsFromUnknown(input.keySites?.[0]?.currentControls);
 
+  const screeningSample =
+    screeningSampleFromUnknown(payload.proposedControls) ??
+    screeningSampleFromUnknown(input.keySites?.[0]?.proposedControls) ??
+    screeningSampleFromUnknown(input.newControls);
+
   const proposedFromEvidence =
     controlsFromUnknown(payload.proposedControls) ??
     controlsFromUnknown(input.newControls) ??
@@ -253,10 +300,14 @@ export function buildPlanningUpdateEvidence(input: {
     kinds.some((k, i) => isDocumentOnlyChange(k, titles[i] ?? "", summaries[i] ?? null)) ||
     (/SOURCE_DOCUMENT|NEEDS_RE_EXTRACTION/i.test(input.storyTitle) && !hasStructuredControls(proposedFromEvidence));
 
-  // Missing structured controls on a key-site/PCA story = incomplete ingestion, not a confirmed change.
-  const awaitingVerification = documentOnly || !hasStructuredControls(proposedFromEvidence);
+  // Mixed key-site controls / missing structured controls = not a confirmed uniform change.
+  const mixedKeySite = screeningSample?.mixedAcrossKeySite === true;
+  const awaitingVerification =
+    documentOnly || mixedKeySite || !hasStructuredControls(proposedFromEvidence);
 
-  const proposedControls = awaitingVerification ? null : proposedFromEvidence;
+  // Never present mixed point samples as uniform proposed controls.
+  const proposedControls =
+    awaitingVerification && !mixedKeySite ? null : mixedKeySite ? null : proposedFromEvidence;
 
   const officialTitle =
     (typeof payload.officialTitle === "string" ? payload.officialTitle : null) ||
@@ -274,7 +325,14 @@ export function buildPlanningUpdateEvidence(input: {
     (typeof payload.evidenceSummary === "string" ? cleanEvidenceText(payload.evidenceSummary) : null) ||
     null;
   if (!plainSummary) {
-    if (awaitingVerification) {
+    if (mixedKeySite && screeningSample) {
+      const sampleBits = [
+        screeningSample.zone ? `zone ${screeningSample.zone}` : null,
+        screeningSample.fsr != null ? `FSR ${screeningSample.fsr}` : null,
+        screeningSample.heightM != null ? `height ${screeningSample.heightM} m` : null,
+      ].filter(Boolean);
+      plainSummary = `Mixed proposed controls across ${areaLabel ?? "this key site"} (not uniform). Interior-point screening sample only (${sampleBits.join(", ") || "no hit"}) — not parcel-level evidence and not an area-wide control change.`;
+    } else if (awaitingVerification) {
       plainSummary = documentOnly
         ? "Source updated — change details awaiting verification. A monitored planning source document changed; this is not confirmed as a zoning, FSR or height control change."
         : "Source updated — change details awaiting verification. Structured proposed controls have not been confirmed for this area yet.";
@@ -296,8 +354,11 @@ export function buildPlanningUpdateEvidence(input: {
         );
       }
       const where = [locationLabel, areaLabel].filter(Boolean).join(" · ");
+      const scopeNote = screeningSample
+        ? " Interior-point screening sample verified uniform across intersecting control polygons — not parcel-level evidence."
+        : "";
       plainSummary = bits.length
-        ? `Proposed controls for ${where || "this area"}: ${bits.join("; ")}. These are proposed controls from the official planning program — not current LEP law.`
+        ? `Proposed controls for ${where || "this area"}: ${bits.join("; ")}. These are proposed controls from the official planning program — not current LEP law.${scopeNote}`
         : cleanEvidenceText(input.storySummary) || null;
     } else {
       const raw = cleanEvidenceText(input.storySummary);
@@ -339,27 +400,30 @@ export function buildPlanningUpdateEvidence(input: {
     plainSummary,
     previousControls,
     proposedControls,
+    screeningSample,
     officialDate: exhibition,
     officialDateLabel: exhibition ? "Exhibition / official date" : null,
     detectedAt: input.detectedAt ?? (typeof payload.detectedAt === "string" ? payload.detectedAt : null),
     whyItMatters:
       whyStored ||
-      (awaitingVerification
-        ? "Until proposed controls are verified from the official source, treat this as a source refresh only — not a confirmed uplift."
-        : proposedControls && hasStructuredControls(proposedControls)
-          ? [
-              areaLabel ? `${areaLabel} is a monitored key site` : "This is a monitored planning change area",
-              locationLabel ? `in ${locationLabel}` : null,
-              proposedControls.fsr != null ? `with proposed FSR ${proposedControls.fsr}` : null,
-              proposedControls.heightM != null ? `and height ${proposedControls.heightM} m` : null,
-              proposedControls.zone ? `(zone ${proposedControls.zone})` : null,
-              "— proposed only until gazetted.",
-            ]
-              .filter(Boolean)
-              .join(" ")
-              .replace(/\s+/g, " ")
-              .trim()
-          : null),
+      (mixedKeySite
+        ? `${areaLabel ?? "This key site"} has mixed proposed control polygons — do not assume a single FSR/zone/height across the area. Use the interior-point screening sample for screening only.`
+        : awaitingVerification
+          ? "Until proposed controls are verified from the official source, treat this as a source refresh only — not a confirmed uplift."
+          : proposedControls && hasStructuredControls(proposedControls)
+            ? [
+                areaLabel ? `${areaLabel} is a monitored key site` : "This is a monitored planning change area",
+                locationLabel ? `in ${locationLabel}` : null,
+                proposedControls.fsr != null ? `with proposed FSR ${proposedControls.fsr}` : null,
+                proposedControls.heightM != null ? `and height ${proposedControls.heightM} m` : null,
+                proposedControls.zone ? `(zone ${proposedControls.zone})` : null,
+                screeningSample ? "— interior-point sample, proposed only until gazetted." : "— proposed only until gazetted.",
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .replace(/\s+/g, " ")
+                .trim()
+            : null),
     sourceName: input.sourceName ?? (typeof payload.sourceLabel === "string" ? payload.sourceLabel : null),
     documentTitle: officialTitle,
     documentSection: typeof payload.documentSection === "string" ? payload.documentSection : null,

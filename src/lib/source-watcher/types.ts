@@ -79,6 +79,22 @@ export interface ProposedControls {
   storeys?: number | null;
   notes?: string | null;
   machineReadable?: boolean;
+  /**
+   * Interior-point screening sample only — never treat as uniform parcel-level
+   * evidence across the whole key site when mixedAcrossKeySite is true.
+   */
+  screeningSample?: {
+    lng: number;
+    lat: number;
+    zone?: string | null;
+    fsr?: number | null;
+    heightM?: number | null;
+    mixedAcrossKeySite: boolean;
+    distinctZones?: string[];
+    distinctFsrs?: number[];
+    distinctHeights?: number[];
+    scope: "INTERIOR_POINT_SAMPLE";
+  } | null;
 }
 
 export type GeometrySource =

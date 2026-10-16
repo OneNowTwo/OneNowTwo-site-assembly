@@ -46,8 +46,10 @@ async function enrichAreaL() {
   const pc = enriched.proposedControls;
   console.log("Area L live enrich:", JSON.stringify(pc, null, 2));
 
-  if (!pc || (pc.zone == null && pc.fsr == null && pc.heightM == null)) {
-    // Direct centroid probe for diagnostics
+  const sample = pc?.screeningSample;
+  const hasUniform = pc && (pc.zone != null || pc.fsr != null || pc.heightM != null);
+  const hasSample = !!sample && (sample.zone != null || sample.fsr != null || sample.heightM != null);
+  if (!pc || (!hasUniform && !hasSample)) {
     if (bbox) {
       const mid = {
         lng: (bbox.west + bbox.east) / 2,
@@ -56,8 +58,9 @@ async function enrichAreaL() {
       const probe = await queryInnerWestProposedAtPoint(mid.lng, mid.lat);
       console.log("Direct centroid probe:", probe);
     }
-    throw new Error("Area L enrichment returned no structured controls");
+    throw new Error("Area L enrichment returned no screening sample or structured controls");
   }
+  console.log("Area L mixed?", sample?.mixedAcrossKeySite, "uniform?", !!hasUniform);
 
   await prisma.keySite.update({
     where: { id: ks.id },
@@ -91,6 +94,8 @@ async function enrichAreaL() {
             incentiveFsr: pc.incentiveFsr,
             incentiveHeightM: pc.incentiveHeightM,
             affordableHousingContributionPct: pc.affordableHousingContributionPct,
+            screeningSample: pc.screeningSample ?? null,
+            notes: pc.notes ?? null,
           },
           previousControls: null,
           evidenceSummary: null,
