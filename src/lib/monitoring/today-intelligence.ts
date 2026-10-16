@@ -264,19 +264,22 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       affectedCandidateIds,
     });
 
-    // Repair legacy findHrefs that only had strategy=… or lga=Key+site+Area+L
+    // Always prefer rebuilt nav when we have pca / key-site / candidates — legacy
+    // findHrefs often duplicated Area+L encodings or used bare strategy / bad LGA.
     const legacyFind = s.findHref ?? "";
     const legacyLga = legacyFind.match(/[?&]lga=([^&]+)/);
     const badLegacyLga = !!legacyLga && !isValidLgaFilter(decodeURIComponent(legacyLga[1]!));
+    const hasStableNav =
+      !!(pcaId || storedKeySites.length || affectedCandidateIds.length || evidence.planningChangeAreaId);
     const findNeedsRepair =
+      hasStableNav ||
       !legacyFind ||
       /^\/find\?strategy=[A-Z_]+$/i.test(legacyFind) ||
       /lga=Key\+site/i.test(legacyFind) ||
-      badLegacyLga ||
-      (!legacyFind.includes("pca=") &&
-        !legacyFind.includes("keySite=") &&
-        !legacyFind.includes("candidateIds=") &&
-        !!(pcaId || storedKeySites.length || affectedCandidateIds.length));
+      /keySites=Area\+L%2CArea/i.test(legacyFind) ||
+      badLegacyLga;
+    const findHref = findNeedsRepair ? nav.findHref : s.findHref;
+    const mapHref = nav.mapHref ?? s.mapHref;
 
     topIntelligence.push({
       id: s.id,
@@ -291,9 +294,9 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       sourceId: typeof payload.sourceLabel === "string" ? payload.sourceLabel : null,
       sourceLabel: evidence.sourceName ?? (typeof payload.sourceLabel === "string" ? payload.sourceLabel : null),
       sourceHref: evidence.webpageUrl ?? s.sourceHref,
-      href: nav.mapHref ?? s.mapHref,
-      mapHref: nav.mapHref ?? s.mapHref,
-      findHref: findNeedsRepair ? nav.findHref : s.findHref,
+      href: mapHref,
+      mapHref,
+      findHref,
       eventCount: typeof payload.eventCount === "number" ? payload.eventCount : null,
       detail: {
         ...evidence,
@@ -301,8 +304,8 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
         cardExplanation: presented.explanation,
         typeLabel: presented.typeLabel,
         affectedSites: s.affectedSiteCount,
-        mapHref: nav.mapHref ?? s.mapHref,
-        findHref: findNeedsRepair ? nav.findHref : s.findHref,
+        mapHref,
+        findHref,
       },
     });
   }

@@ -134,7 +134,12 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
   let controls = new Map<string, PlanningControls>();
   let planningError: string | null = null;
   try {
-    // Overall budget so Render proxy does not HTML-502 before we soft-fail.
+    // Controlled failure for evidence recordings / local failover tests only.
+    // Never set in production — product UI must not expose this switch.
+    if (process.env.SA_FORCE_PLANNING_FAIL === "1") {
+      throw new UpstreamError("Live NSW Planning did not respond", "NSW Planning");
+    }
+    // Overall budget so the platform proxy does not HTML-502 before we soft-fail.
     const planningPromise = nswPlanningProvider.getControlsForParcels(
       bbox,
       base.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
@@ -172,7 +177,7 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
         ...p,
         planning: cached.planning,
         planningStatus: "cached",
-        planningMessage: `Stored official planning (${checked}) — live NSW Planning did not respond${planningError ? ` (${planningError})` : ""}.`,
+        planningMessage: `Stored official planning (${checked}) — live NSW Planning did not respond.`,
         retrievedAt: cached.retrievedAt,
       };
     }
@@ -200,7 +205,7 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
     }
   } else if (liveCount > 0) {
     // Persist successful live planning so a later outage can fall back.
-    void persistLivePlanning(parcels.map((p) => ({ externalParcelId: p.externalParcelId, planning: p.planning, retrievedAt: p.retrievedAt })));
+    await persistLivePlanning(parcels.map((p) => ({ externalParcelId: p.externalParcelId, planning: p.planning, retrievedAt: p.retrievedAt })));
   }
 
   return { parcels, cadastreStatus, planningStatus, messages, bbox };
@@ -343,6 +348,9 @@ export async function getParcelsByExternalIds(
 
   // Attach planning where possible; keep any already-stored controls on failure.
   try {
+    if (process.env.SA_FORCE_PLANNING_FAIL === "1") {
+      throw new Error("Live NSW Planning did not respond");
+    }
     const lngs = ordered.map((p) => p.centroid[0]);
     const lats = ordered.map((p) => p.centroid[1]);
     const bbox: BBox = {
@@ -361,7 +369,7 @@ export async function getParcelsByExternalIds(
       if (!live) return p;
       return { ...p, planning: live, planningStatus: "ok" as const, retrievedAt };
     });
-    void persistLivePlanning(
+    await persistLivePlanning(
       withLive.map((p) => ({
         externalParcelId: p.externalParcelId,
         planning: p.planning,

@@ -636,8 +636,8 @@ export function DashboardClient() {
   );
 }
 
-function formatControlSnap(c: ControlSnap | null | undefined): string {
-  if (!c) return "—";
+function formatControlSnap(c: ControlSnap | null | undefined): string | null {
+  if (!c) return null;
   const bits: string[] = [];
   if (c.zone) bits.push(`Zone ${c.zone}`);
   if (c.fsr != null) bits.push(`FSR ${c.fsr}`);
@@ -645,7 +645,7 @@ function formatControlSnap(c: ControlSnap | null | undefined): string {
   if (c.affordableHousingContributionPct != null) {
     bits.push(`AH ${c.affordableHousingContributionPct}%`);
   }
-  return bits.length ? bits.join(" · ") : "—";
+  return bits.length ? bits.join(" · ") : null;
 }
 
 function PlanningUpdateDetailPanel({
@@ -663,58 +663,73 @@ function PlanningUpdateDetailPanel({
   const status = d?.status?.replaceAll("_", " ") ?? null;
   const mapHref = d?.mapHref || story.mapHref || story.href;
   const findHref = d?.findHref || story.findHref || `/find?strategy=${strategy}`;
+  const previousLabel = formatControlSnap(d?.previousControls);
+  const proposedLabel = formatControlSnap(d?.proposedControls);
+  const keySiteIds = d?.keySiteIds ?? [];
+  const candidateIds = d?.affectedCandidateIds ?? [];
+  const awaiting = !!d?.awaitingVerification;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-3 sm:items-center" role="dialog" aria-modal="true">
-      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-[3px] border border-line bg-white shadow-xl">
+      <div className="max-h-[min(90vh,720px)] w-full max-w-lg overflow-y-auto rounded-[3px] border border-line bg-white shadow-xl">
         <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
-          <div>
+          <div className="min-w-0">
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
               {story.typeLabel || "Planning update"}
               {d?.areaLabel ? ` · ${d.areaLabel}` : ""}
             </div>
-            <h2 className="mt-0.5 text-[16px] font-semibold leading-snug text-ink">{title}</h2>
+            <h2 className="mt-0.5 text-[15px] font-semibold leading-snug text-ink">{title}</h2>
             {location && <p className="mt-0.5 text-[12.5px] text-muted">{location}</p>}
           </div>
-          <button type="button" className="text-[12px] font-semibold text-muted hover:text-ink" onClick={onClose}>
+          <button type="button" className="shrink-0 text-[12px] font-semibold text-muted hover:text-ink" onClick={onClose}>
             Close
           </button>
         </div>
 
-        <div className="space-y-4 px-4 py-4 text-[13px]">
-          {d?.awaitingVerification && (
+        <div className="space-y-3.5 px-4 py-3.5 text-[13px]">
+          {awaiting && (
             <div className="rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-950">
-              Change details are awaiting verification. A source document changed — this is not confirmed as a
-              zoning, FSR or height control change.
+              Source updated — change details awaiting verification. This is not confirmed as a zoning, FSR or height
+              control change.
             </div>
           )}
 
           <section>
             <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">What changed</h3>
-            <p className="mt-1 text-ink/90">{d?.plainSummary || story.whatChanged}</p>
+            <p className="mt-1 leading-snug text-ink/90">
+              {d?.plainSummary ||
+                (awaiting
+                  ? "Source updated — change details awaiting verification."
+                  : story.whatChanged)}
+            </p>
           </section>
 
           <section className="grid gap-2 sm:grid-cols-2">
             <div className="rounded-[3px] border border-line bg-canvas px-3 py-2">
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Previous controls</div>
-              <div className="mt-1 font-medium">{formatControlSnap(d?.previousControls)}</div>
-              <div className="mt-0.5 text-[11px] text-muted">Current / prior (where known)</div>
+              <div className="mt-1 font-medium leading-snug">
+                {previousLabel ?? "Not recorded in monitored sources"}
+              </div>
             </div>
             <div className="rounded-[3px] border border-amber-200 bg-amber-50/60 px-3 py-2">
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-amber-950">
                 Proposed controls
               </div>
-              <div className="mt-1 font-medium">
-                {d?.awaitingVerification ? "Awaiting verification" : formatControlSnap(d?.proposedControls)}
+              <div className="mt-1 font-medium leading-snug">
+                {awaiting
+                  ? "Source updated — change details awaiting verification"
+                  : proposedLabel ?? "Not recorded in monitored sources"}
               </div>
-              <div className="mt-0.5 text-[11px] text-muted">Not current LEP law</div>
+              {!awaiting && proposedLabel && (
+                <div className="mt-0.5 text-[11px] text-muted">Proposed — not current LEP law</div>
+              )}
             </div>
           </section>
 
           <section className="grid gap-2 sm:grid-cols-2">
             <div>
-              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Status</div>
-              <div className="mt-0.5 font-medium">{status ?? "—"}</div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Planning status</div>
+              <div className="mt-0.5 font-medium">{status ?? "Not stated in source"}</div>
             </div>
             <div>
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
@@ -734,21 +749,48 @@ function PlanningUpdateDetailPanel({
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
                 Affected potential sites
               </div>
-              <div className="mt-0.5 font-medium">{story.affectedSites ?? "—"}</div>
+              <div className="mt-0.5 font-medium">
+                {candidateIds.length
+                  ? `${candidateIds.length} indexed assembl${candidateIds.length === 1 ? "y" : "ies"}`
+                  : story.affectedSites != null
+                    ? String(story.affectedSites)
+                    : keySiteIds.length
+                      ? `Key site ${keySiteIds.join(", ")}`
+                      : "None linked yet"}
+              </div>
             </div>
           </section>
 
+          {(keySiteIds.length > 0 || candidateIds.length > 0) && (
+            <section>
+              <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Exact affected sites</h3>
+              <ul className="mt-1 space-y-0.5 text-[12.5px] text-ink/90">
+                {keySiteIds.map((id) => (
+                  <li key={`ks-${id}`}>Key site {id}</li>
+                ))}
+                {candidateIds.slice(0, 12).map((id) => (
+                  <li key={`c-${id}`} className="font-mono text-[11.5px]">
+                    {id}
+                  </li>
+                ))}
+                {candidateIds.length > 12 && (
+                  <li className="text-muted">+{candidateIds.length - 12} more via Inspect affected sites</li>
+                )}
+              </ul>
+            </section>
+          )}
+
           <section>
             <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Why it matters</h3>
-            <p className="mt-1 text-ink/90">{d?.whyItMatters || story.whyItMatters}</p>
+            <p className="mt-1 leading-snug text-ink/90">{d?.whyItMatters || story.whyItMatters}</p>
           </section>
 
           <section>
             <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Official source</h3>
-            <p className="mt-1 font-medium">{d?.sourceName || story.sourceLabel || "—"}</p>
+            <p className="mt-1 font-medium">{d?.sourceName || story.sourceLabel || "Not stated in source"}</p>
             {d?.documentTitle && (
               <p className="mt-0.5 text-[12px] text-muted">
-                Document: {d.documentTitle}
+                {d.documentTitle}
                 {d.documentSection ? ` · ${d.documentSection}` : ""}
               </p>
             )}
@@ -760,7 +802,7 @@ function PlanningUpdateDetailPanel({
                   rel="noreferrer"
                   className="text-[12px] font-semibold text-brand hover:underline"
                 >
-                  Official webpage
+                  Official webpage / source
                 </a>
               )}
               {d?.sourceUrl && d.sourceUrl !== (d.webpageUrl || story.sourceHref) && (
@@ -783,7 +825,9 @@ function PlanningUpdateDetailPanel({
               </Link>
             )}
             <Link href={findHref} className="text-[12px] font-semibold text-brand hover:underline" onClick={onClose}>
-              {story.affectedSites === 1 ? "Inspect affected site" : "Inspect affected sites"}
+              {candidateIds.length === 1 || story.affectedSites === 1
+                ? "Inspect affected site"
+                : "Inspect affected sites"}
             </Link>
           </section>
         </div>

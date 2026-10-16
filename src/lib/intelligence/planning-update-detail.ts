@@ -85,6 +85,12 @@ function numOrNull(v: unknown): number | null {
   return null;
 }
 
+/** True when a control snapshot has zone / FSR / height / AH — notes alone are not enough. */
+export function hasStructuredControls(c: PlanningControlSnapshot | null | undefined): boolean {
+  if (!c) return false;
+  return c.zone != null || c.fsr != null || c.heightM != null || c.affordableHousingContributionPct != null;
+}
+
 export function controlsFromUnknown(v: unknown): PlanningControlSnapshot | null {
   const r = asRecord(v);
   if (!r) return null;
@@ -100,7 +106,8 @@ export function controlsFromUnknown(v: unknown): PlanningControlSnapshot | null 
     numOrNull(nested.proposedHeight);
   const ah = numOrNull(nested.affordableHousingContributionPct);
   const notes = typeof nested.notes === "string" ? nested.notes : null;
-  if (zone == null && fsr == null && heightM == null && ah == null && !notes) return null;
+  // Notes-only is not structured evidence — callers treat as awaiting verification.
+  if (zone == null && fsr == null && heightM == null && ah == null) return null;
   return { zone, fsr, heightM, affordableHousingContributionPct: ah, notes };
 }
 
@@ -229,24 +236,27 @@ export function buildPlanningUpdateEvidence(input: {
   const kinds = input.eventKinds ?? [];
   const titles = input.eventTitles ?? [input.storyTitle];
   const summaries = input.eventSummaries ?? [input.storySummary ?? ""];
-  const awaitingVerification =
-    (typeof payload.awaitingVerification === "boolean" && payload.awaitingVerification) ||
-    kinds.some((k, i) => isDocumentOnlyChange(k, titles[i] ?? "", summaries[i] ?? null)) ||
-    (/SOURCE_DOCUMENT|NEEDS_RE_EXTRACTION/i.test(input.storyTitle) &&
-      !controlsFromUnknown(input.newControls) &&
-      !controlsFromUnknown(input.pca?.proposedControls));
 
   const previousControls =
     controlsFromUnknown(payload.previousControls) ??
     controlsFromUnknown(input.oldControls) ??
     controlsFromUnknown(input.keySites?.[0]?.currentControls);
 
-  const proposedControls = awaitingVerification
-    ? null
-    : controlsFromUnknown(payload.proposedControls) ??
-      controlsFromUnknown(input.newControls) ??
-      controlsFromUnknown(input.keySites?.[0]?.proposedControls) ??
-      controlsFromUnknown(input.pca?.proposedControls);
+  const proposedFromEvidence =
+    controlsFromUnknown(payload.proposedControls) ??
+    controlsFromUnknown(input.newControls) ??
+    controlsFromUnknown(input.keySites?.[0]?.proposedControls) ??
+    controlsFromUnknown(input.pca?.proposedControls);
+
+  const documentOnly =
+    (typeof payload.awaitingVerification === "boolean" && payload.awaitingVerification) ||
+    kinds.some((k, i) => isDocumentOnlyChange(k, titles[i] ?? "", summaries[i] ?? null)) ||
+    (/SOURCE_DOCUMENT|NEEDS_RE_EXTRACTION/i.test(input.storyTitle) && !hasStructuredControls(proposedFromEvidence));
+
+  // Missing structured controls on a key-site/PCA story = incomplete ingestion, not a confirmed change.
+  const awaitingVerification = documentOnly || !hasStructuredControls(proposedFromEvidence);
+
+  const proposedControls = awaitingVerification ? null : proposedFromEvidence;
 
   const officialTitle =
     (typeof payload.officialTitle === "string" ? payload.officialTitle : null) ||
@@ -265,25 +275,29 @@ export function buildPlanningUpdateEvidence(input: {
     null;
   if (!plainSummary) {
     if (awaitingVerification) {
-      plainSummary =
-        "A monitored planning source document changed. Specific control changes are awaiting verification — this is not confirmed as a zoning, FSR or height change.";
-    } else if (proposedControls && (proposedControls.fsr != null || proposedControls.heightM != null || proposedControls.zone)) {
+      plainSummary = documentOnly
+        ? "Source updated — change details awaiting verification. A monitored planning source document changed; this is not confirmed as a zoning, FSR or height control change."
+        : "Source updated — change details awaiting verification. Structured proposed controls have not been confirmed for this area yet.";
+    } else if (proposedControls && hasStructuredControls(proposedControls)) {
       const bits: string[] = [];
       if (previousControls?.fsr != null || proposedControls.fsr != null) {
         bits.push(
-          `FSR ${previousControls?.fsr != null ? previousControls.fsr : "—"} → ${proposedControls.fsr != null ? proposedControls.fsr : "—"}`,
+          `FSR ${previousControls?.fsr != null ? previousControls.fsr : "not recorded"} → ${proposedControls.fsr != null ? proposedControls.fsr : "not recorded"}`,
         );
       }
       if (previousControls?.heightM != null || proposedControls.heightM != null) {
         bits.push(
-          `height ${previousControls?.heightM != null ? `${previousControls.heightM} m` : "—"} → ${proposedControls.heightM != null ? `${proposedControls.heightM} m` : "—"}`,
+          `height ${previousControls?.heightM != null ? `${previousControls.heightM} m` : "not recorded"} → ${proposedControls.heightM != null ? `${proposedControls.heightM} m` : "not recorded"}`,
         );
       }
       if (previousControls?.zone || proposedControls.zone) {
-        bits.push(`zoning ${previousControls?.zone ?? "—"} → ${proposedControls.zone ?? "—"}`);
+        bits.push(
+          `zoning ${previousControls?.zone ?? "not recorded"} → ${proposedControls.zone ?? "not recorded"}`,
+        );
       }
+      const where = [locationLabel, areaLabel].filter(Boolean).join(" · ");
       plainSummary = bits.length
-        ? `Proposed planning controls changed (${bits.join("; ")}). These are proposed controls, not current LEP law.`
+        ? `Proposed controls for ${where || "this area"}: ${bits.join("; ")}. These are proposed controls from the official planning program — not current LEP law.`
         : cleanEvidenceText(input.storySummary) || null;
     } else {
       const raw = cleanEvidenceText(input.storySummary);
@@ -331,8 +345,21 @@ export function buildPlanningUpdateEvidence(input: {
     whyItMatters:
       whyStored ||
       (awaitingVerification
-        ? "Until controls are re-extracted and verified, treat this as a source refresh only — not a confirmed uplift."
-        : null),
+        ? "Until proposed controls are verified from the official source, treat this as a source refresh only — not a confirmed uplift."
+        : proposedControls && hasStructuredControls(proposedControls)
+          ? [
+              areaLabel ? `${areaLabel} is a monitored key site` : "This is a monitored planning change area",
+              locationLabel ? `in ${locationLabel}` : null,
+              proposedControls.fsr != null ? `with proposed FSR ${proposedControls.fsr}` : null,
+              proposedControls.heightM != null ? `and height ${proposedControls.heightM} m` : null,
+              proposedControls.zone ? `(zone ${proposedControls.zone})` : null,
+              "— proposed only until gazetted.",
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .replace(/\s+/g, " ")
+              .trim()
+          : null),
     sourceName: input.sourceName ?? (typeof payload.sourceLabel === "string" ? payload.sourceLabel : null),
     documentTitle: officialTitle,
     documentSection: typeof payload.documentSection === "string" ? payload.documentSection : null,

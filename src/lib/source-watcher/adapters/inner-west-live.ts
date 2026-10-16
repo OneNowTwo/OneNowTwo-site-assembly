@@ -67,6 +67,82 @@ async function queryPoint<A extends PointAttrs>(
   return res.features[0]?.attributes ?? null;
 }
 
+function bboxFromPolygon(geom: GeoJSON.Polygon | GeoJSON.MultiPolygon | null): KeySiteFact["bbox"] {
+  if (!geom) return null;
+  const rings =
+    geom.type === "Polygon"
+      ? geom.coordinates
+      : geom.coordinates.flatMap((poly) => poly);
+  const ring = rings[0] ?? [];
+  const xs = ring.map((c) => c[0]!);
+  const ys = ring.map((c) => c[1]!);
+  if (!xs.length || !ys.length) return null;
+  return {
+    west: Math.min(...xs),
+    south: Math.min(...ys),
+    east: Math.max(...xs),
+    north: Math.max(...ys),
+  };
+}
+
+function centroidFromBBox(bbox: NonNullable<KeySiteFact["bbox"]>): { lng: number; lat: number } {
+  return {
+    lng: (bbox.west + bbox.east) / 2,
+    lat: (bbox.south + bbox.north) / 2,
+  };
+}
+
+/**
+ * Enrich a key-site fact with proposed LZN/FSR/HOB (and incentives) at its
+ * geometry centroid from the same Adopted_Planning_Layers FeatureServer.
+ * Notes-only rows are incomplete evidence — never invent controls without a hit.
+ */
+export async function enrichKeySiteProposedControls(site: KeySiteFact): Promise<KeySiteFact> {
+  const bbox = site.bbox ?? bboxFromPolygon(site.geometry ?? null);
+  if (!bbox) return site;
+  const { lng, lat } = centroidFromBBox(bbox);
+  try {
+    const live = await queryInnerWestProposedAtPoint(lng, lat);
+    const hasControls =
+      live.zone != null || live.fsr != null || live.heightM != null || live.incentiveFsr != null || live.incentiveHeightM != null;
+    if (!hasControls) return site;
+    const ahPct =
+      live.affordableHousingLabel && /\d+/.test(live.affordableHousingLabel)
+        ? Number(live.affordableHousingLabel.match(/\d+/)![0])
+        : null;
+    return {
+      ...site,
+      bbox,
+      proposedControls: {
+        legalStatus: "PROPOSED",
+        machineReadable: true,
+        zone: live.zone,
+        fsr: live.fsr,
+        heightM: live.heightM,
+        incentiveFsr: live.incentiveFsr,
+        incentiveHeightM: live.incentiveHeightM,
+        affordableHousingContributionPct: Number.isFinite(ahPct) ? ahPct : null,
+        notes: `Draft controls at key-site centroid from Adopted_Planning_Layers (${IW_ADOPTED_FS}). NOT CURRENT LAW until gazetted.`,
+      },
+    };
+  } catch {
+    return site;
+  }
+}
+
+async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return out;
+}
+
 async function queryKeySitesSample(limit = 40): Promise<KeySiteFact[]> {
   const url = buildUrl(`${IW_ADOPTED_FS}/${IW_LAYER.KYS}/query`, {
     where: "1=1",
@@ -80,23 +156,10 @@ async function queryKeySitesSample(limit = 40): Promise<KeySiteFact[]> {
     EsriQueryResponse<{ KEYSITE_ID?: string; LAY_CLASS?: string; EPI_NAME?: string; OBJECTID?: number }>
   >(url, { service: "iw-key-sites", ttlMs: 30 * 60 * 1000, timeoutMs: 30000 });
 
-  return (res.features ?? []).map((f, i) => {
+  const base: KeySiteFact[] = (res.features ?? []).map((f, i) => {
     const id = String(f.attributes.KEYSITE_ID ?? f.attributes.OBJECTID ?? `IW-KYS-${i}`);
     const geom = f.geometry ? esriToGeoJSON(f.geometry) : null;
-    let bbox: KeySiteFact["bbox"] = null;
-    if (geom?.type === "Polygon") {
-      const ring = geom.coordinates[0] ?? [];
-      const xs = ring.map((c) => c[0]!);
-      const ys = ring.map((c) => c[1]!);
-      if (xs.length && ys.length) {
-        bbox = {
-          west: Math.min(...xs),
-          south: Math.min(...ys),
-          east: Math.max(...xs),
-          north: Math.max(...ys),
-        };
-      }
-    }
+    const bbox = bboxFromPolygon(geom);
     return {
       externalKeySiteId: id,
       name: `Inner West key site ${id}`,
@@ -112,6 +175,10 @@ async function queryKeySitesSample(limit = 40): Promise<KeySiteFact[]> {
       structuredConditions: [],
     };
   });
+
+  // Point-enrich each key site so Today detail can show real proposed controls
+  // (zone / FSR / height) instead of notes-only placeholders.
+  return mapPool(base, 4, enrichKeySiteProposedControls);
 }
 
 function num(v: unknown): number | null {

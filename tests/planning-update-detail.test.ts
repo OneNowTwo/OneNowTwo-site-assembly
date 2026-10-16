@@ -106,4 +106,73 @@ describe("planning update detail + navigation", () => {
     expect(evidence.proposedControls?.heightM).toBe(21);
     expect(evidence.locationLabel).toMatch(/Inner West/i);
   });
+
+  it("treats notes-only proposedControls as awaiting verification — no placeholder controls", () => {
+    const evidence = buildPlanningUpdateEvidence({
+      storyTitle: "Key site Area L updated",
+      storySummary: "Inner West key site Area L",
+      keySites: [
+        {
+          externalKeySiteId: "Area L",
+          name: "Inner West key site Area L",
+          proposedControls: {
+            legalStatus: "PROPOSED",
+            machineReadable: true,
+            notes: "Draft Key Sites layer from Adopted_Planning_Layers FeatureServer",
+          },
+        },
+      ],
+      pca: {
+        id: "council:inner-west-our-fairer-future",
+        title: "Inner West — Our Fairer Future / Endorsed Planning Controls",
+        status: "PROPOSED",
+        lgas: ["INNER WEST"],
+        sourceUrl: "https://experience.arcgis.com/experience/2b5ffd9da4f44cd7b7886b632a180556/page/Page",
+        proposedControls: { notes: "Draft only" },
+      },
+      sourceName: "Inner West Council — Our Fairer Future",
+    });
+    expect(evidence.awaitingVerification).toBe(true);
+    expect(evidence.proposedControls).toBeNull();
+    expect(evidence.plainSummary).toMatch(/Source updated — change details awaiting verification/i);
+  });
+
+  it("shows structured Area L controls from key-site FeatureServer evidence", () => {
+    const evidence = buildPlanningUpdateEvidence({
+      storyTitle: "Key site Area L updated",
+      storySummary: "Inner West key site Area L",
+      detectedAt: "2026-10-16T05:00:00.000Z",
+      keySites: [
+        {
+          externalKeySiteId: "Area L",
+          name: "Inner West key site Area L",
+          sourceUrl: "https://experience.arcgis.com/experience/2b5ffd9da4f44cd7b7886b632a180556/page/Page",
+          proposedControls: {
+            legalStatus: "PROPOSED",
+            zone: "R3",
+            fsr: 1.75,
+            heightM: 17,
+            machineReadable: true,
+          },
+        },
+      ],
+      pca: {
+        id: "council:inner-west-our-fairer-future",
+        title: "Inner West — Our Fairer Future / Endorsed Planning Controls",
+        status: "PROPOSED",
+        lgas: ["INNER WEST"],
+        sourceUrl: "https://experience.arcgis.com/experience/2b5ffd9da4f44cd7b7886b632a180556/page/Page",
+      },
+      sourceName: "Inner West Council — Our Fairer Future",
+      sourceUrl: "https://experience.arcgis.com/experience/2b5ffd9da4f44cd7b7886b632a180556/page/Page",
+    });
+    expect(evidence.awaitingVerification).toBe(false);
+    expect(evidence.proposedControls).toEqual(
+      expect.objectContaining({ zone: "R3", fsr: 1.75, heightM: 17 }),
+    );
+    expect(evidence.plainSummary).toMatch(/1\.75/);
+    expect(evidence.plainSummary).not.toMatch(/awaiting verification/i);
+    expect(evidence.whyItMatters).toMatch(/Area L/);
+    expect(evidence.webpageUrl).toContain("arcgis.com");
+  });
 });
