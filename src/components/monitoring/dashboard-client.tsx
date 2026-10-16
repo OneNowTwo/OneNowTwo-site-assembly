@@ -8,6 +8,12 @@ import { money, sqm, fsr } from "@/lib/format";
 import { fetchApiJson } from "@/lib/api-json";
 import { StrategySelector } from "@/components/strategy-selector";
 import type { DevelopmentStrategy } from "@/lib/source-watcher/strategy-profile";
+import {
+  presentTodayStory,
+  sitesWorthLookingSubheading,
+  todayOrientationLine,
+  todayTypeLabel,
+} from "@/lib/intelligence/today-agent-copy";
 
 type Story = {
   id: string;
@@ -16,6 +22,7 @@ type Story = {
   title: string;
   whatChanged: string;
   whyItMatters: string;
+  typeLabel?: string | null;
   affectedSites: number | null;
   date: string;
   sourceId: string | null;
@@ -59,6 +66,7 @@ type TodaySite = {
 type TodayPayload = {
   headline: string;
   subheading: string;
+  orientation?: string;
   strategy: string;
   marketScope?: { id: string; label: string; headerLabel: string };
   indexReady?: boolean;
@@ -99,17 +107,6 @@ type TodayPayload = {
   }>;
   morningReport?: { id: string; title: string; summaryLine?: string | null } | null;
 };
-
-function typeLabel(kind: string) {
-  if (kind.includes("KEY_SITE") || kind === "KEY_SITE_PROGRAM") return "KEY SITE";
-  if (kind.includes("DEVELOPMENT") || kind.includes("HDA") || kind.includes("SSD") || kind.includes("DA_")) {
-    return "DEVELOPMENT";
-  }
-  if (kind.includes("FSR") || kind.includes("HEIGHT") || kind.includes("ZONE") || kind.includes("PLANNING")) {
-    return "PLANNING CHANGE";
-  }
-  return kind.replaceAll("_", " ").toUpperCase();
-}
 
 function formatShortDate(iso: string) {
   const d = new Date(iso);
@@ -157,6 +154,7 @@ export function DashboardClient() {
   const visibleChanges = showAllChanges ? stories : stories.slice(0, 5);
   const showWatched = data.showWatchedSection !== false && data.watchedChanges.length > 0;
   const strip = data.summaryStrip;
+  const orientation = data.orientation?.trim() || todayOrientationLine();
 
   return (
     <div className="h-full overflow-y-auto bg-canvas">
@@ -167,7 +165,12 @@ export function DashboardClient() {
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-white/65">
               {data.marketScope?.label ?? "Greater Sydney"}
             </div>
-            <h1 className="text-[22px] font-semibold tracking-tight leading-tight">{data.headline}</h1>
+            <h1 className="text-[22px] font-semibold tracking-tight leading-tight">
+              {data.headline || "Your development brief"}
+            </h1>
+            <p className="mt-1 max-w-2xl text-[13px] leading-snug text-white/80">
+              {data.subheading}
+            </p>
           </div>
           {data.morningReport && (
             <Link href="/morning-report" className="text-[12px] font-semibold text-white/85 underline-offset-2 hover:underline">
@@ -176,6 +179,8 @@ export function DashboardClient() {
           )}
         </div>
 
+        <p className="mt-2 max-w-3xl text-[12px] leading-snug text-white/65">{orientation}</p>
+
         <div className="mt-3">
           <StrategySelector value={strategy} onChange={setStrategy} tone="dark" variant="filter" />
         </div>
@@ -183,25 +188,26 @@ export function DashboardClient() {
         {strip && (
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-white/80">
             <span>
-              <span className="num font-semibold text-white">{strip.indexedSites.toLocaleString("en-AU")}</span> indexed
+              <span className="num font-semibold text-white">{strip.indexedSites.toLocaleString("en-AU")}</span>{" "}
+              potential sites
             </span>
             <span className="text-white/35">·</span>
             <span>
-              <span className="num font-semibold text-white">{strip.analysedToday}</span> analysed in list
+              <span className="num font-semibold text-white">{strip.analysedToday}</span> fully analysed
             </span>
             <span className="text-white/35">·</span>
             <span>
-              <span className="num font-semibold text-white">{strip.worthChecking}</span> worth checking
+              <span className="num font-semibold text-white">{strip.worthChecking}</span> worth looking at
             </span>
             <span className="text-white/35">·</span>
             <span>
-              <span className="num font-semibold text-white">{strip.planningChanges}</span> planning changes
+              <span className="num font-semibold text-white">{strip.planningChanges}</span> new planning updates
             </span>
             {strip.watched > 0 && (
               <>
                 <span className="text-white/35">·</span>
                 <span>
-                  <span className="num font-semibold text-white">{strip.watched}</span> watched
+                  <span className="num font-semibold text-white">{strip.watched}</span> watched sites
                 </span>
               </>
             )}
@@ -210,14 +216,24 @@ export function DashboardClient() {
       </div>
 
       <div className="mx-auto max-w-[1400px] space-y-4 p-4 sm:p-5">
-        {/* A. TOP OPPORTUNITIES — dominant */}
+        {/* A. SITES WORTH LOOKING AT — dominant */}
         <section>
-          <div className="mb-2 flex items-end justify-between gap-3">
-            <h2 className="text-[13px] font-semibold text-ink">Top opportunities today</h2>
+          <div className="mb-1 flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-[13px] font-semibold uppercase tracking-[0.06em] text-ink">
+                Sites worth looking at
+              </h2>
+              <p className="mt-0.5 text-[12px] text-muted">{sitesWorthLookingSubheading(strategy)}</p>
+            </div>
             <Link href="/find" className="text-[11px] font-semibold text-brand hover:underline">
               Find more
             </Link>
           </div>
+          <p className="mb-2 text-[11.5px] text-muted">
+            <span className="font-semibold text-ink/70">SCREENING</span> = quick first-pass assessment
+            <span className="mx-1.5 text-line">·</span>
+            <span className="font-semibold text-ink/70">DETAILED</span> = site has been fully analysed
+          </p>
 
           {data.indexPreparingMessage && !data.sitesToLookAt.length ? (
             <Empty>{data.indexPreparingMessage}</Empty>
@@ -237,7 +253,7 @@ export function DashboardClient() {
                     s.zone ? `Zone ${s.zone}` : null,
                     s.currentFsr != null ? `FSR ${fsr(s.currentFsr)}` : null,
                     s.proposedFsr != null && (s.currentFsr == null || s.proposedFsr > s.currentFsr)
-                      ? `Pathway ${fsr(s.proposedFsr)}`
+                      ? `Proposed ${fsr(s.proposedFsr)}`
                       : null,
                     s.stationDistanceM != null && s.stationDistanceM <= 1200
                       ? `~${Math.round(s.stationDistanceM)}m station`
@@ -284,7 +300,7 @@ export function DashboardClient() {
                                   setExpandedFamily((id) => (id === s.id ? null : s.id));
                                 }}
                               >
-                                + {alts} alternative assembly configuration{alts === 1 ? "" : "s"}
+                                + {alts} other lot combination{alts === 1 ? "" : "s"} nearby
                               </button>
                             )}
                           </div>
@@ -298,8 +314,7 @@ export function DashboardClient() {
                           )}
                           {expandedFamily === s.id && alts > 0 && (
                             <p className="mt-1.5 text-[11.5px] text-muted">
-                              Other overlapping lot configurations exist in the index family. Open Map to compare
-                              assemblies on the same street — only this primary row is ranked for Today.
+                              Other ways to combine lots on this street exist. Open the map to compare them.
                             </p>
                           )}
                         </div>
@@ -309,7 +324,10 @@ export function DashboardClient() {
                           <div className="min-w-0 text-[12px]">
                             {detailed ? (
                               <div className="space-y-0.5">
-                                <div className="text-[10.5px] uppercase tracking-wide text-muted">Detailed</div>
+                                <div className="text-[10.5px] font-semibold uppercase tracking-wide text-brand">
+                                  DETAILED
+                                </div>
+                                <div className="text-[11px] text-muted">Full analysis</div>
                                 {s.existingValue != null && (
                                   <div>
                                     Existing{" "}
@@ -335,7 +353,7 @@ export function DashboardClient() {
                             ) : (
                               <div>
                                 <Badge tone="neutral">SCREENING</Badge>
-                                <div className="mt-1 text-[11.5px] text-muted">Discovery ranking only</div>
+                                <div className="mt-1 text-[11.5px] text-muted">Quick assessment</div>
                               </div>
                             )}
                           </div>
@@ -359,14 +377,14 @@ export function DashboardClient() {
                                 href={s.href || "/map"}
                                 className="rounded-[3px] border border-line px-2 py-1 text-[11px] font-semibold hover:bg-canvas"
                               >
-                                Map
+                                Show on map
                               </Link>
                               {detailed && s.analyseHref && (
                                 <Link
                                   href={s.analyseHref}
                                   className="rounded-[3px] bg-brand px-2 py-1 text-[11px] font-semibold text-white"
                                 >
-                                  Open
+                                  Open analysis
                                 </Link>
                               )}
                             </div>
@@ -381,52 +399,73 @@ export function DashboardClient() {
           )}
         </section>
 
-        {/* B. WHAT CHANGED — compact feed */}
+        {/* B. WHAT YOU NEED TO KNOW — compact feed */}
         <section>
           <div className="mb-2 flex items-end justify-between gap-3">
-            <h2 className="text-[13px] font-semibold text-ink">What changed</h2>
+            <div>
+              <h2 className="text-[13px] font-semibold uppercase tracking-[0.06em] text-ink">
+                What you need to know
+              </h2>
+              <p className="mt-0.5 text-[12px] text-muted">
+                Recent planning and development updates that could affect potential sites.
+              </p>
+            </div>
             <Link href="/feed" className="text-[11px] font-semibold text-brand hover:underline">
-              View all changes
+              View all updates
             </Link>
           </div>
           {!stories.length ? (
-            <Empty>Nothing material in Greater Sydney in the last 7 days.</Empty>
+            <Empty>No new planning or development updates in Greater Sydney in the last 7 days.</Empty>
           ) : (
             <div className="overflow-hidden rounded-[3px] border border-line bg-white">
               <ul className="divide-y divide-line">
-                {visibleChanges.map((ev) => (
-                  <li key={ev.id} className="flex flex-wrap items-start gap-3 px-3 py-2 sm:px-4">
-                    <div className="w-full shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted sm:w-40">
-                      {typeLabel(ev.type)}
-                      <span className="text-muted/70"> · {formatShortDate(ev.date)}</span>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-semibold leading-snug">{ev.title}</div>
-                      <p className="mt-0.5 text-[12.5px] text-ink/85">
-                        {ev.whyItMatters || ev.whatChanged}
-                        {ev.affectedSites != null && ev.affectedSites > 0
-                          ? ` ${ev.affectedSites} indexed assemblies in scope.`
-                          : ""}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 gap-2">
-                      {(ev.mapHref || ev.href) && (
+                {visibleChanges.map((ev) => {
+                  const presented =
+                    ev.typeLabel && ev.title && ev.whyItMatters
+                      ? {
+                          typeLabel: ev.typeLabel,
+                          title: ev.title,
+                          explanation: ev.whyItMatters || ev.whatChanged,
+                        }
+                      : presentTodayStory(ev, strategy);
+                  const sitesLabel =
+                    ev.affectedSites == null || ev.affectedSites <= 0
+                      ? null
+                      : ev.affectedSites === 1
+                        ? "1 potential site affected"
+                        : `${ev.affectedSites} potential sites affected`;
+                  const viewSitesLabel =
+                    ev.affectedSites === 1 ? "View site" : "View affected sites";
+                  return (
+                    <li key={ev.id} className="flex flex-wrap items-start gap-3 px-3 py-2.5 sm:px-4">
+                      <div className="w-full shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted sm:w-44">
+                        {presented.typeLabel}
+                        <span className="text-muted/70"> · {formatShortDate(ev.date)}</span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-semibold leading-snug">{presented.title}</div>
+                        <p className="mt-0.5 text-[12.5px] text-ink/85">{presented.explanation}</p>
+                        {sitesLabel && <p className="mt-0.5 text-[11.5px] text-muted">{sitesLabel}</p>}
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        {(ev.mapHref || ev.href) && (
+                          <Link
+                            href={ev.mapHref || ev.href || "/map"}
+                            className="text-[11px] font-semibold text-brand hover:underline"
+                          >
+                            Show on map
+                          </Link>
+                        )}
                         <Link
-                          href={ev.mapHref || ev.href || "/map"}
+                          href={ev.findHref || `/find?strategy=${strategy}`}
                           className="text-[11px] font-semibold text-brand hover:underline"
                         >
-                          Map
+                          {viewSitesLabel}
                         </Link>
-                      )}
-                      <Link
-                        href={ev.findHref || `/find?strategy=${strategy}`}
-                        className="text-[11px] font-semibold text-brand hover:underline"
-                      >
-                        View sites
-                      </Link>
-                    </div>
-                  </li>
-                ))}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
               {stories.length > 5 && (
                 <button
@@ -434,7 +473,7 @@ export function DashboardClient() {
                   className="w-full border-t border-line px-3 py-2 text-left text-[11px] font-semibold text-muted hover:bg-canvas hover:text-ink"
                   onClick={() => setShowAllChanges((v) => !v)}
                 >
-                  {showAllChanges ? "Show fewer changes" : `View all changes (${stories.length})`}
+                  {showAllChanges ? "Show fewer updates" : `View all updates (${stories.length})`}
                 </button>
               )}
             </div>
@@ -447,7 +486,14 @@ export function DashboardClient() {
             {showWatched && (
               <section>
                 <div className="mb-2 flex items-end justify-between gap-3">
-                  <h2 className="text-[13px] font-semibold text-ink">Watched / follow-up</h2>
+                  <div>
+                    <h2 className="text-[13px] font-semibold uppercase tracking-[0.06em] text-ink">
+                      Sites you&apos;re watching
+                    </h2>
+                    <p className="mt-0.5 text-[12px] text-muted">
+                      Updates to sites you&apos;ve already saved or analysed.
+                    </p>
+                  </div>
                   <Link href="/watching" className="text-[11px] font-semibold text-brand hover:underline">
                     Manage
                   </Link>
@@ -456,7 +502,7 @@ export function DashboardClient() {
                   {data.watchedChanges.map((c) => (
                     <li key={c.id} className="px-3 py-2 sm:px-4">
                       <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
-                        {typeLabel(c.type)} · {formatShortDate(c.date)}
+                        {todayTypeLabel(c.type, c.title)} · {formatShortDate(c.date)}
                       </div>
                       {c.href ? (
                         <Link href={c.href} className="mt-0.5 block text-[13px] font-semibold hover:text-brand">
@@ -474,7 +520,9 @@ export function DashboardClient() {
 
             <section>
               <div className="mb-2">
-                <h2 className="text-[13px] font-semibold text-ink">Development activity</h2>
+                <h2 className="text-[13px] font-semibold uppercase tracking-[0.06em] text-ink">
+                  Development activity
+                </h2>
               </div>
               <ul className="divide-y divide-line overflow-hidden rounded-[3px] border border-line bg-white">
                 {!data.developmentActivity.length ? (
@@ -485,7 +533,7 @@ export function DashboardClient() {
                   data.developmentActivity.slice(0, 5).map((a) => (
                     <li key={a.id} className="px-3 py-2 sm:px-4">
                       <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
-                        {a.kind.replaceAll("_", " ")} · {formatShortDate(a.createdAt)}
+                        {todayTypeLabel(a.kind, a.title)} · {formatShortDate(a.createdAt)}
                       </div>
                       {a.href ? (
                         <Link href={a.href} className="mt-0.5 block text-[13px] font-semibold hover:text-brand">

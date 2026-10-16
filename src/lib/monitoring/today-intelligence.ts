@@ -14,6 +14,11 @@ import { listTodaySiteCandidates } from "@/lib/intelligence/site-candidate-index
 import { listPersistedStoriesForToday } from "@/lib/intelligence/persist-stories";
 import { getMarketScope } from "@/lib/market-scope";
 import { buildMapHref } from "@/lib/map/map-target";
+import {
+  presentTodayStory,
+  todayOrientationLine,
+  todayPageSubheading,
+} from "@/lib/intelligence/today-agent-copy";
 
 const ENGINEERING_RE =
   /SOURCE_DOCUMENT_CHANGED|NEEDS_RE_EXTRACTION|SOURCE_REFRESHED|content hash|parser|snapshot|fixture|structured map-pack|canonical sync|bodyHash|documentHash/i;
@@ -102,21 +107,31 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
     .slice(0, 5)
     .map((s) => {
       const payload = (s.payload ?? {}) as Record<string, unknown>;
-      const why =
-        typeof payload.whyItMatters === "string" && payload.whyItMatters.trim()
-          ? String(payload.whyItMatters)
-          : s.affectedSiteCount
-            ? `${s.affectedSiteCount} indexed sites in scope for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`
-            : "Material planning or activity change in Greater Sydney.";
       const what =
         typeof payload.whatChanged === "string" ? String(payload.whatChanged) : (s.summary ?? s.title);
+      const whyRaw =
+        typeof payload.whyItMatters === "string" && payload.whyItMatters.trim()
+          ? String(payload.whyItMatters)
+          : null;
+      const presented = presentTodayStory(
+        {
+          type: s.kind,
+          location: s.locationLabel,
+          title: cleanText(s.title),
+          whatChanged: cleanText(what),
+          whyItMatters: whyRaw ? cleanText(whyRaw) : null,
+          affectedSites: s.affectedSiteCount,
+        },
+        profile.strategy,
+      );
       return {
         id: s.id,
         type: s.kind,
         location: s.locationLabel,
-        title: cleanText(s.title),
-        whatChanged: cleanText(what),
-        whyItMatters: cleanText(why),
+        title: presented.title,
+        whatChanged: presented.explanation,
+        whyItMatters: presented.explanation,
+        typeLabel: presented.typeLabel,
         affectedSites: s.affectedSiteCount,
         date: s.updatedAt.toISOString(),
         sourceId: typeof payload.sourceLabel === "string" ? payload.sourceLabel : null,
@@ -219,8 +234,9 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
   const planningChangeCount = topIntelligence.length;
 
   return {
-    headline: "Today",
-    subheading: `Greater Sydney — sites worth checking for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`,
+    headline: "Your development brief",
+    subheading: todayPageSubheading(),
+    orientation: todayOrientationLine(),
     strategy: profile.strategy,
     marketScope: {
       id: market.id,
@@ -266,7 +282,16 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       HOLD: pipelineMap.HOLD ?? 0,
       WATCHING: pipelineMap.WATCHING ?? 0,
     },
-    morningReport: morning,
+    morningReport: morning
+      ? {
+          ...morning,
+          summaryLine: morning.summaryLine
+            ? morning.summaryLine
+                .replace(/No material changes since yesterday/gi, "No new planning updates since yesterday")
+                .replace(/\bmaterial changes?\b/gi, "planning updates")
+            : morning.summaryLine,
+        }
+      : null,
     stats: {
       storyCount: topIntelligence.length,
       candidateCount: sitesToLookAt.length,

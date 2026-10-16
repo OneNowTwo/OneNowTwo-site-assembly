@@ -114,7 +114,10 @@ describe("Sydney product reset — IntelligenceStory aggregation", () => {
     }));
     const stories = aggregateIntelligenceStories(events, profile, { maxStories: 5, now });
     expect(stories.length).toBe(1);
-    expect(stories[0]!.title).toMatch(/INNER WEST/i);
+    // Plain-English Today title (no KEY SITE UPDATE / signals jargon)
+    expect(stories[0]!.title).toMatch(/potential apartment sites/i);
+    expect(stories[0]!.whyItMatters).toMatch(/Inner West/i);
+    expect(stories[0]!.whyItMatters).not.toMatch(/signal|change cluster|indexed|in scope/i);
     expect(stories[0]!.eventCount).toBeGreaterThan(1);
     expect(stories[0]!.mapHref).toContain("/map?");
     expect(stories[0]!.findHref).toContain("/find?");

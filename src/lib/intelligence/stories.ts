@@ -9,6 +9,7 @@ import {
   type MaterialEventInput,
 } from "./material-change";
 import { buildMapHref } from "@/lib/map/map-target";
+import { presentTodayStory, strategyAdjective, strategyDisplayName } from "./today-agent-copy";
 
 export type RawIntelForStory = MaterialEventInput & {
   id: string;
@@ -192,41 +193,45 @@ export function aggregateIntelligenceStories(
       Math.min(3, group.length * 0.15) +
       (keySiteCount > 5 ? 1.5 : keySiteCount > 1 ? 0.75 : 0);
 
-    let title: string;
-    let summary: string;
-    if (sk === "KEY_SITE_PROGRAM" && keySiteCount + group.length >= 3) {
-      title = `${(location ?? "Sydney").toUpperCase()} KEY SITE UPDATE`;
-      summary = `${group.length} key site / assembly signals across the planning program.`;
-    } else if (sk === "PLANNING_UPDATE" && group.length >= 2) {
-      title = `${(location ?? "Sydney").toUpperCase()} PLANNING UPDATE`;
-      summary = `${group.length} material planning changes detected.`;
-    } else {
-      title = (head.title ?? head.kind).replace(/^SOURCE_DOCUMENT_CHANGED\s*—\s*/i, "");
-      summary = head.summary ?? head.title ?? "";
-    }
-
-    // Strip engineering language from user-facing copy
-    title = title.replace(/NEEDS_RE_EXTRACTION|SOURCE_DOCUMENT_CHANGED/gi, "").trim() || "Planning update";
-    summary = summary
+    const siteCount = affected || keySiteCount || group.length;
+    const nv = asRecord(head.newValue);
+    const fsr = nv && typeof nv.fsr === "number" ? nv.fsr : null;
+    const headTitle = (head.title ?? head.kind).replace(/^SOURCE_DOCUMENT_CHANGED\s*—\s*/i, "");
+    const headSummary = (head.summary ?? head.title ?? "")
       .replace(/NEEDS_RE_EXTRACTION|content hash|fixture-\S+/gi, "")
       .replace(/\s{2,}/g, " ")
       .trim();
 
-    const siteCount = affected || keySiteCount || group.length;
-    let whyItMatters: string;
-    if (sk === "KEY_SITE_PROGRAM" && keySiteCount >= 2) {
-      whyItMatters = `${keySiteCount} key-site signals in ${location ?? "this area"}. ${siteCount} parcels/sites in the change cluster — review assemblies that match ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`;
-    } else if (sk === "PLANNING_UPDATE") {
-      const nv = asRecord(head.newValue);
-      const fsr = nv && typeof nv.fsr === "number" ? nv.fsr : null;
-      whyItMatters = fsr != null
-        ? `Proposed FSR now ${fsr}. Check indexed sites in ${location ?? "the area"} against your ${profile.strategy.replaceAll("_", " ").toLowerCase()} filters.`
-        : `Material planning controls changed in ${location ?? "Greater Sydney"}. ${siteCount} related signals in this cluster.`;
-    } else if (sk === "DEVELOPMENT_ACTIVITY") {
-      whyItMatters = `Development activity update near ${location ?? "Greater Sydney"} — may affect nearby acquisition timing or competition.`;
-    } else {
-      whyItMatters = `Material change with ${siteCount} related signal${siteCount === 1 ? "" : "s"} for ${profile.strategy.replaceAll("_", " ").toLowerCase()}.`;
+    // Prefer structured plain-English presentation (never expose internal jargon).
+    const presented = presentTodayStory(
+      {
+        type: sk,
+        location,
+        title: headTitle,
+        whatChanged: fsr != null ? `Proposed FSR now ${fsr}` : headSummary,
+        whyItMatters: fsr != null ? `Proposed FSR now ${fsr}` : null,
+        affectedSites: siteCount || null,
+      },
+      profile.strategy,
+    );
+    let title = presented.title;
+    let summary = presented.explanation;
+    let whyItMatters = presented.explanation;
+
+    if (fsr != null && sk === "PLANNING_UPDATE") {
+      title = location
+        ? `${location} planning update — proposed FSR ${fsr}`
+        : `Planning update — proposed FSR ${fsr}`;
+      whyItMatters =
+        siteCount > 0
+          ? `Proposed FSR is now ${fsr}. ${siteCount} potential ${strategyAdjective(profile.strategy)} site${siteCount === 1 ? "" : "s"} may be affected.`
+          : `Proposed FSR is now ${fsr}. Sites matching ${strategyDisplayName(profile.strategy)} nearby may be worth reviewing.`;
+      summary = whyItMatters;
     }
+
+    title = title.replace(/NEEDS_RE_EXTRACTION|SOURCE_DOCUMENT_CHANGED/gi, "").trim() || "Planning update";
+    summary = summary.replace(/\s{2,}/g, " ").trim();
+    whyItMatters = whyItMatters.replace(/\s{2,}/g, " ").trim();
 
     stories.push({
       id: `story:${key}`,
