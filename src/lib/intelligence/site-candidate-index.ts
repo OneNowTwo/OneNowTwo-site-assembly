@@ -82,7 +82,7 @@ export function whyItMattersSentence(row: {
   const lepFsr = row.currentFsr != null && row.currentFsr > 0 ? `${row.currentFsr}:1` : null;
   const pathway =
     row.proposedFsr != null && row.proposedFsr > 0 && (row.currentFsr == null || row.proposedFsr > row.currentFsr)
-      ? `modelled pathway ${row.proposedFsr}:1`
+      ? `proposed FSR ${row.proposedFsr}:1`
       : null;
 
   if (zone && lepFsr && area) {
@@ -91,15 +91,23 @@ export function whyItMattersSentence(row: {
       row.stationDistanceM != null && row.stationDistanceM <= 800
         ? ` · ~${Math.round(row.stationDistanceM)}m to station`
         : "";
-    return `${zone} · ${lepFsr} · ${area}${lots && row.lotCount! > 1 ? ` ${lots}` : ""}${near}${station}`;
+    const sizeWord = row.siteAreaSqm != null && row.siteAreaSqm >= 1200 ? "Large " : "";
+    const assemblyWord = row.lotCount != null && row.lotCount > 1 ? "assembly" : "site";
+    return `${sizeWord}${zone} ${assemblyWord}${near} with a mapped ${lepFsr} FSR · ${area}${station}`;
   }
   if (pathway && zone) {
-    return `${zone} · ${pathway}${place ? ` within ${place}` : ""}${
-      row.stationDistanceM != null && row.stationDistanceM <= 800 ? " outer/centre screening" : ""
-    }`;
+    const stationNear =
+      row.stationDistanceM != null && row.stationDistanceM <= 800
+        ? place
+          ? ` near ${place}`
+          : " near a station"
+        : place
+          ? ` in ${place}`
+          : "";
+    return `${zone} site with ${pathway}${stationNear} — planning needs further checking.`;
   }
   if (row.quickHeadroom != null && row.quickHeadroom > 0 && lots && zone) {
-    return `Large ${lots.replace(" assembly", "")} ${zone} site with positive modelled acquisition headroom${
+    return `Large ${lots.replace(" assembly", "")} ${zone} site where current analysis shows positive land-value headroom${
       place ? ` · ${place}` : ""
     }`;
   }

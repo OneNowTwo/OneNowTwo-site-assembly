@@ -71,7 +71,7 @@ export async function generateMorningReport(userId: string, reportDate = startOf
     newFeed.length ? `${newFeed.length} new assembl${newFeed.length === 1 ? "y" : "ies"}` : null,
     sales.length ? `${sales.length} sale update${sales.length === 1 ? "" : "s"}` : null,
     planning.length ? `${planning.length} planning update${planning.length === 1 ? "" : "s"}` : null,
-    !newFeed.length && !sales.length && !planning.length ? "No material changes since yesterday" : null,
+    !newFeed.length && !sales.length && !planning.length ? "No new planning updates since yesterday" : null,
   ]
     .filter(Boolean)
     .join(" · ");
