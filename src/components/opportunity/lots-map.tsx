@@ -49,8 +49,9 @@ export function LotsMap({ lots, selectedId, onSelect }: { lots: LotDTO[]; select
       assemblyIds={lots.filter((l) => l.included).map((l) => l.id)}
       highlightIds={[]}
       neighbourIds={lots.filter((l) => !l.included).map((l) => l.id)}
-      zoneFill={false}
+      zoning={false}
       zoningWms={false}
+      parcelTheme="none"
       flyTo={null}
       initial={{ lat: c[1], lng: c[0], zoom: 18 }}
       onParcelClick={(id) => onSelect?.(id)}

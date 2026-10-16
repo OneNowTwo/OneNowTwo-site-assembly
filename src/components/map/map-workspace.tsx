@@ -48,9 +48,27 @@ import {
 } from "@/lib/map/map-target-apply";
 import {
   isLiveDeepScanEnabled,
-  LIVE_DEEP_SCAN_DISABLED_BUTTON,
   LIVE_DEEP_SCAN_DISABLED_MESSAGE,
 } from "@/lib/live-deep-scan";
+import { applyParcelTheme, resolveParcelTheme, type ParcelThemeId } from "@/lib/map/layer-styles";
+import type { TrainStation } from "@/lib/data-sources/nsw-train-stations";
+import type { DevelopmentActivity } from "@/lib/source-watcher/development-activity";
+import { activityToggleAvailability } from "@/lib/source-watcher/development-activity";
+import type { WatchedSiteMarker } from "@/lib/map/watched-site-marker";
+
+function overlayViewportKey(bbox: BBox, zoom: number): string {
+  const lat = (bbox.south + bbox.north) / 2;
+  const lng = (bbox.west + bbox.east) / 2;
+  return [
+    lat.toFixed(4),
+    lng.toFixed(4),
+    String(zoom),
+    bbox.west.toFixed(4),
+    bbox.south.toFixed(4),
+    bbox.east.toFixed(4),
+    bbox.north.toFixed(4),
+  ].join("|");
+}
 
 const LeafletMap = dynamic(() => import("./leaflet-map"), { ssr: false, loading: () => <div className="h-full w-full bg-[#e8eaed]" /> });
 
@@ -200,13 +218,40 @@ export function MapWorkspace({
   const [findError, setFindError] = useState<string | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(restoredScan?.activeKey ?? null);
-  const [zoneFill, setZoneFill] = useState(() => loadMapState()?.zoneFill ?? true);
-  const [zoningWms, setZoningWms] = useState(() => loadMapState()?.zoningWms ?? false);
+  const [zoning, setZoning] = useState(() => loadMapState()?.zoneFill ?? true);
+  /** When Zoning is the active parcel theme, WMS follows it; never leave WMS on under another theme. */
+  const [zoningWms, setZoningWms] = useState(() => (loadMapState()?.zoneFill ?? true));
+  const [fsrLayer, setFsrLayer] = useState(false);
+  const [heightLayer, setHeightLayer] = useState(false);
+  const [heritageLayer, setHeritageLayer] = useState(false);
+  const [strataLayer, setStrataLayer] = useState(false);
   const [proposedPlanning, setProposedPlanning] = useState(false);
   const [proposedPlanningData, setProposedPlanningData] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [devActivityLayer, setDevActivityLayer] = useState(false);
+  const [showStationsCentres, setShowStationsCentres] = useState(false);
+  const [showCatchments, setShowCatchments] = useState(false);
+  const [showDaCdc, setShowDaCdc] = useState(false);
+  const [showMajorProjects, setShowMajorProjects] = useState(false);
   const [watchedSitesLayer, setWatchedSitesLayer] = useState(false);
-  const [moreLayersOpen, setMoreLayersOpen] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [stations, setStations] = useState<TrainStation[]>([]);
+  const [activities, setActivities] = useState<DevelopmentActivity[]>([]);
+  const [watchedMarkers, setWatchedMarkers] = useState<WatchedSiteMarker[]>([]);
+  const [hasDaCdcActivity, setHasDaCdcActivity] = useState(false);
+  const [hasMajorProjectActivity, setHasMajorProjectActivity] = useState(false);
+  /** Rounded moveend/zoomend viewport key so station/activity overlays refetch on same-zoom pans. */
+  const [overlayViewport, setOverlayViewport] = useState<{
+    key: string;
+    bbox: BBox | null;
+    lat: number;
+    lng: number;
+    zoom: number;
+  }>(() => ({
+    key: `${start.lat.toFixed(4)}|${start.lng.toFixed(4)}|${start.zoom}`,
+    bbox: null,
+    lat: start.lat,
+    lng: start.lng,
+    zoom: start.zoom,
+  }));
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number; zoom?: number; bbox?: BBox; nonce: number } | null>(null);
   const [query, setQuery] = useState(() => initialScanQuery ?? loadMapState()?.query ?? restoredScan?.query ?? "");
   const [targetPanel, setTargetPanel] = useState<{
@@ -285,6 +330,104 @@ export function MapWorkspace({
     };
   }, [proposedPlanning]);
 
+  // Probe once: gate DAs/CDCs vs Major projects independently by plottable category.
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/development-activity")
+      .then((r) => r.json())
+      .then((j: { activities?: DevelopmentActivity[] }) => {
+        if (cancelled) return;
+        const list = Array.isArray(j.activities) ? j.activities : [];
+        const avail = activityToggleAvailability(list);
+        setHasDaCdcActivity(avail.hasDaCdcActivity);
+        setHasMajorProjectActivity(avail.hasMajorProjectActivity);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHasDaCdcActivity(false);
+          setHasMajorProjectActivity(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showStationsCentres && !showCatchments) return;
+    const bbox = overlayViewport.bbox ?? lastBBox.current;
+    if (!bbox) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const q = [bbox.west, bbox.south, bbox.east, bbox.north].map((n) => n.toFixed(5)).join(",");
+      void fetch(`/api/map/stations?bbox=${q}`)
+        .then((r) => r.json())
+        .then((j: { stations?: TrainStation[] }) => {
+          if (!cancelled && Array.isArray(j.stations)) setStations(j.stations);
+        })
+        .catch(() => {
+          if (!cancelled) setStations([]);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [showStationsCentres, showCatchments, overlayViewport.key, overlayViewport.bbox]);
+
+  useEffect(() => {
+    if (!showDaCdc && !showMajorProjects) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/development-activity?lng=${overlayViewport.lng}&lat=${overlayViewport.lat}&radiusM=2000`)
+        .then((r) => r.json())
+        .then((j: { activities?: DevelopmentActivity[] }) => {
+          if (!cancelled && Array.isArray(j.activities)) setActivities(j.activities);
+        })
+        .catch(() => {
+          if (!cancelled) setActivities([]);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [showDaCdc, showMajorProjects, overlayViewport.key, overlayViewport.lat, overlayViewport.lng]);
+
+  useEffect(() => {
+    if (!watchedSitesLayer) return;
+    let cancelled = false;
+    void fetch("/api/map/watched-sites")
+      .then((r) => r.json())
+      .then((j: { markers?: WatchedSiteMarker[] }) => {
+        if (!cancelled && Array.isArray(j.markers)) setWatchedMarkers(j.markers);
+      })
+      .catch(() => {
+        if (!cancelled) setWatchedMarkers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [watchedSitesLayer]);
+
+  const selectParcelTheme = useCallback((theme: ParcelThemeId | "none") => {
+    const next = applyParcelTheme(theme);
+    setZoning(next.zoning);
+    setZoningWms(next.zoningWms);
+    setFsrLayer(next.fsr);
+    setHeightLayer(next.height);
+    setHeritageLayer(next.heritage);
+    setStrataLayer(next.strata);
+  }, []);
+
+  const parcelTheme = resolveParcelTheme({
+    zoning,
+    fsr: fsrLayer,
+    height: heightLayer,
+    heritage: heritageLayer,
+    strata: strataLayer,
+  });
+
   const persistClientState = useCallback(
     (opts?: { activeKey?: string | null; scanOverride?: ScanState }) => {
       const s = opts?.scanOverride ?? scan;
@@ -294,7 +437,7 @@ export function MapWorkspace({
         lng: view.lng,
         zoom: view.zoom,
         query,
-        zoneFill,
+        zoneFill: zoning,
         zoningWms,
         updatedAt: new Date().toISOString(),
       });
@@ -349,7 +492,7 @@ export function MapWorkspace({
         // ignore
       }
     },
-    [scan, query, zoneFill, zoningWms, centres, activeKey],
+    [scan, query, zoning, zoningWms, centres, activeKey],
   );
 
   /** Overlay latest persisted opportunity result onto scan cards (no suburb rescan). */
@@ -484,11 +627,11 @@ export function MapWorkspace({
   const onViewportChange = useCallback(
     (bbox: BBox, zoom: number) => {
       lastBBox.current = bbox;
-      mapViewRef.current = {
-        lat: (bbox.south + bbox.north) / 2,
-        lng: (bbox.west + bbox.east) / 2,
-        zoom,
-      };
+      const lat = (bbox.south + bbox.north) / 2;
+      const lng = (bbox.west + bbox.east) / 2;
+      mapViewRef.current = { lat, lng, zoom };
+      const key = overlayViewportKey(bbox, zoom);
+      setOverlayViewport((prev) => (prev.key === key ? prev : { key, bbox, lat, lng, zoom }));
       setLoad((s) => ({ ...s, zoom }));
       // Hidden Map / INDEX_CANDIDATE: never broad-fetch — check before any timer/
       // cooldown arming so early Leaflet moveend/zoomend cannot race the apply effect.
@@ -611,15 +754,27 @@ export function MapWorkspace({
     setHoverKey(null);
     setQuery("");
     setResults(null);
-    setZoneFill(true);
-    setZoningWms(false);
+    selectParcelTheme("zoning");
+    setProposedPlanning(false);
+    setShowStationsCentres(false);
+    setShowCatchments(false);
+    setShowDaCdc(false);
+    setShowMajorProjects(false);
+    setWatchedSitesLayer(false);
     mapViewRef.current = { ...DEFAULT_START };
+    setOverlayViewport({
+      key: `${DEFAULT_START.lat.toFixed(4)}|${DEFAULT_START.lng.toFixed(4)}|${DEFAULT_START.zoom}`,
+      bbox: null,
+      lat: DEFAULT_START.lat,
+      lng: DEFAULT_START.lng,
+      zoom: DEFAULT_START.zoom,
+    });
     setFlyTo({ ...DEFAULT_START, nonce: nowMs() });
     saveMapState({
       ...DEFAULT_START,
       query: "",
       zoneFill: true,
-      zoningWms: false,
+      zoningWms: true,
       updatedAt: new Date().toISOString(),
     });
     try {
@@ -1069,8 +1224,8 @@ export function MapWorkspace({
     bootstrappedScanQueryRef.current = initialScanQuery;
     // Temporary: do not auto-fire synchronous /api/scan on the web instance.
     if (!isLiveDeepScanEnabled()) {
+      // Deep Scan UI is hidden; keep query for search context without a giant unavailable banner.
       setQuery(initialScanQuery);
-      setScan((s) => ({ ...s, scanning: false, error: LIVE_DEEP_SCAN_DISABLED_MESSAGE }));
       return;
     }
     let cancelled = false;
@@ -1320,7 +1475,8 @@ export function MapWorkspace({
             zoom: mapTarget.zoom ?? 16,
           };
         }
-        setDevActivityLayer(true);
+        setShowDaCdc(true);
+        setShowMajorProjects(true);
         setTargetPanel({
           kind: "DEVELOPMENT_ACTIVITY",
           title: "Development activity",
@@ -1479,10 +1635,21 @@ export function MapWorkspace({
           assemblyIds={scanAssemblyIds}
           highlightIds={highlightIds}
           neighbourIds={find && selectedId === find.startId && !highlightIds.length ? find.neighbours : []}
-          zoneFill={zoneFill}
+          zoning={zoning}
           zoningWms={zoningWms}
+          parcelTheme={parcelTheme}
           proposedPlanning={proposedPlanning}
           proposedPlanningData={proposedPlanningData}
+          centres={centres}
+          showCentres={showStationsCentres}
+          showCatchments={showCatchments}
+          stations={stations}
+          showStations={showStationsCentres}
+          activities={activities}
+          showDaCdc={showDaCdc}
+          showMajorProjects={showMajorProjects}
+          watchedMarkers={watchedMarkers}
+          showWatched={watchedSitesLayer}
           flyTo={flyTo}
           initial={start}
           onParcelClick={onParcelClick}
@@ -1515,28 +1682,14 @@ export function MapWorkspace({
             )}
           </form>
           <div className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-[3px] border border-line bg-white p-1 shadow-sm">
-            <Button
-              size="sm"
-              variant="accent"
-              className="h-8"
-              disabled={scan.scanning || !isLiveDeepScanEnabled()}
-              title={!isLiveDeepScanEnabled() ? LIVE_DEEP_SCAN_DISABLED_MESSAGE : undefined}
-              onClick={() => scanThisArea()}
-            >
-              {scan.scanning
-                ? scan.stage || "Scanning…"
-                : isLiveDeepScanEnabled()
-                  ? "Scan this area"
-                  : LIVE_DEEP_SCAN_DISABLED_BUTTON}
-            </Button>
+            {isLiveDeepScanEnabled() && (
+              <Button size="sm" variant="accent" className="h-8" disabled={scan.scanning} onClick={() => scanThisArea()}>
+                {scan.scanning ? scan.stage || "Scanning…" : "Scan this area"}
+              </Button>
+            )}
             {scan.scanning && (
               <span className="hidden max-w-[220px] truncate px-1 text-[10.5px] text-muted sm:inline" title={scan.stage}>
                 {scan.stage}
-              </span>
-            )}
-            {!isLiveDeepScanEnabled() && !scan.scanning && (
-              <span className="hidden max-w-[280px] truncate px-1 text-[10.5px] text-muted sm:inline" title={LIVE_DEEP_SCAN_DISABLED_MESSAGE}>
-                Use Today / Find indexed sites
               </span>
             )}
             {!!scan.candidates.length && (
@@ -1553,61 +1706,109 @@ export function MapWorkspace({
               </>
             )}
             <Button size="sm" variant="ghost" className="h-8" onClick={resetMap}>
-              Reset map
+              Reset
             </Button>
-            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
-              <input
-                type="checkbox"
-                checked={zoneFill || zoningWms}
-                onChange={(e) => {
-                  setZoneFill(e.target.checked);
-                  setZoningWms(e.target.checked);
-                }}
-              />{" "}
-              Current planning
-            </label>
             <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
               <input
                 type="checkbox"
                 checked={proposedPlanning}
                 onChange={(e) => setProposedPlanning(e.target.checked)}
               />{" "}
-              Proposed planning
+              Planning changes
             </label>
-            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
-              <input type="checkbox" checked={devActivityLayer} onChange={(e) => setDevActivityLayer(e.target.checked)} />{" "}
-              Development activity
-            </label>
-            <label className="flex cursor-pointer items-center gap-1.5 border-l border-line px-2 text-[11.5px]">
-              <input type="checkbox" checked={watchedSitesLayer} onChange={(e) => setWatchedSitesLayer(e.target.checked)} />{" "}
-              Watched sites
-            </label>
-            <div className="relative border-l border-line px-2">
+            <div className="relative border-l border-line px-1">
               <button
                 type="button"
-                className="text-[11.5px] font-semibold uppercase tracking-wide text-muted hover:text-ink"
-                onClick={() => setMoreLayersOpen((v) => !v)}
+                className="h-8 px-2 text-[11.5px] font-semibold uppercase tracking-wide text-ink hover:bg-canvas"
+                aria-expanded={layersOpen}
+                onClick={() => setLayersOpen((v) => !v)}
               >
-                More
+                Layers{layersOpen ? " ▴" : " ▾"}
               </button>
-              {moreLayersOpen && (
-                <div className="absolute right-0 top-full z-[1100] mt-1 min-w-[200px] border border-line bg-white p-2 shadow-md">
-                  <label className="flex items-center gap-1.5 py-1 text-[11.5px]">
-                    <input type="checkbox" checked={zoneFill} onChange={(e) => setZoneFill(e.target.checked)} /> Zone fill
-                  </label>
-                  <label className="flex items-center gap-1.5 py-1 text-[11.5px]">
-                    <input type="checkbox" checked={zoningWms} onChange={(e) => setZoningWms(e.target.checked)} /> LEP zoning WMS
-                  </label>
-                  <p className="mt-1 border-t border-line pt-1 text-[10.5px] text-muted">Heritage, flood, bushfire, contours — use external layers when available.</p>
+              {layersOpen && (
+                <div className="absolute right-0 top-full z-[1100] mt-1 max-h-[70vh] w-[240px] overflow-y-auto border border-line bg-white p-2.5 shadow-md">
+                  <div className="mb-2">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">Planning</div>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input
+                        type="checkbox"
+                        checked={zoning}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "zoning" : "none")}
+                      />{" "}
+                      Zoning
+                    </label>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input
+                        type="checkbox"
+                        checked={fsrLayer}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "fsr" : "none")}
+                      />{" "}
+                      FSR
+                    </label>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input
+                        type="checkbox"
+                        checked={heightLayer}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "height" : "none")}
+                      />{" "}
+                      Height
+                    </label>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input type="checkbox" checked={proposedPlanning} onChange={(e) => setProposedPlanning(e.target.checked)} /> Proposed planning
+                    </label>
+                  </div>
+                  <div className="mb-2 border-t border-line pt-2">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">Site</div>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input
+                        type="checkbox"
+                        checked={heritageLayer}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "heritage" : "none")}
+                      />{" "}
+                      Heritage
+                    </label>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input
+                        type="checkbox"
+                        checked={strataLayer}
+                        onChange={(e) => selectParcelTheme(e.target.checked ? "strata" : "none")}
+                      />{" "}
+                      Strata
+                    </label>
+                  </div>
+                  {(hasDaCdcActivity || hasMajorProjectActivity) && (
+                    <div className="mb-2 border-t border-line pt-2">
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">Activity</div>
+                      {hasDaCdcActivity && (
+                        <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                          <input type="checkbox" checked={showDaCdc} onChange={(e) => setShowDaCdc(e.target.checked)} /> DAs / CDCs
+                        </label>
+                      )}
+                      {hasMajorProjectActivity && (
+                        <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                          <input type="checkbox" checked={showMajorProjects} onChange={(e) => setShowMajorProjects(e.target.checked)} /> Major projects
+                        </label>
+                      )}
+                    </div>
+                  )}
+                  <div className="mb-2 border-t border-line pt-2">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">Location</div>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input type="checkbox" checked={showStationsCentres} onChange={(e) => setShowStationsCentres(e.target.checked)} /> Stations / centres
+                    </label>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input type="checkbox" checked={showCatchments} onChange={(e) => setShowCatchments(e.target.checked)} /> LMR 400 / 800 m screening
+                    </label>
+                  </div>
+                  <div className="border-t border-line pt-2">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">My sites</div>
+                    <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                      <input type="checkbox" checked={watchedSitesLayer} onChange={(e) => setWatchedSitesLayer(e.target.checked)} /> Watched sites
+                    </label>
+                  </div>
                 </div>
               )}
             </div>
-            {devActivityLayer && (
-              <span className="border-l border-line px-2 text-[10.5px] text-muted">Activity layer: see parcel panel counts</span>
-            )}
-            {watchedSitesLayer && (
-              <span className="text-[10.5px] text-muted">Watched sites: open Watching / Sites</span>
-            )}
           </div>
           <div className="pointer-events-auto ml-auto flex items-center gap-2 rounded-[3px] border border-line bg-white px-2.5 py-1.5 shadow-sm">
             {load.cadastreStatus === "unavailable" ? <Badge tone="bad">Cadastre unavailable</Badge> : <LiveDataBadge cached={load.cadastreStatus === "cached"} />}
@@ -1755,11 +1956,11 @@ export function MapWorkspace({
                   <strong className="text-ink">Find assemblies</strong> — start from a selected parcel (2–{assumptions.maxAssemblySize} lots).
                 </li>
                 <li>
-                  <strong className="text-ink">Indexed sites</strong> — open from Today / Find. Live deep scan is temporarily unavailable on this web service.
+                  <strong className="text-ink">Indexed sites</strong> — open from Today / Find.
                 </li>
               </ul>
               <p className="mt-2">
-                Use <strong className="text-ink">Radar</strong> in the nav to find promising precincts (e.g. LMR centre catchments), then scan.
+                Use <strong className="text-ink">Layers</strong> for zoning, FSR, height, heritage, strata, and nearby centres.
               </p>
             </div>
           )}
