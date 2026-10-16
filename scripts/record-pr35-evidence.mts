@@ -48,6 +48,21 @@ function assertAssembly(text: string, where: string) {
   if (!/3\s*lots?/i.test(text)) fail(`${where}: missing 3 lots`);
 }
 
+/** Wait until the three Bexley lots + total area are visible in the assembly panel. */
+async function waitForAssembly(page: Page, where: string) {
+  try {
+    await page.getByText(/39 Beaconsfield/i).first().waitFor({ timeout: 60000 });
+    await page.getByText(/42 Connemarra/i).first().waitFor({ timeout: 15000 });
+    await page.getByText(/40 Connemarra/i).first().waitFor({ timeout: 15000 });
+    await page.getByText(/2,?285/).first().waitFor({ timeout: 15000 });
+  } catch {
+    fail(`${where}: assembly panel did not show 3 Bexley lots / 2,285 sqm in time`);
+  }
+  const text = await page.locator("body").innerText();
+  assertAssembly(text, where);
+  return text;
+}
+
 async function apiLogin(request: APIRequestContext) {
   const res = await request.post(`${BASE}/api/auth/login`, {
     data: { email: EMAIL, password: PASSWORD },
@@ -156,9 +171,7 @@ async function recordBexleyLive(page: Page) {
   );
 
   await page.goto(`${BASE}${BEXLEY_MAP_HREF}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForTimeout(8000);
-  const liveText = await page.locator("body").innerText();
-  assertAssembly(liveText, "live map");
+  const liveText = await waitForAssembly(page, "live map");
   if (!/R3/.test(liveText) || !/0\.7/.test(liveText)) fail("live map missing R3 / 0.7");
   await shot(page, "04-bexley-map-planning.png");
 
@@ -186,9 +199,7 @@ async function recordBexleyLive(page: Page) {
 
   // Reopen map with opportunity — exact three lots must survive.
   await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForTimeout(6000);
-  const reopen = await page.locator("body").innerText();
-  assertAssembly(reopen, "reopen opportunity map");
+  await waitForAssembly(page, "reopen opportunity map");
   await shot(page, "07-bexley-reopen-assembly.png");
   return { oppId, retrievedAts: trace.retrievedAts };
 }
@@ -197,11 +208,14 @@ async function recordBexleyFallback(page: Page, oppId: string) {
   // Requires SA_FORCE_PLANNING_FAIL=1 on the server.
   await ensureAuthedPage(page);
   await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForTimeout(5000);
+  await waitForAssembly(page, "forced-failure map");
+  // Click a lot so the parcel panel shows stored-planning message.
+  await page.getByText(/39 Beaconsfield/i).first().click();
+  await page.waitForTimeout(1500);
   await page.mouse.wheel(0, 180);
-  await page.waitForTimeout(3500);
+  await page.waitForTimeout(2000);
   const text = await page.locator("body").innerText();
-  assertAssembly(text, "forced-failure map");
+  assertAssembly(text, "forced-failure map (panel)");
   if (!/Stored official planning/i.test(text)) fail("forced failure did not show Stored official planning");
   // Date must come from persisted source timestamp (YYYY-MM-DD), not a hard-coded script constant.
   if (!/Stored official planning \(\d{4}-\d{2}-\d{2}\)/.test(text)) {
@@ -212,9 +226,9 @@ async function recordBexleyFallback(page: Page, oppId: string) {
   const retry = page.getByRole("button", { name: /Retry/i }).first();
   if (!(await retry.count())) fail("Retry button missing under forced failure");
   await retry.click();
-  await page.waitForTimeout(2500);
-  const after = await page.locator("body").innerText();
-  assertAssembly(after, "after retry under forced failure");
+  await page.waitForTimeout(3500);
+  const after = await waitForAssembly(page, "after retry under forced failure");
+  if (!/Stored official planning/i.test(after)) fail("after retry still missing Stored official planning under force-fail");
   await shot(page, "05b-bexley-after-retry-forced.png");
 }
 
@@ -222,14 +236,16 @@ async function recordBexleyRecover(page: Page, oppId: string) {
   // Requires SA_FORCE_PLANNING_FAIL unset — live recovery after forced failure.
   await ensureAuthedPage(page);
   await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForTimeout(6000);
+  await waitForAssembly(page, "live recovery");
   const retry = page.getByRole("button", { name: /Retry/i }).first();
   if (await retry.count()) {
     await retry.click();
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(5000);
   }
+  await page.getByText(/39 Beaconsfield/i).first().click();
+  await page.waitForTimeout(1500);
   const text = await page.locator("body").innerText();
-  assertAssembly(text, "live recovery");
+  assertAssembly(text, "live recovery panel");
   if (!/R3/.test(text) || !/0\.7/.test(text)) fail("live recovery missing R3 / 0.7");
   await shot(page, "05c-bexley-live-recovery.png");
 }
@@ -263,41 +279,60 @@ async function withVideo(name: string, fn: (page: Page) => Promise<void>) {
   }
 }
 
+function resolveFfmpeg(): string | null {
+  if (process.env.FFMPEG_PATH && fs.existsSync(process.env.FFMPEG_PATH)) return process.env.FFMPEG_PATH;
+  const which = spawnSync("which", ["ffmpeg"], { encoding: "utf8" });
+  if (which.status === 0 && which.stdout.trim()) return which.stdout.trim();
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const staticPath = require("ffmpeg-static") as string | null;
+    if (staticPath && fs.existsSync(staticPath)) return staticPath;
+  } catch {
+    // optional dep
+  }
+  const candidates = [
+    "/tmp/node_modules/ffmpeg-static/ffmpeg",
+    path.join(process.cwd(), "node_modules/ffmpeg-static/ffmpeg"),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
+
 function concatCombinedVideo() {
-  const parts = [
+  const partNames = [
     "02a-bexley-map-live.webm",
     "02b-bexley-fallback-retry.webm",
     "02c-bexley-live-recovery.webm",
     "02d-bexley-analyse-reopen.webm",
-  ]
-    .map((f) => path.join(MEDIA, f))
-    .filter((p) => fs.existsSync(p));
+  ];
+  const parts = partNames.map((f) => path.join(MEDIA, f)).filter((p) => fs.existsSync(p));
   const out = path.join(MEDIA, "02-bexley-map-live-fallback-retry-analyse.webm");
   if (parts.length < 2) {
     fail("combined video requires at least two segment recordings — refusing to copy live-only");
   }
-  // Prefer ffmpeg concat when available.
+  const ffmpegBin = resolveFfmpeg();
+  if (!ffmpegBin) fail("ffmpeg not found — install ffmpeg or ffmpeg-static; refusing live-only copy");
+
+  // Use basename relative paths so spaces in MEDIA do not break the concat demuxer.
   const list = path.join(MEDIA, "_concat.txt");
-  fs.writeFileSync(list, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"));
-  const ff = spawnSync("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", out], {
+  fs.writeFileSync(
+    list,
+    parts.map((p) => `file '${path.basename(p).replace(/'/g, "'\\''")}'`).join("\n"),
+  );
+  const ff = spawnSync(ffmpegBin, ["-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", out], {
     encoding: "utf8",
+    cwd: MEDIA,
   });
   fs.unlinkSync(list);
   if (ff.status === 0 && fs.existsSync(out)) {
-    console.log("COMBINED_VIDEO_FFMPEG", out);
+    const live = fs.statSync(parts[0]!).size;
+    const combined = fs.statSync(out).size;
+    if (combined < live * 1.5) {
+      fail(`combined video looks like a live-only copy (${combined} bytes vs live ${live})`);
+    }
+    console.log("COMBINED_VIDEO_FFMPEG", out, { live, combined });
     return;
   }
-  // Fallback: binary-append is invalid for webm — instead write a manifest and
-  // copy the longest multi-segment set by requiring all parts exist and using
-  // the fallback/analyse segment as the named combined file is still wrong.
-  // Soft requirement: produce a real multi-flow recording by re-encoding via playwright is heavy.
-  // If ffmpeg missing, stitch by recording a note manifest and fail loudly unless FORCE_COMBINED_COPY=1.
-  if (process.env.FORCE_COMBINED_COPY === "1") {
-    fs.copyFileSync(parts[parts.length - 1]!, out);
-    console.warn("COMBINED_VIDEO_FALLBACK_COPY", out);
-    return;
-  }
-  fail(`ffmpeg concat failed (status ${ff.status}): ${(ff.stderr || "").slice(0, 400)}`);
+  fail(`ffmpeg concat failed (status ${ff.status}): ${(ff.stderr || ff.error?.message || "").slice(0, 400)}`);
 }
 
 async function main() {
@@ -345,9 +380,7 @@ async function main() {
     await withVideo("02d-bexley-analyse-reopen.webm", async (page) => {
       await ensureAuthedPage(page);
       await page.goto(`${BASE}${BEXLEY_MAP_HREF}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-      await page.waitForTimeout(6000);
-      const before = await page.locator("body").innerText();
-      assertAssembly(before, "pre-analyse candidate");
+      await waitForAssembly(page, "pre-analyse candidate");
       const analyse = page.getByRole("button", { name: /^Analyse$/i }).first();
       if (!(await analyse.count())) fail("Analyse missing on re-verify");
       await Promise.all([
@@ -356,9 +389,7 @@ async function main() {
       ]);
       await shot(page, "06-bexley-analyse.png");
       await page.goto(`${BASE}/map?opportunityId=${oppId}`, { waitUntil: "domcontentloaded", timeout: 90000 });
-      await page.waitForTimeout(6000);
-      const after = await page.locator("body").innerText();
-      assertAssembly(after, "post-analyse reopen");
+      await waitForAssembly(page, "post-analyse reopen");
       await shot(page, "07-bexley-reopen-assembly.png");
     });
   }
