@@ -62,6 +62,50 @@ async function storedParcelsInBBox(b: BBox) {
   });
 }
 
+/** Persist verified live planning onto Parcel rows so later failures can fall back. */
+async function persistLivePlanning(
+  parcels: Array<{ externalParcelId: string; planning: PlanningControls | null; retrievedAt: string }>,
+): Promise<void> {
+  const withPlanning = parcels.filter((p) => p.planning);
+  if (!withPlanning.length) return;
+  try {
+    for (const p of withPlanning) {
+      const pl = p.planning!;
+      const checked = new Date(p.retrievedAt);
+      const row = await prisma.parcel.updateMany({
+        where: { externalParcelId: p.externalParcelId },
+        data: {
+          zone: pl.zone,
+          zoneName: pl.zoneName,
+          fsr: pl.fsr,
+          heightM: pl.heightM,
+          minLotSizeSqm: pl.minLotSizeSqm,
+          heritage: pl.heritage,
+          planningInstrument: pl.planningInstrument,
+          lga: pl.lga,
+          planningCheckedAt: checked,
+        },
+      });
+      if (!row.count) continue;
+      const existing = await prisma.parcel.findUnique({
+        where: { externalParcelId: p.externalParcelId },
+        select: { id: true },
+      });
+      if (!existing) continue;
+      await prisma.planningSnapshot.create({
+        data: {
+          parcelId: existing.id,
+          source: "LIVE_NSW",
+          data: pl as unknown as import("@/generated/prisma/client").Prisma.InputJsonValue,
+          retrievedAt: checked,
+        },
+      });
+    }
+  } catch {
+    // Persistence is best-effort — never fail the map response.
+  }
+}
+
 /** Real NSW lots + planning for a map viewport. Falls back to previously stored NSW data when a service is down. */
 export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult> {
   const bbox = clampBBox(input);
@@ -82,36 +126,82 @@ export async function getParcelsForBBox(input: BBox): Promise<ParcelQueryResult>
     return { parcels: stored.map(parcelFromRow), cadastreStatus: "cached", planningStatus: "cached", messages, bbox };
   }
 
+  // Always load stored planning for fallback / whether live succeeds.
+  stored = await storedParcelsInBBox(bbox);
+  const storedById = new Map(stored.map((r) => [r.externalParcelId, r]));
+
   let planningStatus: ParcelQueryResult["planningStatus"] = "live";
   let controls = new Map<string, PlanningControls>();
+  let planningError: string | null = null;
   try {
-    // Pass REAL parcel geometries so FSR is intersected against the official EPI layer.
-    controls = await nswPlanningProvider.getControlsForParcels(
+    // Overall budget so Render proxy does not HTML-502 before we soft-fail.
+    const planningPromise = nswPlanningProvider.getControlsForParcels(
       bbox,
       base.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
     );
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new UpstreamError("Planning request budget exceeded", "NSW Planning")), 20000);
+    });
+    controls = await Promise.race([planningPromise, timeoutPromise]);
     const sample = controls.values().next().value as PlanningControls | undefined;
     if (sample && Object.keys(sample.sources).length < 5) {
       planningStatus = "partial";
-      messages.push("Some planning layers did not respond; missing fields are shown as unavailable.");
+      messages.push("Some planning layers did not respond; missing fields are shown as not loaded.");
     }
   } catch (err) {
+    planningError = err instanceof Error ? err.message : "error";
     planningStatus = "unavailable";
-    messages.push(`Planning service temporarily unavailable (${err instanceof Error ? err.message : "error"}).`);
-    stored = await storedParcelsInBBox(bbox);
   }
-  const storedById = new Map((stored ?? []).map((r) => [r.externalParcelId, r]));
 
+  const retrievedAt = new Date().toISOString();
   const parcels: ParcelData[] = base.map((p) => {
     const live = controls.get(p.externalParcelId);
-    if (live) return { ...p, planning: live, planningStatus: Object.keys(live.sources).length < 5 ? "partial" : "ok" };
+    if (live) {
+      return {
+        ...p,
+        planning: live,
+        planningStatus: Object.keys(live.sources).length < 5 ? "partial" : "ok",
+        retrievedAt,
+      };
+    }
     const row = storedById.get(p.externalParcelId);
     if (row?.planningCheckedAt) {
       const cached = parcelFromRow(row);
-      return { ...p, planning: cached.planning, planningStatus: "partial", planningMessage: `Planning from saved snapshot (${row.planningCheckedAt.toISOString().slice(0, 10)})` };
+      const checked = row.planningCheckedAt.toISOString().slice(0, 10);
+      return {
+        ...p,
+        planning: cached.planning,
+        planningStatus: "cached",
+        planningMessage: `Stored official planning (${checked}) — live NSW Planning did not respond${planningError ? ` (${planningError})` : ""}.`,
+        retrievedAt: cached.retrievedAt,
+      };
     }
-    return { ...p, planning: null, planningStatus: "unavailable", planningMessage: "Planning service temporarily unavailable." };
+    return {
+      ...p,
+      planning: null,
+      planningStatus: "unavailable",
+      planningMessage: planningError
+        ? `Planning not loaded — ${planningError}. Retry to fetch live NSW controls.`
+        : "Planning not loaded. Retry to fetch live NSW controls.",
+    };
   });
+
+  const cachedCount = parcels.filter((p) => p.planningStatus === "cached").length;
+  const liveCount = parcels.filter((p) => p.planningStatus === "ok" || p.planningStatus === "partial").length;
+  if (planningError) {
+    if (cachedCount > 0) {
+      planningStatus = "cached";
+      messages.push(
+        `Live planning unavailable (${planningError}). Showing stored official planning for ${cachedCount} parcel${cachedCount === 1 ? "" : "s"}.`,
+      );
+    } else {
+      planningStatus = "unavailable";
+      messages.push(`Planning service temporarily unavailable (${planningError}).`);
+    }
+  } else if (liveCount > 0) {
+    // Persist successful live planning so a later outage can fall back.
+    void persistLivePlanning(parcels.map((p) => ({ externalParcelId: p.externalParcelId, planning: p.planning, retrievedAt: p.retrievedAt })));
+  }
 
   return { parcels, cadastreStatus, planningStatus, messages, bbox };
 }
@@ -251,7 +341,7 @@ export async function getParcelsByExternalIds(
   const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as ParcelData[];
   if (opts.skipPlanning || !ordered.length) return ordered;
 
-  // Attach planning where possible
+  // Attach planning where possible; keep any already-stored controls on failure.
   try {
     const lngs = ordered.map((p) => p.centroid[0]);
     const lats = ordered.map((p) => p.centroid[1]);
@@ -265,12 +355,36 @@ export async function getParcelsByExternalIds(
       bbox,
       ordered.map((p) => ({ id: p.externalParcelId, geometry: p.geometry })),
     );
-    return ordered.map((p) => {
+    const retrievedAt = new Date().toISOString();
+    const withLive = ordered.map((p) => {
       const live = controls.get(p.externalParcelId);
-      return live ? { ...p, planning: live, planningStatus: "ok" as const } : p;
+      if (!live) return p;
+      return { ...p, planning: live, planningStatus: "ok" as const, retrievedAt };
     });
+    void persistLivePlanning(
+      withLive.map((p) => ({
+        externalParcelId: p.externalParcelId,
+        planning: p.planning,
+        retrievedAt: p.retrievedAt,
+      })),
+    );
+    return withLive;
   } catch {
-    return ordered;
+    // Prefer stored official planning over blank "unavailable".
+    return ordered.map((p) => {
+      if (p.planning) {
+        return {
+          ...p,
+          planningStatus: "cached" as const,
+          planningMessage: `Stored official planning (${p.retrievedAt.slice(0, 10)}) — live NSW Planning did not respond.`,
+        };
+      }
+      return {
+        ...p,
+        planningStatus: "unavailable" as const,
+        planningMessage: "Planning not loaded. Retry to fetch live NSW controls.",
+      };
+    });
   }
 }
 

@@ -19,6 +19,14 @@ export interface FindFilters {
   maxStationDistanceM?: number | null;
   insidePlanningChangeArea?: boolean | null;
   keySiteOnly?: boolean | null;
+  /** Exact planning-change area id (e.g. council:inner-west-our-fairer-future). */
+  planningChangeAreaId?: string | null;
+  /** Exact key-site external id (e.g. Area L). */
+  keySiteId?: string | null;
+  /** Multiple key-site ids — match any. */
+  keySiteIds?: string[] | null;
+  /** Exact SiteCandidateIndex row ids from a Today update. */
+  candidateIds?: string[] | null;
   minRequiredParcelCount?: number | null;
   minHeadroom?: number | null;
   minScore?: number | null;

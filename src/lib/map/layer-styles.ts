@@ -45,11 +45,12 @@ export function resolveParcelTheme(flags: {
   return "none";
 }
 
-export type FsrBucket = "not_mapped" | "le_0_5" | "0_5_1" | "1_1_5" | "1_5_2" | "gt_2";
-export type HeightBucket = "not_mapped" | "le_9" | "9_12" | "12_18" | "gt_18";
+export type FsrBucket = "not_loaded" | "not_mapped" | "le_0_5" | "0_5_1" | "1_1_5" | "1_5_2" | "gt_2";
+export type HeightBucket = "not_loaded" | "not_mapped" | "le_9" | "9_12" | "12_18" | "gt_18";
 export type HeritageKind = "item" | "conservation" | "none" | "unknown";
 
 export const FSR_BUCKET_COLOURS: Record<FsrBucket, string> = {
+  not_loaded: "#fbbf24",
   not_mapped: "#d1d5db",
   le_0_5: "#dbeafe",
   "0_5_1": "#93c5fd",
@@ -59,6 +60,7 @@ export const FSR_BUCKET_COLOURS: Record<FsrBucket, string> = {
 };
 
 export const FSR_LEGEND: { key: FsrBucket; label: string }[] = [
+  { key: "not_loaded", label: "Not loaded" },
   { key: "not_mapped", label: "Not mapped" },
   { key: "le_0_5", label: "≤ 0.5" },
   { key: "0_5_1", label: "0.5 – 1.0" },
@@ -68,6 +70,7 @@ export const FSR_LEGEND: { key: FsrBucket; label: string }[] = [
 ];
 
 export const HEIGHT_BUCKET_COLOURS: Record<HeightBucket, string> = {
+  not_loaded: "#fbbf24",
   not_mapped: "#d1d5db",
   le_9: "#dcfce7",
   "9_12": "#86efac",
@@ -76,6 +79,7 @@ export const HEIGHT_BUCKET_COLOURS: Record<HeightBucket, string> = {
 };
 
 export const HEIGHT_LEGEND: { key: HeightBucket; label: string }[] = [
+  { key: "not_loaded", label: "Not loaded" },
   { key: "not_mapped", label: "Not mapped" },
   { key: "le_9", label: "≤ 9 m" },
   { key: "9_12", label: "9 – 12 m" },
@@ -92,11 +96,18 @@ export const HERITAGE_COLOURS = {
 
 export const STRATA_COLOUR = "#db2777";
 
-/** Resolve FSR bucket from current mapped LEP FSR only. Unmapped stays not_mapped — never 0. */
-export function fsrBucket(fsr: number | null | undefined, fsrStatus?: string | null): FsrBucket {
-  if (fsrStatus === "NO_MAPPED" || fsrStatus === "UNAVAILABLE" || fsr == null || !Number.isFinite(fsr)) {
-    return "not_mapped";
-  }
+/**
+ * Resolve FSR bucket from current mapped LEP FSR only.
+ * UNAVAILABLE / not-loaded (service down) ≠ NO_MAPPED (EPI has no control).
+ * Never treat missing as 0.
+ */
+export function fsrBucket(
+  fsr: number | null | undefined,
+  fsrStatus?: string | null,
+  planningStatus?: string | null,
+): FsrBucket {
+  if (fsrStatus === "UNAVAILABLE" || planningStatus === "unavailable") return "not_loaded";
+  if (fsrStatus === "NO_MAPPED" || fsr == null || !Number.isFinite(fsr)) return "not_mapped";
   if (fsr <= 0.5) return "le_0_5";
   if (fsr <= 1) return "0_5_1";
   if (fsr <= 1.5) return "1_1_5";
@@ -104,12 +115,20 @@ export function fsrBucket(fsr: number | null | undefined, fsrStatus?: string | n
   return "gt_2";
 }
 
-export function fsrColour(fsr: number | null | undefined, fsrStatus?: string | null): string {
-  return FSR_BUCKET_COLOURS[fsrBucket(fsr, fsrStatus)];
+export function fsrColour(
+  fsr: number | null | undefined,
+  fsrStatus?: string | null,
+  planningStatus?: string | null,
+): string {
+  return FSR_BUCKET_COLOURS[fsrBucket(fsr, fsrStatus, planningStatus)];
 }
 
-/** Current statutory / LEP height only. Missing stays not_mapped. */
-export function heightBucket(heightM: number | null | undefined): HeightBucket {
+/** Current statutory / LEP height only. Missing stays not_mapped; service-down is not_loaded. */
+export function heightBucket(
+  heightM: number | null | undefined,
+  planningStatus?: string | null,
+): HeightBucket {
+  if (planningStatus === "unavailable") return "not_loaded";
   if (heightM == null || !Number.isFinite(heightM)) return "not_mapped";
   if (heightM <= 9) return "le_9";
   if (heightM <= 12) return "9_12";
@@ -117,8 +136,8 @@ export function heightBucket(heightM: number | null | undefined): HeightBucket {
   return "gt_18";
 }
 
-export function heightColour(heightM: number | null | undefined): string {
-  return HEIGHT_BUCKET_COLOURS[heightBucket(heightM)];
+export function heightColour(heightM: number | null | undefined, planningStatus?: string | null): string {
+  return HEIGHT_BUCKET_COLOURS[heightBucket(heightM, planningStatus)];
 }
 
 /**

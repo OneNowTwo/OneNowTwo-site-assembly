@@ -56,7 +56,8 @@ async function fetchLayerPage(key: LayerKey, bbox: BBox, resultOffset: number): 
   };
   if (key !== "fsr") params.maxAllowableOffset = 0.000003;
   const url = buildUrl(`${NSW_PLANNING_BASE}/${layer.id}/query`, params);
-  return fetchJson<EsriQueryResponse<Attrs>>(url, { service: `NSW Planning (${layer.label})`, timeoutMs: 25000 });
+  // Keep per-layer timeout short so /api/parcels can soft-fail before Render's proxy 502s (~30s).
+  return fetchJson<EsriQueryResponse<Attrs>>(url, { service: `NSW Planning (${layer.label})`, timeoutMs: 12000 });
 }
 
 async function fetchLayer(key: LayerKey, bbox: BBox): Promise<PlanningPolygon[]> {

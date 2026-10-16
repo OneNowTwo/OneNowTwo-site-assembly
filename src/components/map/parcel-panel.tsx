@@ -219,11 +219,35 @@ export function ParcelPanel({
         )}
         {parcel.planningStatus === "unavailable" || !pl ? (
           <div className="my-3 rounded-[3px] border border-amber-300 bg-amber-50 p-3">
-            <div className="font-semibold text-amber-900">Planning service temporarily unavailable.</div>
-            <p className="mt-1 text-[12px] text-amber-900/80">{parcel.planningMessage ?? "NSW Planning Portal did not respond."} You can continue — save the assembly and enter planning controls manually on the Planning tab.</p>
+            <div className="font-semibold text-amber-900">Planning not loaded</div>
+            <p className="mt-1 text-[12px] text-amber-900/80">
+              {parcel.planningMessage ?? "Live NSW Planning did not respond."} This is different from “not mapped” —
+              controls may still exist. Retry without clearing your assembly.
+            </p>
             <Button size="sm" className="mt-2" onClick={onRetry}>
               Retry
             </Button>
+          </div>
+        ) : parcel.planningStatus === "cached" ? (
+          <div className="my-3 rounded-[3px] border border-sky-300 bg-sky-50 p-3">
+            <div className="font-semibold text-sky-950">Stored official planning</div>
+            <p className="mt-1 text-[12px] text-sky-900/80">
+              {parcel.planningMessage ?? "Showing previously verified NSW planning while live service is unavailable."}
+            </p>
+            <Button size="sm" className="mt-2" onClick={onRetry}>
+              Retry live check
+            </Button>
+            <div className="my-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Current planning (stored)</div>
+            <Row label="Zoning" value={pl.zone ? `${pl.zone} ${pl.zoneName ?? ""}` : "Not mapped"} source={pl.sources.zone} />
+            <OfficialFsrBlock
+              value={pl.fsr}
+              instrument={pl.planningInstrument}
+              source={pl.sources.fsr}
+              controls={pl.fsrControls ?? []}
+              status={pl.fsrStatus ?? (pl.fsr != null ? "MAPPED" : "NO_MAPPED")}
+            />
+            <Row label="Height of buildings (LEP)" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
+            <Row label="Local government area" value={pl.lga ?? "—"} />
           </div>
         ) : (
           <>

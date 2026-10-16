@@ -134,10 +134,13 @@ function InvalidateOnShow({ visible }: { visible?: boolean }) {
 function parcelFill(p: ParcelData | undefined, theme: ParcelTheme, zoning: boolean): { fillColor: string; fillOpacity: number } {
   if (!p) return { fillColor: "#ffffff", fillOpacity: 0.08 };
   if (theme === "fsr") {
-    return { fillColor: fsrColour(p.planning?.fsr, p.planning?.fsrStatus), fillOpacity: 0.55 };
+    return {
+      fillColor: fsrColour(p.planning?.fsr, p.planning?.fsrStatus, p.planningStatus),
+      fillOpacity: 0.55,
+    };
   }
   if (theme === "height") {
-    return { fillColor: heightColour(p.planning?.heightM), fillOpacity: 0.55 };
+    return { fillColor: heightColour(p.planning?.heightM, p.planningStatus), fillOpacity: 0.55 };
   }
   if (theme === "heritage") {
     return { fillColor: heritageColour(p.planning?.heritage), fillOpacity: isHeritageMapped(p.planning?.heritage) ? 0.55 : 0.12 };
