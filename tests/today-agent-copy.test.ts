@@ -98,6 +98,50 @@ describe("today agent copy — helpers", () => {
     expect(todayTypeLabel("DA_LODGED")).toBe("DEVELOPMENT APPLICATION");
   });
 
+  it("keeps DEVELOPMENT_ACTIVITY language even when affectedSites is set", () => {
+    const p = presentTodayStory(
+      {
+        type: "DEVELOPMENT_ACTIVITY",
+        location: "Parramatta",
+        title: "HDA near station",
+        whatChanged: "New HDA recommendation",
+        whyItMatters: null,
+        affectedSites: 5,
+      },
+      "APARTMENTS",
+    );
+    expect(p.typeLabel).toBe("NEW DEVELOPMENT ACTIVITY");
+    expect(p.title).toBe("Major development activity near Parramatta");
+    expect(p.title).not.toMatch(/planning update/i);
+    expect(p.explanation).toMatch(/development activity/i);
+    expect(p.explanation).toMatch(/5 potential sites nearby may be affected/i);
+    expect(p.explanation).not.toMatch(/planning update/i);
+  });
+
+  it("uses DA wording for development applications", () => {
+    const p = presentTodayStory(
+      {
+        type: "DA_LODGED",
+        location: "Bexley",
+        title: "DA lodged",
+        affectedSites: 2,
+      },
+      "APARTMENTS",
+    );
+    expect(p.typeLabel).toBe("DEVELOPMENT APPLICATION");
+    expect(p.title).toBe("Development application near Bexley");
+    expect(p.explanation).toMatch(/development application/i);
+    expect(p.explanation).not.toMatch(/planning update/i);
+  });
+
+  it("labels sales and market updates correctly", () => {
+    expect(todayTypeLabel("NEW_SALE")).toBe("PROPERTY SALE");
+    expect(todayTypeLabel("SALE")).toBe("PROPERTY SALE");
+    expect(todayTypeLabel("MARKET")).toBe("MARKET UPDATE");
+    expect(todayTypeLabel("MARKET")).not.toBe("NEW DEVELOPMENT ACTIVITY");
+    expect(todayTypeLabel("NEW_SALE")).not.toBe("NEW DEVELOPMENT ACTIVITY");
+  });
+
   it("why-it-matters avoids modelled pathway / outer screening jargon", () => {
     const line = whyItMattersSentence({
       zone: "R3",

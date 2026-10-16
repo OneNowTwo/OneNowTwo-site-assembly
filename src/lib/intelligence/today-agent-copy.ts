@@ -50,16 +50,28 @@ export function extractLocationFromTitle(title: string | null | undefined): stri
   return null;
 }
 
+function isDevelopmentKind(kind: string): boolean {
+  return /HDA|SSD|DA_|PCC_|DEVELOPMENT/i.test(kind);
+}
+
+function isDaKind(kind: string): boolean {
+  // Lodged/approved DA / PCC — not HDA/SSD major-development pathways.
+  return /DA_|PCC_/i.test(kind) && !/HDA|SSD/i.test(kind);
+}
+
 export function todayTypeLabel(kind: string, title?: string | null): string {
   const area = extractAreaLabel(title);
   // Named official key-site areas keep KEY SITE UPDATE; clustered KEY_SITE kinds become PLANNING UPDATE.
   if (area && /KEY_SITE|ASSEMBLY/i.test(kind)) return "KEY SITE UPDATE";
-  if (/HDA|SSD|DA_|PCC_|DEVELOPMENT/i.test(kind)) return "DEVELOPMENT APPLICATION";
+  if (isDaKind(kind)) return "DEVELOPMENT APPLICATION";
+  if (/HDA|SSD|DEVELOPMENT/i.test(kind)) return "NEW DEVELOPMENT ACTIVITY";
   if (/PLANNING_PROPOSAL/i.test(kind)) return "PLANNING PROPOSAL";
   if (/ZONE/i.test(kind)) return "ZONING CHANGE";
   if (/FSR|HEIGHT/i.test(kind)) return "FSR / HEIGHT CHANGE";
   if (/KEY_SITE|ASSEMBLY|PLANNING|DCP|AFFORDABLE/i.test(kind)) return "PLANNING UPDATE";
-  if (/MARKET|SALE/i.test(kind)) return "NEW DEVELOPMENT ACTIVITY";
+  // Sales before market — never describe a sale as development activity.
+  if (/NEW_SALE|\bSALE\b|_SALE/i.test(kind)) return "PROPERTY SALE";
+  if (/MARKET/i.test(kind)) return "MARKET UPDATE";
   const cleaned = kind.replaceAll("_", " ").toUpperCase().trim();
   if (!cleaned || cleaned === "OTHER") return "PLANNING UPDATE";
   return cleaned;
@@ -113,6 +125,23 @@ export function presentTodayStory(
   let title: string;
   let explanation: string;
 
+  // Development kinds BEFORE generic planning / affectedSites branches — never call a DA/HDA a planning update.
+  if (isDevelopmentKind(story.type)) {
+    if (isDaKind(story.type)) {
+      title = location ? `Development application near ${location}` : "Development application";
+      explanation =
+        "A nearby development application may affect competition, timing or local market evidence.";
+    } else {
+      title = location ? `Major development activity near ${location}` : "Major development activity";
+      explanation =
+        "New development activity nearby may affect competition, timing or the local development market.";
+    }
+    if (n != null && n > 0) {
+      explanation = `${explanation} ${n} potential site${n === 1 ? "" : "s"} nearby may be affected.`;
+    }
+    return { typeLabel, title, explanation };
+  }
+
   if (area && location) {
     title = `${location} planning update — ${area}`;
     if (n === 1) {
@@ -136,9 +165,6 @@ export function presentTodayStory(
   } else if (n === 1) {
     title = location ? `${location} planning update` : "Planning update";
     explanation = `One potential ${stratAdj} site sits within the affected planning area and may be worth reviewing.`;
-  } else if (/DEVELOPMENT|HDA|SSD|DA_/i.test(story.type)) {
-    title = location ? `Development activity near ${location}` : "Development activity update";
-    explanation = `New development activity nearby may affect acquisition timing or competition for ${stratName}.`;
   } else {
     // Fall back to cleaned title if it is already human; otherwise generic.
     const rawTitle = (story.title ?? "").replace(/NEEDS_RE_EXTRACTION|SOURCE_DOCUMENT_CHANGED/gi, "").trim();

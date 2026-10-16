@@ -415,7 +415,7 @@ export function DashboardClient() {
             </Link>
           </div>
           {!stories.length ? (
-            <Empty>No planning updates in Greater Sydney in the last 7 days.</Empty>
+            <Empty>No new planning or development updates in Greater Sydney in the last 7 days.</Empty>
           ) : (
             <div className="overflow-hidden rounded-[3px] border border-line bg-white">
               <ul className="divide-y divide-line">

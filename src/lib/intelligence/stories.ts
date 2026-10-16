@@ -218,11 +218,7 @@ export function aggregateIntelligenceStories(
     let summary = presented.explanation;
     let whyItMatters = presented.explanation;
 
-    if (sk === "DEVELOPMENT_ACTIVITY") {
-      title = location ? `Development activity near ${location}` : "Development activity update";
-      summary = `New development activity nearby may affect acquisition timing or competition for ${strategyDisplayName(profile.strategy)}.`;
-      whyItMatters = summary;
-    } else if (fsr != null && sk === "PLANNING_UPDATE") {
+    if (fsr != null && sk === "PLANNING_UPDATE") {
       title = location
         ? `${location} planning update — proposed FSR ${fsr}`
         : `Planning update — proposed FSR ${fsr}`;
