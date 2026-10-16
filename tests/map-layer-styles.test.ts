@@ -13,7 +13,9 @@ import {
   activityCentroid,
   activityHasPlottableGeometry,
   activityPlotLatLng,
+  activityToggleAvailability,
   type DevelopmentActivity,
+  type DevelopmentActivityType,
 } from "@/lib/source-watcher/development-activity";
 
 describe("map layer styles", () => {
@@ -81,12 +83,15 @@ describe("map layer styles", () => {
   });
 });
 
-function stubActivity(geometry: DevelopmentActivity["geometry"]): DevelopmentActivity {
+function stubActivity(
+  geometry: DevelopmentActivity["geometry"],
+  type: DevelopmentActivityType = "HDA",
+): DevelopmentActivity {
   return {
-    id: "t1",
+    id: `t-${type}`,
     sourceId: "test",
-    externalId: "EXT-1",
-    type: "HDA",
+    externalId: `EXT-${type}`,
+    type,
     status: "LODGED",
     address: "1 Test St",
     geometry,
@@ -101,6 +106,20 @@ function stubActivity(geometry: DevelopmentActivity["geometry"]): DevelopmentAct
     checkedAt: new Date().toISOString(),
   };
 }
+
+const pointGeom: GeoJSON.Point = { type: "Point", coordinates: [151.1, -33.8] };
+const polygonGeom: GeoJSON.Polygon = {
+  type: "Polygon",
+  coordinates: [
+    [
+      [151.0, -33.9],
+      [151.2, -33.9],
+      [151.2, -33.7],
+      [151.0, -33.7],
+      [151.0, -33.9],
+    ],
+  ],
+};
 
 describe("activity plot geometry", () => {
   it("plots Point at the coordinate", () => {
@@ -157,5 +176,48 @@ describe("activity plot geometry", () => {
     expect(activityCentroid(a)).toBeNull();
     expect(activityPlotLatLng(a)).toBeNull();
     expect(activityHasPlottableGeometry(a)).toBe(false);
+  });
+});
+
+describe("activity toggle availability (independent category gating)", () => {
+  it("only HDA geometry → Major projects shown, DAs/CDCs hidden", () => {
+    expect(activityToggleAvailability([stubActivity(pointGeom, "HDA")])).toEqual({
+      hasDaCdcActivity: false,
+      hasMajorProjectActivity: true,
+    });
+  });
+
+  it("only DA geometry → DAs/CDCs shown, Major projects hidden", () => {
+    expect(activityToggleAvailability([stubActivity(pointGeom, "DA")])).toEqual({
+      hasDaCdcActivity: true,
+      hasMajorProjectActivity: false,
+    });
+  });
+
+  it("both → both shown", () => {
+    expect(
+      activityToggleAvailability([stubActivity(pointGeom, "CDC"), stubActivity(pointGeom, "SSD")]),
+    ).toEqual({
+      hasDaCdcActivity: true,
+      hasMajorProjectActivity: true,
+    });
+  });
+
+  it("no plottable activity → Activity group hidden", () => {
+    expect(activityToggleAvailability([stubActivity(null, "DA"), stubActivity(null, "HDA")])).toEqual({
+      hasDaCdcActivity: false,
+      hasMajorProjectActivity: false,
+    });
+    expect(activityToggleAvailability([])).toEqual({
+      hasDaCdcActivity: false,
+      hasMajorProjectActivity: false,
+    });
+  });
+
+  it("polygon HDA counts as plottable major-project activity", () => {
+    expect(activityToggleAvailability([stubActivity(polygonGeom, "HDA")])).toEqual({
+      hasDaCdcActivity: false,
+      hasMajorProjectActivity: true,
+    });
   });
 });

@@ -106,6 +106,30 @@ export function activityHasPlottableGeometry(activity: DevelopmentActivity): boo
   return activityCentroid(activity) != null;
 }
 
+export function isDaCdcActivityType(type: DevelopmentActivityType): boolean {
+  return type === "DA" || type === "CDC" || type === "PCC";
+}
+
+export function isMajorProjectActivityType(type: DevelopmentActivityType): boolean {
+  return type === "HDA" || type === "SSD" || type === "OTHER";
+}
+
+/** Independent Activity-toggle availability from plottable records (do not conflate DA with HDA/SSD). */
+export function activityToggleAvailability(activities: DevelopmentActivity[]): {
+  hasDaCdcActivity: boolean;
+  hasMajorProjectActivity: boolean;
+} {
+  let hasDaCdcActivity = false;
+  let hasMajorProjectActivity = false;
+  for (const a of activities) {
+    if (!activityHasPlottableGeometry(a)) continue;
+    if (isDaCdcActivityType(a.type)) hasDaCdcActivity = true;
+    if (isMajorProjectActivityType(a.type)) hasMajorProjectActivity = true;
+    if (hasDaCdcActivity && hasMajorProjectActivity) break;
+  }
+  return { hasDaCdcActivity, hasMajorProjectActivity };
+}
+
 export function filterActivitiesNear(
   activities: DevelopmentActivity[],
   point: { lng: number; lat: number },

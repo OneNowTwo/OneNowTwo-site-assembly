@@ -53,7 +53,7 @@ import {
 import { applyParcelTheme, resolveParcelTheme, type ParcelThemeId } from "@/lib/map/layer-styles";
 import type { TrainStation } from "@/lib/data-sources/nsw-train-stations";
 import type { DevelopmentActivity } from "@/lib/source-watcher/development-activity";
-import { activityHasPlottableGeometry } from "@/lib/source-watcher/development-activity";
+import { activityToggleAvailability } from "@/lib/source-watcher/development-activity";
 import type { WatchedSiteMarker } from "@/lib/map/watched-site-marker";
 
 function overlayViewportKey(bbox: BBox, zoom: number): string {
@@ -236,7 +236,8 @@ export function MapWorkspace({
   const [stations, setStations] = useState<TrainStation[]>([]);
   const [activities, setActivities] = useState<DevelopmentActivity[]>([]);
   const [watchedMarkers, setWatchedMarkers] = useState<WatchedSiteMarker[]>([]);
-  const [activityHasGeometry, setActivityHasGeometry] = useState(false);
+  const [hasDaCdcActivity, setHasDaCdcActivity] = useState(false);
+  const [hasMajorProjectActivity, setHasMajorProjectActivity] = useState(false);
   /** Rounded moveend/zoomend viewport key so station/activity overlays refetch on same-zoom pans. */
   const [overlayViewport, setOverlayViewport] = useState<{
     key: string;
@@ -329,7 +330,7 @@ export function MapWorkspace({
     };
   }, [proposedPlanning]);
 
-  // Probe once whether any development-activity records are plottable (Point / Polygon / MultiPolygon).
+  // Probe once: gate DAs/CDCs vs Major projects independently by plottable category.
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/development-activity")
@@ -337,10 +338,15 @@ export function MapWorkspace({
       .then((j: { activities?: DevelopmentActivity[] }) => {
         if (cancelled) return;
         const list = Array.isArray(j.activities) ? j.activities : [];
-        setActivityHasGeometry(list.some((a) => activityHasPlottableGeometry(a)));
+        const avail = activityToggleAvailability(list);
+        setHasDaCdcActivity(avail.hasDaCdcActivity);
+        setHasMajorProjectActivity(avail.hasMajorProjectActivity);
       })
       .catch(() => {
-        if (!cancelled) setActivityHasGeometry(false);
+        if (!cancelled) {
+          setHasDaCdcActivity(false);
+          setHasMajorProjectActivity(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -1770,15 +1776,19 @@ export function MapWorkspace({
                       Strata
                     </label>
                   </div>
-                  {activityHasGeometry && (
+                  {(hasDaCdcActivity || hasMajorProjectActivity) && (
                     <div className="mb-2 border-t border-line pt-2">
                       <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">Activity</div>
-                      <label className="flex items-center gap-1.5 py-1 text-[12px]">
-                        <input type="checkbox" checked={showDaCdc} onChange={(e) => setShowDaCdc(e.target.checked)} /> DAs / CDCs
-                      </label>
-                      <label className="flex items-center gap-1.5 py-1 text-[12px]">
-                        <input type="checkbox" checked={showMajorProjects} onChange={(e) => setShowMajorProjects(e.target.checked)} /> Major projects
-                      </label>
+                      {hasDaCdcActivity && (
+                        <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                          <input type="checkbox" checked={showDaCdc} onChange={(e) => setShowDaCdc(e.target.checked)} /> DAs / CDCs
+                        </label>
+                      )}
+                      {hasMajorProjectActivity && (
+                        <label className="flex items-center gap-1.5 py-1 text-[12px]">
+                          <input type="checkbox" checked={showMajorProjects} onChange={(e) => setShowMajorProjects(e.target.checked)} /> Major projects
+                        </label>
+                      )}
                     </div>
                   )}
                   <div className="mb-2 border-t border-line pt-2">
