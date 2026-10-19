@@ -2,17 +2,20 @@
 
 @theme inline {
   --font-sans: var(--font-plex-sans);
+  --font-serif: var(--font-source-serif);
   --font-mono: var(--font-plex-mono);
-  --color-ink: #14181f;
-  --color-muted: #5b6573;
-  --color-line: #dde1e6;
-  --color-panel: #ffffff;
-  --color-canvas: #f3f4f6;
-  --color-brand: #0f3d5e;
-  --color-brand-soft: #e6eef4;
-  --color-accent: #b4541a;
-  --color-good: #1d6b3a;
+  --color-ink: #17282b;
+  --color-muted: #5a6a6d;
+  --color-line: #e2ddd3;
+  --color-panel: #fffefa;
+  --color-canvas: #f3f0e9;
+  --color-brand: #132b2d;
+  --color-brand-soft: #e4ecec;
+  --color-accent: #be9956;
+  --color-accent-soft: #f5edd9;
+  --color-good: #2d6a4f;
   --color-bad: #a3271f;
+  --color-warn: #9a6b2f;
 }
 
 html,
@@ -24,21 +27,26 @@ body {
   background: var(--color-canvas);
   color: var(--color-ink);
   font-feature-settings: "tnum" 1;
+  font-size: 14px;
 }
 
 .num {
   font-variant-numeric: tabular-nums;
 }
 
+.font-display {
+  font-family: var(--font-source-serif), ui-serif, Georgia, serif;
+}
+
 .leaflet-container {
   font-family: inherit;
-  background: #e8eaed;
+  background: #e8e4da;
 }
 
 .parcel-tooltip {
   font-size: 11px;
   padding: 2px 6px;
-  border-radius: 2px;
+  border-radius: 4px;
 }
 
 input[type="number"]::-webkit-inner-spin-button {

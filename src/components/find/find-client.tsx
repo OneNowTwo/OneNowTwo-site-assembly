@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Badge, Button, Panel, ScoreBadge, cx } from "@/components/ui";
+import { Badge, Button, Panel, ScoreBadge } from "@/components/ui";
+import { PageHeader } from "@/components/shell/page-header";
+import { StatusChip } from "@/components/shell/status-chip";
 import { fsr, money, sqm } from "@/lib/format";
 import { StrategySelector } from "@/components/strategy-selector";
 import type { DevelopmentStrategy } from "@/lib/source-watcher/strategy-profile";
@@ -113,20 +115,20 @@ export function FindClient() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="border-b border-line bg-gradient-to-r from-[#f3f6f8] via-white to-[#eef5f2] px-6 py-6">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">Find</div>
-        <h1 className="mt-1 text-[24px] font-semibold tracking-tight">Find development sites</h1>
-        <p className="mt-1 max-w-2xl text-[13px] text-muted">
-          Search indexed Sydney candidates first. Filters stay authoritative — strategy affects ranking, not hidden cut-offs.
-        </p>
+    <div className="h-full overflow-y-auto bg-canvas">
+      <div className="border-b border-line bg-panel/80 px-5 py-5 sm:px-6">
+        <PageHeader
+          eyebrow="Find"
+          title="Find development sites"
+          description="Search indexed Sydney candidates first. Filters stay authoritative — strategy affects ranking, not hidden cut-offs."
+        />
         <div className="mt-4">
           <StrategySelector value={strategy} onChange={setStrategy} />
         </div>
         <label className="mt-4 block">
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Optional natural language</span>
           <textarea
-            className="mt-1 w-full rounded-[3px] border border-line bg-white px-3 py-2 text-[13px]"
+            className="mt-1 w-full rounded-[7px] border border-line bg-panel px-3 py-2 text-[14px]"
             rows={2}
             value={nl}
             placeholder={NL_PLACEHOLDER}
@@ -135,12 +137,12 @@ export function FindClient() {
         </label>
       </div>
 
-      <div className="grid gap-4 p-6 lg:grid-cols-12">
+      <div className="grid gap-4 p-5 lg:grid-cols-12 sm:p-6">
         <aside className="space-y-3 lg:col-span-4">
           <Panel title="Filters">
             <Field label="Suburb / centre">
               <input
-                className="w-full rounded-[3px] border border-line px-2 py-1.5 text-[13px]"
+                className="w-full rounded-[7px] border border-line bg-panel px-2 py-1.5 text-[13px]"
                 placeholder="Any Greater Sydney suburb or LGA"
                 value={suburb}
                 onChange={(e) => setSuburb(e.target.value)}
@@ -148,14 +150,14 @@ export function FindClient() {
             </Field>
             <Field label="Minimum site area (sqm)">
               <input
-                className="w-full rounded-[3px] border border-line px-2 py-1.5 text-[13px] num"
+                className="w-full rounded-[7px] border border-line bg-panel px-2 py-1.5 text-[13px] num"
                 value={minSiteArea}
                 onChange={(e) => setMinSiteArea(e.target.value)}
               />
             </Field>
             <Field label="Minimum proposed FSR">
               <input
-                className="w-full rounded-[3px] border border-line px-2 py-1.5 text-[13px] num"
+                className="w-full rounded-[7px] border border-line bg-panel px-2 py-1.5 text-[13px] num"
                 value={minProposedFsr}
                 onChange={(e) => setMinProposedFsr(e.target.value)}
                 placeholder="optional"
@@ -163,7 +165,7 @@ export function FindClient() {
             </Field>
             <Field label="Minimum headroom ($)">
               <input
-                className="w-full rounded-[3px] border border-line px-2 py-1.5 text-[13px] num"
+                className="w-full rounded-[7px] border border-line bg-panel px-2 py-1.5 text-[13px] num"
                 value={minHeadroom}
                 onChange={(e) => setMinHeadroom(e.target.value)}
                 placeholder="optional"
@@ -204,7 +206,7 @@ export function FindClient() {
 
         <div className="space-y-3 lg:col-span-8">
           {messages.map((m) => (
-            <div key={m} className="rounded-[3px] border border-line bg-white px-3 py-2 text-[13px] text-ink">
+            <div key={m} className="rounded-[8px] border border-line bg-panel px-3 py-2 text-[13px] text-ink">
               {m}
               {source ? (
                 <span className="ml-2 text-[11px] uppercase tracking-wide text-muted">
@@ -215,7 +217,7 @@ export function FindClient() {
           ))}
 
           {hasSearched && !results.length && !loading && assessedCount > 0 && (
-            <div className="rounded-[3px] border border-line bg-canvas/40 px-3 py-3 text-[12.5px]">
+            <div className="rounded-[8px] border border-line bg-panel px-3 py-3 text-[13px]">
               <div className="font-semibold">No sites matched your current filters.</div>
               <p className="mt-1 text-muted">
                 {assessedCount} candidate{assessedCount === 1 ? "" : "s"} assessed; 0 matched.
@@ -223,7 +225,7 @@ export function FindClient() {
               {appliedFilters.length > 0 && (
                 <ul className="mt-2 flex flex-wrap gap-2">
                   {appliedFilters.map((f) => (
-                    <li key={f.label} className="rounded-[3px] border border-line bg-white px-2 py-0.5 text-[11px]">
+                    <li key={f.label} className="rounded-[6px] border border-line bg-canvas px-2 py-0.5 text-[11px]">
                       <span className="text-muted">{f.label}:</span> {f.value}
                     </li>
                   ))}
@@ -234,7 +236,7 @@ export function FindClient() {
 
           {diagnostics.length > 0 && (
             <details
-              className="rounded-[3px] border border-line bg-canvas/30 px-3 py-2 text-[12px]"
+              className="rounded-[8px] border border-line bg-panel px-3 py-2 text-[12px]"
               open={showDiagnostics}
               onToggle={(e) => setShowDiagnostics((e.target as HTMLDetailsElement).open)}
             >
@@ -247,7 +249,7 @@ export function FindClient() {
             </details>
           )}
 
-          {error && <div className="rounded-[3px] border border-red-200 bg-red-50 p-3 text-[13px] text-bad">{error}</div>}
+          {error && <div className="rounded-[8px] border border-red-200 bg-red-50 p-3 text-[13px] text-bad">{error}</div>}
 
           {!hasSearched && !loading && (
             <Empty>Enter a suburb, then search. Indexed results return quickly; live deep scan is optional.</Empty>
@@ -257,11 +259,11 @@ export function FindClient() {
           )}
 
           {results.map((r) => (
-            <article key={r.key} className="border border-line bg-white p-4">
+            <article key={r.key} className="rounded-[8px] border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(23,40,43,0.04)]">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-[15px] font-semibold">{r.locationLabel}</h2>
-                  <p className="mt-0.5 text-[12px] text-muted">
+                  <h2 className="font-display text-[17px] font-semibold">{r.locationLabel}</h2>
+                  <p className="mt-0.5 text-[12.5px] text-muted">
                     {[
                       r.zone,
                       sqm(r.siteAreaSqm),
@@ -274,21 +276,18 @@ export function FindClient() {
                 </div>
                 <ScoreBadge score={r.score} />
               </div>
-              <div className="mt-2 flex flex-wrap gap-3 text-[12.5px]">
-                {r.currentFsr != null && <span>Current FSR {fsr(r.currentFsr)}</span>}
-                {r.proposedFsr != null && (
-                  <span className="font-semibold text-brand">Proposed FSR {fsr(r.proposedFsr)}</span>
-                )}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {r.currentFsr != null && <StatusChip tone="fsr">FSR {fsr(r.currentFsr)}</StatusChip>}
+                {r.proposedFsr != null && <StatusChip tone="proposed">Proposed {fsr(r.proposedFsr)}</StatusChip>}
                 {r.stationDistanceM != null && (
-                  <span>
-                    {Math.round(r.stationDistanceM).toLocaleString("en-AU")}m from{" "}
-                    {r.nearestStationLabel ?? "station"}
-                  </span>
+                  <StatusChip tone="neutral">
+                    {Math.round(r.stationDistanceM).toLocaleString("en-AU")}m · {r.nearestStationLabel ?? "station"}
+                  </StatusChip>
                 )}
                 {r.planningChangeStatus && <Badge tone="warn">{r.planningChangeStatus}</Badge>}
                 {r.keySiteId && <Badge tone="brand">Key Site</Badge>}
                 {r.headroom != null && (
-                  <span className="num">{money(r.headroom, { compact: true })} headroom</span>
+                  <StatusChip tone="good">{money(r.headroom, { compact: true })} headroom</StatusChip>
                 )}
               </div>
               <div className="mt-3">
@@ -296,13 +295,13 @@ export function FindClient() {
                 <ul className="mt-1 space-y-0.5">
                   {r.whyMatched.length ? (
                     r.whyMatched.map((w) => (
-                      <li key={`${r.key}-${w.title}`} className="text-[12.5px]">
+                      <li key={`${r.key}-${w.title}`} className="text-[13px]">
                         <span className="text-good">✓</span> {w.title}
                         <span className="text-muted"> — {w.body}</span>
                       </li>
                     ))
                   ) : (
-                    <li className="text-[12.5px] text-muted">Matched explicit filters.</li>
+                    <li className="text-[13px] text-muted">Matched explicit filters.</li>
                   )}
                 </ul>
               </div>
@@ -310,7 +309,7 @@ export function FindClient() {
                 {r.opportunityId ? (
                   <Link
                     href={`/opportunities/${r.opportunityId}`}
-                    className="rounded-[3px] bg-brand px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white"
+                    className="rounded-[7px] bg-brand px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white"
                   >
                     View site
                   </Link>
@@ -329,13 +328,13 @@ export function FindClient() {
                     },
                     source === "index" ? "index" : "live",
                   )}
-                  className="rounded-[3px] bg-brand px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white"
+                  className="rounded-[7px] bg-brand px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white"
                 >
                   View on map
                 </Link>
                 <Link
                   href="/watching"
-                  className="rounded-[3px] border border-line px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+                  className="rounded-[7px] border border-line bg-panel px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
                 >
                   Watch
                 </Link>
@@ -358,5 +357,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="border border-dashed border-line bg-canvas/50 px-4 py-8 text-center text-[13px] text-muted">{children}</div>;
+  return (
+    <div className="rounded-[8px] border border-dashed border-line bg-panel/60 px-4 py-8 text-center text-[13px] text-muted">
+      {children}
+    </div>
+  );
 }

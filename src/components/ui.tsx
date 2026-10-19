@@ -12,13 +12,13 @@ export function Button({ variant = "secondary", size = "md", className, ...props
     <button
       {...props}
       className={cx(
-        "inline-flex items-center justify-center gap-1.5 rounded-[3px] font-semibold uppercase tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        size === "sm" ? "h-7 px-2.5 text-[11px]" : "h-9 px-3.5 text-[12px]",
-        variant === "primary" && "bg-brand text-white hover:bg-[#0b2f49]",
-        variant === "accent" && "bg-accent text-white hover:bg-[#954513]",
-        variant === "secondary" && "border border-line bg-white text-ink hover:bg-canvas",
+        "inline-flex items-center justify-center gap-1.5 rounded-[7px] font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        size === "sm" ? "h-7 px-2.5 text-[11px] uppercase" : "h-9 px-3.5 text-[12.5px]",
+        variant === "primary" && "bg-brand text-white hover:bg-[#0e2325]",
+        variant === "accent" && "bg-accent text-white hover:bg-[#a88445]",
+        variant === "secondary" && "border border-line bg-panel text-ink hover:bg-canvas",
         variant === "ghost" && "text-muted hover:bg-canvas hover:text-ink",
-        variant === "danger" && "border border-line bg-white text-bad hover:bg-red-50",
+        variant === "danger" && "border border-line bg-panel text-bad hover:bg-red-50",
         className,
       )}
     />
@@ -27,7 +27,7 @@ export function Button({ variant = "secondary", size = "md", className, ...props
 
 export function Panel({ title, actions, children, className, bodyClassName }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string }) {
   return (
-    <section className={cx("rounded-[3px] border border-line bg-panel", className)}>
+    <section className={cx("rounded-[8px] border border-line bg-panel shadow-[0_1px_2px_rgba(23,40,43,0.04)]", className)}>
       {(title || actions) && (
         <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{title}</h3>
@@ -65,17 +65,17 @@ export function Badge({ children, tone = "neutral", title }: { children: ReactNo
     <span
       title={title}
       className={cx(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-[2px] px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide",
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-[5px] px-1.5 py-[2px] text-[10.5px] font-semibold uppercase tracking-wide",
         tone === "neutral" && "bg-canvas text-muted",
         tone === "live" && "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200",
         tone === "demo" && "bg-amber-50 text-amber-800 ring-1 ring-amber-300",
-        tone === "good" && "bg-emerald-50 text-good",
+        tone === "good" && "bg-[#e4f0e8] text-good",
         tone === "bad" && "bg-red-50 text-bad",
-        tone === "warn" && "bg-amber-50 text-amber-800",
+        tone === "warn" && "bg-accent-soft text-warn",
         tone === "brand" && "bg-brand-soft text-brand",
-        tone === "official" && "bg-sky-50 text-sky-800",
-        tone === "assumption" && "bg-violet-50 text-violet-800",
-        tone === "estimate" && "bg-stone-100 text-stone-700",
+        tone === "official" && "bg-[#e4eef3] text-[#2a4f5c]",
+        tone === "assumption" && "bg-[#ece8f3] text-[#4a3d6b]",
+        tone === "estimate" && "bg-canvas text-muted",
       )}
     >
       {children}
@@ -158,7 +158,7 @@ export function NumberField({
     else setText(display);
   };
   return (
-    <div className={cx("flex h-8 items-center rounded-[3px] border border-line bg-white focus-within:border-brand focus-within:ring-1 focus-within:ring-brand", className)}>
+    <div className={cx("flex h-8 items-center rounded-[7px] border border-line bg-panel focus-within:border-brand focus-within:ring-1 focus-within:ring-brand", className)}>
       {kind === "money" && <span className="pl-2 text-muted">$</span>}
       <input
         aria-label={ariaLabel}
@@ -195,7 +195,7 @@ export function Select<T extends string>({ value, onChange, options, className, 
       aria-label={ariaLabel}
       value={value}
       onChange={(e) => onChange(e.target.value as T)}
-      className={cx("h-8 rounded-[3px] border border-line bg-white px-2 text-[12.5px] outline-none focus:border-brand", className)}
+      className={cx("h-8 rounded-[7px] border border-line bg-panel px-2 text-[12.5px] outline-none focus:border-brand", className)}
     >
       {options.map((o) => (
         <option key={o.value} value={o.value}>
@@ -226,7 +226,7 @@ export function TextArea({ value, onCommit, rows = 3, placeholder }: { value: st
       placeholder={placeholder}
       onChange={(e) => setText(e.target.value)}
       onBlur={() => text !== value && onCommit(text)}
-      className="w-full rounded-[3px] border border-line bg-white p-2 text-[12.5px] outline-none focus:border-brand"
+      className="w-full rounded-[7px] border border-line bg-panel p-2 text-[12.5px] outline-none focus:border-brand"
     />
   );
 }
@@ -240,15 +240,15 @@ export function TextInput({ value, onCommit, placeholder, className }: { value: 
       onChange={(e) => setText(e.target.value)}
       onBlur={() => text !== value && onCommit(text)}
       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-      className={cx("h-8 w-full rounded-[3px] border border-line bg-white px-2 text-[12.5px] outline-none focus:border-brand", className)}
+      className={cx("h-8 w-full rounded-[7px] border border-line bg-panel px-2 text-[12.5px] outline-none focus:border-brand", className)}
     />
   );
 }
 
 export function ScoreBadge({ score }: { score: number | null | undefined }) {
   if (score == null) return <span className="text-muted">—</span>;
-  const tone = score >= 65 ? "bg-good" : score >= 45 ? "bg-amber-600" : "bg-bad";
-  return <span className={cx("num inline-flex h-6 min-w-9 items-center justify-center rounded-[3px] px-1.5 text-[12px] font-bold text-white", tone)}>{score}</span>;
+  const tone = score >= 65 ? "bg-good" : score >= 45 ? "bg-accent" : "bg-bad";
+  return <span className={cx("num inline-flex h-7 min-w-9 items-center justify-center rounded-full px-1.5 text-[12px] font-bold text-white", tone)}>{score}</span>;
 }
 
 export function ProgressBar({ value, className }: { value: number; className?: string }) {

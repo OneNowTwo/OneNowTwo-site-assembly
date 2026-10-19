@@ -214,8 +214,8 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
 
   return (
     <Ctx.Provider value={ctx}>
-      <div className="flex h-full flex-col overflow-hidden">
-        <div className="shrink-0 border-b border-line bg-white px-6 pt-4">
+      <div className="flex h-full flex-col overflow-hidden bg-canvas">
+        <div className="shrink-0 border-b border-line bg-panel px-6 pt-4">
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-[11px] text-muted">
@@ -248,11 +248,11 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
                     if (e.target.value.trim() && e.target.value !== dto.name) void ctx.updateOpportunity({ name: e.target.value.trim() });
                   }}
                   onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                  className="mt-1 w-[520px] rounded-[3px] border border-brand px-1 text-[21px] font-semibold outline-none"
+                  className="font-display mt-1 w-[520px] rounded-[7px] border border-brand px-2 text-[24px] font-semibold outline-none"
                   aria-label="Opportunity name"
                 />
               ) : (
-                <h1 className="mt-1 cursor-text text-[21px] font-semibold leading-tight hover:text-brand" title="Click to rename" onClick={() => setEditingName(true)}>
+                <h1 className="font-display mt-1 cursor-text text-[24px] font-semibold leading-tight hover:text-brand" title="Click to rename" onClick={() => setEditingName(true)}>
                   {dto.name}
                 </h1>
               )}
@@ -374,7 +374,7 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
             </div>
           </div>
           {scanSnap && (
-            <div className="mt-3 rounded-[3px] border border-line bg-canvas px-3 py-2 text-[12px]">
+            <div className="mt-3 rounded-[8px] border border-line bg-canvas px-3 py-2 text-[12px]">
               <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Scan estimate vs detailed analysis</div>
               <div className="mt-1 grid grid-cols-2 gap-x-6 gap-y-1 num sm:grid-cols-4">
                 <div>
@@ -418,7 +418,10 @@ export function OpportunityView({ id, initialTab }: { id: string; initialTab?: s
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className={cx("border-b-2 px-3 pb-2 pt-1 text-[11.5px] font-semibold uppercase tracking-[0.1em]", tab === t ? "border-brand text-brand" : "border-transparent text-muted hover:text-ink")}
+                className={cx(
+                  "border-b-2 px-3 pb-2 pt-1 text-[11.5px] font-semibold uppercase tracking-[0.1em]",
+                  tab === t ? "border-accent text-brand" : "border-transparent text-muted hover:text-ink",
+                )}
               >
                 {t === "market" ? "comparables" : t}
               </button>
