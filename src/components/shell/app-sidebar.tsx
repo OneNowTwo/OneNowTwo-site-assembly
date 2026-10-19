@@ -125,10 +125,10 @@ export function AppSidebar({
 
       <div className="mt-auto border-t border-white/10 px-3 py-3">
         <Link href="/feed" className="block rounded-[6px] px-2 py-1.5 text-[12px] text-white/55 hover:bg-white/5 hover:text-white/85">
-          Sources & coverage
+          Feed
         </Link>
         <Link href="/assumptions" className="block rounded-[6px] px-2 py-1.5 text-[12px] text-white/55 hover:bg-white/5 hover:text-white/85">
-          Settings
+          Assumptions
         </Link>
         <div className="mt-2 flex items-center justify-between gap-2 px-2">
           <span className="truncate text-[11px] text-white/45" title={email}>

@@ -41,29 +41,35 @@ export function StatusChip({
   );
 }
 
-/** Circular screening score as in the warm-stone concept. */
+/** Circular score — no invented fit labels; optional provenance caption only. */
 export function ScoreRing({
   score,
-  label,
+  caption,
 }: {
   score: number | null | undefined;
-  label?: string;
+  /** Established provenance label e.g. SCREENING / DETAILED — not a fit judgement. */
+  caption?: string;
 }) {
   if (score == null) return <span className="text-muted">—</span>;
-  const good = score >= 55;
+  const high = score >= 65;
+  const mid = score >= 45;
   return (
     <div className="flex flex-col items-center gap-0.5">
       <div
         className={cx(
-          "num flex h-12 w-12 items-center justify-center rounded-full border-2 text-[15px] font-semibold",
-          good ? "border-good/50 bg-[#e4f0e8] text-good" : "border-accent/60 bg-accent-soft text-warn",
+          "num flex h-11 w-11 items-center justify-center rounded-full border-2 text-[14px] font-semibold",
+          high
+            ? "border-good/50 bg-[#e4f0e8] text-good"
+            : mid
+              ? "border-accent/60 bg-accent-soft text-warn"
+              : "border-bad/40 bg-red-50 text-bad",
         )}
       >
         {Math.round(score)}
       </div>
-      {label != null && (
-        <div className={cx("max-w-[72px] text-center text-[10px] font-medium leading-tight", good ? "text-good" : "text-warn")}>
-          {label}
+      {caption != null && (
+        <div className="max-w-[72px] text-center text-[9.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+          {caption}
         </div>
       )}
     </div>
