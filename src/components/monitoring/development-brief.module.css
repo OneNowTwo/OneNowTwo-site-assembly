@@ -1,4 +1,4 @@
-.page { height:100%; overflow-y:auto; background:#f4f2ed; color:#172c2d; font-size:14px; }
+.page { height:100%; overflow-x:hidden; overflow-y:auto; background:#f4f2ed; color:#172c2d; font-size:14px; }
 .utility { height:66px; display:flex; align-items:center; gap:28px; padding:0 36px; background:#fffefa; border-bottom:1px solid #e4e3dd; }
 .breadcrumb { display:flex;gap:12px;font-size:12px;color:#78817e;white-space:nowrap; }
 .breadcrumb strong {font-weight:500;color:#273a37;}

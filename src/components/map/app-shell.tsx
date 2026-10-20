@@ -25,9 +25,9 @@ export function AppShell({ assumptions, children }: { assumptions: Assumptions; 
   const scanQuery = mapTarget?.kind === "SCAN" ? mapTarget.scan ?? null : searchParams.get("scan");
 
   return (
-    <div className="relative h-full min-h-0">
+    <div className="relative h-full min-h-0 overflow-x-hidden">
       <div
-        className="absolute inset-0"
+        className="absolute inset-0 overflow-hidden"
         style={{
           visibility: onMap ? "visible" : "hidden",
           pointerEvents: onMap ? "auto" : "none",
@@ -42,7 +42,9 @@ export function AppShell({ assumptions, children }: { assumptions: Assumptions; 
           mapTarget={mapTarget}
         />
       </div>
-      <div className={onMap ? "hidden" : "relative z-[2] h-full min-h-0 overflow-auto bg-canvas"}>{children}</div>
+      <div className={onMap ? "hidden" : "relative z-[2] h-full min-h-0 overflow-auto overflow-x-hidden bg-canvas"}>
+        {children}
+      </div>
     </div>
   );
 }
