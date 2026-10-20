@@ -25,7 +25,7 @@ export function lotToParcel(l: LotDTO): ParcelData {
       zone: l.zone,
       zoneName: l.zoneName,
       fsr: l.fsr,
-      fsrStatus: l.fsrStatus ?? (l.fsr != null ? "MAPPED" : "NO_MAPPED"),
+      fsrStatus: l.fsrStatus ?? (l.fsr != null ? "MAPPED" : "UNAVAILABLE"),
       fsrControls: l.fsrControls ?? [],
       heightM: l.heightM,
       minLotSizeSqm: l.minLotSizeSqm,

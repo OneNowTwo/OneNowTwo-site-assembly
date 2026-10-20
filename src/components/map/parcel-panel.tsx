@@ -41,11 +41,15 @@ function OfficialFsrBlock({
   controls: FsrControl[];
   status: string;
 }) {
-  if (status === "UNAVAILABLE") {
+  if (status === "UNAVAILABLE" || (value == null && status !== "NO_MAPPED" && status !== "MAPPED" && status !== "SPLIT")) {
     return (
       <div className="my-2 rounded-[3px] border border-amber-300 bg-amber-50 p-3">
         <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-amber-900">Official FSR</div>
-        <div className="mt-1 text-[13px] font-semibold text-amber-950">Layer temporarily unavailable</div>
+        <div className="mt-1 text-[13px] font-semibold text-amber-950">FSR unavailable</div>
+        <p className="mt-1 text-[11px] text-amber-950/80">
+          Official FSR has not been confirmed for this parcel (layer missing, failed, or not yet checked). This is not the
+          same as “no mapped control”.
+        </p>
       </div>
     );
   }
@@ -171,8 +175,8 @@ export function ParcelPanel({
     <div>
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="text-[16px] font-semibold leading-snug">{parcel.address ?? "No street address"}</h2>
-          <div className="mt-0.5 text-[12px] text-muted">{lotDp(parcel)}</div>
+          <h2 className="font-display text-[18px] font-semibold leading-snug">{parcel.address ?? "No street address"}</h2>
+          <div className="mt-0.5 text-[12.5px] text-muted">{lotDp(parcel)}</div>
         </div>
         <LiveDataBadge cached={parcel.source === "CACHED_NSW"} />
       </div>
@@ -182,7 +186,7 @@ export function ParcelPanel({
         </Button>
         <Link
           href="/watching"
-          className="inline-flex items-center justify-center rounded-[3px] border border-line px-2 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+          className="inline-flex items-center justify-center rounded-[7px] border border-line bg-panel px-2 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
         >
           Watch
         </Link>
@@ -202,7 +206,7 @@ export function ParcelPanel({
         )}
         <Link
           href={analyseHref}
-          className="inline-flex flex-1 items-center justify-center rounded-[3px] border border-line px-2 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
+          className="inline-flex flex-1 items-center justify-center rounded-[7px] border border-line bg-panel px-2 text-[11px] font-semibold uppercase tracking-wide hover:bg-canvas"
         >
           Open assembly
         </Link>
@@ -219,11 +223,35 @@ export function ParcelPanel({
         )}
         {parcel.planningStatus === "unavailable" || !pl ? (
           <div className="my-3 rounded-[3px] border border-amber-300 bg-amber-50 p-3">
-            <div className="font-semibold text-amber-900">Planning service temporarily unavailable.</div>
-            <p className="mt-1 text-[12px] text-amber-900/80">{parcel.planningMessage ?? "NSW Planning Portal did not respond."} You can continue — save the assembly and enter planning controls manually on the Planning tab.</p>
+            <div className="font-semibold text-amber-900">Planning not loaded</div>
+            <p className="mt-1 text-[12px] text-amber-900/80">
+              {parcel.planningMessage ?? "Live NSW Planning did not respond."} This is different from “not mapped” —
+              controls may still exist. Retry without clearing your assembly.
+            </p>
             <Button size="sm" className="mt-2" onClick={onRetry}>
               Retry
             </Button>
+          </div>
+        ) : parcel.planningStatus === "cached" ? (
+          <div className="my-3 rounded-[3px] border border-sky-300 bg-sky-50 p-3">
+            <div className="font-semibold text-sky-950">Stored official planning</div>
+            <p className="mt-1 text-[12px] text-sky-900/80">
+              {parcel.planningMessage ?? "Showing previously verified NSW planning while live service is unavailable."}
+            </p>
+            <Button size="sm" className="mt-2" onClick={onRetry}>
+              Retry live check
+            </Button>
+            <div className="my-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">Current planning (stored)</div>
+            <Row label="Zoning" value={pl.zone ? `${pl.zone} ${pl.zoneName ?? ""}` : "Not mapped"} source={pl.sources.zone} />
+            <OfficialFsrBlock
+              value={pl.fsr}
+              instrument={pl.planningInstrument}
+              source={pl.sources.fsr}
+              controls={pl.fsrControls ?? []}
+              status={pl.fsrStatus ?? (pl.fsr != null ? "MAPPED" : pl.sources.fsr ? "NO_MAPPED" : "UNAVAILABLE")}
+            />
+            <Row label="Height of buildings (LEP)" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
+            <Row label="Local government area" value={pl.lga ?? "—"} />
           </div>
         ) : (
           <>
@@ -234,12 +262,12 @@ export function ParcelPanel({
               instrument={pl.planningInstrument}
               source={pl.sources.fsr}
               controls={pl.fsrControls ?? []}
-              status={pl.fsrStatus ?? (pl.fsr != null ? "MAPPED" : "NO_MAPPED")}
+              status={pl.fsrStatus ?? (pl.fsr != null ? "MAPPED" : pl.sources.fsr ? "NO_MAPPED" : "UNAVAILABLE")}
             />
             <Row label="Height of buildings (LEP)" value={pl.heightM != null ? `${pl.heightM} m` : "Not mapped"} source={pl.sources.heightM} />
 
-            <div className="my-3 rounded-[3px] border border-amber-200 bg-amber-50/50 p-3">
-              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-amber-950">Proposed planning</div>
+            <div className="my-3 rounded-[7px] border border-accent/35 bg-accent-soft/70 p-3">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-warn">Proposed planning</div>
               {!proposed?.applies && !proposed?.findFields?.proposedFsr && !proposed?.keySites?.length ? (
                 <p className="mt-1 text-[12px] text-muted">
                   No active proposed planning change from monitored sources intersects this site.

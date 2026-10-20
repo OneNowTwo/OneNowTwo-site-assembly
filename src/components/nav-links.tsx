@@ -5,6 +5,9 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cx } from "@/components/ui";
 
+/** Primary labels — keep in sync with AppSidebar and tests/phase3-helpers. */
+export const PRIMARY_NAV_LABELS = ["Today", "Find", "Map", "Sites", "Pipeline"] as const;
+
 const PRIMARY = [
   { href: "/dashboard", label: "Today" },
   { href: "/find", label: "Find", match: ["/find", "/radar"] },
@@ -27,6 +30,7 @@ function isActive(path: string, href: string, match?: readonly string[]) {
   return prefixes.some((p) => path === p || path.startsWith(`${p}/`));
 }
 
+/** Legacy horizontal nav (unused by AppSidebar shell; retained for compatibility). */
 export function NavLinks() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
@@ -57,7 +61,7 @@ export function NavLinks() {
             href={l.href}
             className={cx(
               "flex items-center border-b-2 px-3 text-[11.5px] font-semibold uppercase tracking-[0.1em]",
-              active ? "border-white text-white" : "border-transparent text-white/65 hover:text-white",
+              active ? "border-accent text-white" : "border-transparent text-white/65 hover:text-white",
             )}
           >
             {l.label}
@@ -78,10 +82,7 @@ export function NavLinks() {
           More
         </button>
         {open && (
-          <div
-            role="menu"
-            className="absolute left-0 top-full z-50 mt-0 min-w-[200px] border border-line bg-white py-1 shadow-lg"
-          >
+          <div role="menu" className="absolute left-0 top-full z-50 mt-0 min-w-[200px] border border-line bg-panel py-1 shadow-md">
             {SECONDARY.map((l) => {
               const active = isActive(path, l.href);
               return (

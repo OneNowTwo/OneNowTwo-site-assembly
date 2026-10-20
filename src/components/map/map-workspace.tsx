@@ -1659,7 +1659,7 @@ export function MapWorkspace({
         />
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[1000] flex items-start gap-3 p-3">
           <form onSubmit={search} className="pointer-events-auto relative w-[380px]">
-            <div className="flex overflow-hidden rounded-[3px] border border-line bg-white shadow-sm">
+            <div className="flex overflow-hidden rounded-[7px] border border-line bg-panel shadow-sm">
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -1670,7 +1670,7 @@ export function MapWorkspace({
               <button className="border-l border-line px-3 text-[11px] font-semibold uppercase tracking-wide text-brand hover:bg-canvas">Search</button>
             </div>
             {(results?.length || geoMessage) && (
-              <div className="mt-1 rounded-[3px] border border-line bg-white shadow-md">
+              <div className="mt-1 rounded-[7px] border border-line bg-panel shadow-md">
                 {geoMessage && <div className="px-3 py-2 text-[11.5px] text-muted">{geoMessage}</div>}
                 {results?.map((r) => (
                   <button type="button" key={`${r.lat},${r.lng},${r.label}`} onClick={() => goTo(r)} className="block w-full border-t border-line px-3 py-2 text-left text-[12px] first:border-0 hover:bg-canvas">
@@ -1681,7 +1681,7 @@ export function MapWorkspace({
               </div>
             )}
           </form>
-          <div className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-[3px] border border-line bg-white p-1 shadow-sm">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-[7px] border border-line bg-panel p-1 shadow-sm">
             {isLiveDeepScanEnabled() && (
               <Button size="sm" variant="accent" className="h-8" disabled={scan.scanning} onClick={() => scanThisArea()}>
                 {scan.scanning ? scan.stage || "Scanning…" : "Scan this area"}
@@ -1726,7 +1726,7 @@ export function MapWorkspace({
                 Layers{layersOpen ? " ▴" : " ▾"}
               </button>
               {layersOpen && (
-                <div className="absolute right-0 top-full z-[1100] mt-1 max-h-[70vh] w-[240px] overflow-y-auto border border-line bg-white p-2.5 shadow-md">
+                <div className="absolute right-0 top-full z-[1100] mt-1 max-h-[70vh] w-[240px] overflow-y-auto rounded-[7px] border border-line bg-panel p-2.5 shadow-md">
                   <div className="mb-2">
                     <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">Planning</div>
                     <label className="flex items-center gap-1.5 py-1 text-[12px]">
@@ -1810,7 +1810,7 @@ export function MapWorkspace({
               )}
             </div>
           </div>
-          <div className="pointer-events-auto ml-auto flex items-center gap-2 rounded-[3px] border border-line bg-white px-2.5 py-1.5 shadow-sm">
+          <div className="pointer-events-auto ml-auto flex items-center gap-2 rounded-[7px] border border-line bg-panel px-2.5 py-1.5 shadow-sm">
             {load.cadastreStatus === "unavailable" ? <Badge tone="bad">Cadastre unavailable</Badge> : <LiveDataBadge cached={load.cadastreStatus === "cached"} />}
             {load.planningStatus && load.planningStatus !== "live" && <Badge tone="warn">Planning {load.planningStatus}</Badge>}
             <span className="num text-[11px] text-muted">{load.loading ? "Loading parcels…" : `${parcels.size.toLocaleString("en-AU")} parcels`}</span>
@@ -1832,7 +1832,7 @@ export function MapWorkspace({
         <div className="absolute bottom-8 right-14 z-[1000] rounded-[3px] bg-white/90 px-2 py-1 text-[10.5px] text-muted shadow-sm">Click parcel to select · click again to deselect · Shift-click for assembly</div>
       </div>
 
-      <aside className="flex w-[400px] shrink-0 flex-col overflow-y-auto border-l border-line bg-white">
+      <aside className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-line bg-panel">
         {assembly.length > 0 && manualMetrics && (
           <div className="border-b border-line bg-brand-soft/60 p-4">
             <div className="flex items-center justify-between">

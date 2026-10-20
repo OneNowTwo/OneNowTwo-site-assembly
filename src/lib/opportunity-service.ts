@@ -24,6 +24,10 @@ import { resolveAreaExitBenchmarks } from "@/lib/analysis/exit-benchmark-provide
 import { domainSuburbExitBenchmarkProvider } from "@/lib/data-sources/domain-suburb-exit-benchmarks";
 import { configSuburbExitBenchmarkProvider } from "@/lib/data-sources/config-suburb-exit-benchmarks";
 import { autoGenerateUnitMix, DEFAULT_MIX_SHARES } from "@/lib/analysis/unit-mix";
+import {
+  latestSourceRetrievedAt,
+  planningControlsFromSnapshot,
+} from "@/lib/planning/planning-persist";
 
 export const opportunityInclude = {
   parcels: {
@@ -799,7 +803,8 @@ function opportunityParcelsToData(opp: OpportunityWithRelations): ParcelData[] {
     .filter((op) => op.included)
     .map((op) => {
       const p = op.parcel;
-      const snap = p.snapshots[0]?.data as { fsrStatus?: FsrMappedStatus; fsrControls?: FsrControl[] } | undefined;
+      const snapData = p.snapshots[0]?.data ?? null;
+      const planning = planningControlsFromSnapshot(snapData, p);
       return {
         externalParcelId: p.externalParcelId,
         source: p.source,
@@ -813,23 +818,11 @@ function opportunityParcelsToData(opp: OpportunityWithRelations): ParcelData[] {
         centroid: [p.centroidLng, p.centroidLat] as [number, number],
         areaSqm: p.areaSqm,
         isStrata: p.isStrata,
-        planning: p.zone
-          ? {
-              zone: p.zone,
-              zoneName: p.zoneName,
-              fsr: p.fsr,
-              fsrStatus: snap?.fsrStatus ?? (p.fsr != null ? "MAPPED" : "NO_MAPPED"),
-              fsrControls: snap?.fsrControls ?? [],
-              heightM: p.heightM,
-              minLotSizeSqm: p.minLotSizeSqm,
-              heritage: p.heritage,
-              planningInstrument: p.planningInstrument,
-              lga: p.lga,
-              sources: {},
-            }
-          : null,
-        planningStatus: p.zone ? "ok" : "unavailable",
-        retrievedAt: (p.planningCheckedAt ?? p.updatedAt).toISOString(),
+        planning,
+        planningStatus: planning ? "ok" : "unavailable",
+        retrievedAt:
+          latestSourceRetrievedAt(planning) ??
+          (p.planningCheckedAt ?? p.updatedAt).toISOString(),
       };
     });
 }
@@ -1069,7 +1062,7 @@ export async function autoValueOpportunity(id: string): Promise<{ valued: number
 
   const asParcels: ParcelData[] = missing.map((op) => {
     const p = op.parcel;
-    const snap = p.snapshots[0]?.data as { fsrStatus?: FsrMappedStatus; fsrControls?: FsrControl[] } | undefined;
+    const planning = planningControlsFromSnapshot(p.snapshots[0]?.data ?? null, p);
     return {
       externalParcelId: p.externalParcelId,
       source: p.source,
@@ -1083,23 +1076,11 @@ export async function autoValueOpportunity(id: string): Promise<{ valued: number
       centroid: [p.centroidLng, p.centroidLat],
       areaSqm: p.areaSqm,
       isStrata: p.isStrata,
-      planning: p.zone
-        ? {
-            zone: p.zone,
-            zoneName: p.zoneName,
-            fsr: p.fsr,
-            fsrStatus: snap?.fsrStatus ?? (p.fsr != null ? "MAPPED" : "NO_MAPPED"),
-            fsrControls: snap?.fsrControls ?? [],
-            heightM: p.heightM,
-            minLotSizeSqm: p.minLotSizeSqm,
-            heritage: p.heritage,
-            planningInstrument: p.planningInstrument,
-            lga: p.lga,
-            sources: {},
-          }
-        : null,
-      planningStatus: p.zone ? "ok" : "unavailable",
-      retrievedAt: (p.planningCheckedAt ?? p.updatedAt).toISOString(),
+      planning,
+      planningStatus: planning ? "ok" : "unavailable",
+      retrievedAt:
+        latestSourceRetrievedAt(planning) ??
+        (p.planningCheckedAt ?? p.updatedAt).toISOString(),
     };
   });
 

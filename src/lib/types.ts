@@ -43,7 +43,8 @@ export interface PlanningControls {
   sources: Partial<Record<"zone" | "fsr" | "heightM" | "minLotSizeSqm" | "heritage", FieldSource>>;
 }
 
-export type PlanningStatus = "ok" | "partial" | "unavailable";
+/** ok=live official; partial=some layers missing; cached=stored official after live failure; unavailable=not loaded. */
+export type PlanningStatus = "ok" | "partial" | "cached" | "unavailable";
 
 /** One comparable used in a transparent screening valuation. */
 export interface ParcelCompSale {

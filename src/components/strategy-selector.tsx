@@ -45,7 +45,7 @@ export function StrategySelector({
             onClick={() => onChange(opt)}
             aria-pressed={active}
             className={cx(
-              "rounded-[3px] px-2.5 py-1 text-[11px] font-semibold tracking-wide",
+              "rounded-[6px] px-2.5 py-1 text-[11.5px] font-semibold tracking-wide",
               isFilter ? "normal-case" : "uppercase",
               tone === "dark"
                 ? active
@@ -53,7 +53,7 @@ export function StrategySelector({
                   : "bg-white/10 text-white/85 hover:bg-white/20"
                 : active
                   ? "bg-brand text-white"
-                  : "border border-line bg-white text-ink hover:bg-canvas",
+                  : "border border-line bg-panel text-ink hover:bg-canvas",
             )}
           >
             {STRATEGY_LABELS[opt]}

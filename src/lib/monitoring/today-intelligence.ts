@@ -19,6 +19,12 @@ import {
   todayOrientationLine,
   todayPageSubheading,
 } from "@/lib/intelligence/today-agent-copy";
+import {
+  buildPlanningUpdateEvidence,
+  buildStoryNavHrefs,
+  isValidLgaFilter,
+  resolveStoryLocation,
+} from "@/lib/intelligence/planning-update-detail";
 
 const ENGINEERING_RE =
   /SOURCE_DOCUMENT_CHANGED|NEEDS_RE_EXTRACTION|SOURCE_REFRESHED|content hash|parser|snapshot|fixture|structured map-pack|canonical sync|bodyHash|documentHash/i;
@@ -102,47 +108,207 @@ export async function getTodayIntelligence(userId: string, profile: StrategyProf
       }),
     ]);
 
-  const topIntelligence = persistedStories
-    .filter((s) => !ENGINEERING_RE.test(`${s.title} ${s.summary ?? ""}`))
-    .slice(0, 5)
-    .map((s) => {
-      const payload = (s.payload ?? {}) as Record<string, unknown>;
-      const what =
-        typeof payload.whatChanged === "string" ? String(payload.whatChanged) : (s.summary ?? s.title);
-      const whyRaw =
-        typeof payload.whyItMatters === "string" && payload.whyItMatters.trim()
-          ? String(payload.whyItMatters)
-          : null;
-      const presented = presentTodayStory(
-        {
-          type: s.kind,
-          location: s.locationLabel,
-          title: cleanText(s.title),
-          whatChanged: cleanText(what),
-          whyItMatters: whyRaw ? cleanText(whyRaw) : null,
-          affectedSites: s.affectedSiteCount,
+  // Enrich stories with PCA / key-site evidence so detail panels are not generic card copy.
+  const pcaIds = new Set<string>();
+  const keySiteIds = new Set<string>();
+  for (const s of persistedStories) {
+    const payload = (s.payload ?? {}) as Record<string, unknown>;
+    if (typeof payload.planningChangeAreaId === "string") pcaIds.add(payload.planningChangeAreaId);
+    if (Array.isArray(payload.keySiteIds)) {
+      for (const id of payload.keySiteIds) if (typeof id === "string") keySiteIds.add(id);
+    }
+    const mapKey = s.mapHref?.match(/[?&]keySite=([^&]+)/);
+    if (mapKey) keySiteIds.add(decodeURIComponent(mapKey[1]!));
+    const mapPca = s.mapHref?.match(/[?&]pca=([^&]+)/);
+    if (mapPca) pcaIds.add(decodeURIComponent(mapPca[1]!));
+    // Collect area labels from titles so we can resolve PCA via KeySite rows (no hardcoded place names).
+    const areaMatch = `${s.title} ${s.locationLabel ?? ""}`.match(/\bArea\s+([A-Z0-9]+)\b/i);
+    if (areaMatch) keySiteIds.add(`Area ${areaMatch[1]}`);
+  }
+
+  const keySiteRows = keySiteIds.size
+    ? await prisma.keySite.findMany({
+        where: {
+          OR: [
+            { externalKeySiteId: { in: [...keySiteIds] } },
+            { id: { in: [...keySiteIds] } },
+          ],
         },
-        profile.strategy,
-      );
-      return {
-        id: s.id,
+      })
+    : [];
+  for (const ks of keySiteRows) pcaIds.add(ks.planningChangeAreaId);
+  const pcaRows = pcaIds.size
+    ? await prisma.planningChangeArea.findMany({ where: { id: { in: [...pcaIds] } } })
+    : [];
+  const pcaById = new Map(pcaRows.map((r) => [r.id, r]));
+  const keySiteByExt = new Map(keySiteRows.map((r) => [r.externalKeySiteId, r]));
+
+  // Resolve affected candidates by key-site bbox intersection (exact related sites).
+  async function candidatesForKeySites(ids: string[]): Promise<string[]> {
+    if (!ids.length) return [];
+    const sites = ids.map((id) => keySiteByExt.get(id)).filter(Boolean);
+    if (!sites.length) return [];
+    const orClauses: Array<{ centroidLat: { gte: number; lte: number }; centroidLng: { gte: number; lte: number } }> =
+      [];
+    for (const site of sites) {
+      const bbox = site!.bbox as { west?: number; south?: number; east?: number; north?: number } | null;
+      if (!bbox || bbox.west == null || bbox.south == null || bbox.east == null || bbox.north == null) continue;
+      // Slight pad so abutting assemblies still match.
+      const pad = 0.0003;
+      orClauses.push({
+        centroidLat: { gte: bbox.south - pad, lte: bbox.north + pad },
+        centroidLng: { gte: bbox.west - pad, lte: bbox.east + pad },
+      });
+    }
+    if (!orClauses.length) return [];
+    const rows = await prisma.siteCandidateIndex.findMany({
+      where: { lifecycleStatus: "ACTIVE", provenance: "INDEX_DISCOVERY", OR: orClauses },
+      select: { id: true },
+      take: 50,
+    });
+    return rows.map((r) => r.id);
+  }
+
+  const topIntelligence = [];
+  for (const s of persistedStories.filter((row) => !ENGINEERING_RE.test(`${row.title} ${row.summary ?? ""}`)).slice(0, 5)) {
+    const payload = (s.payload ?? {}) as Record<string, unknown>;
+    const what =
+      typeof payload.whatChanged === "string" ? String(payload.whatChanged) : (s.summary ?? s.title);
+    const whyRaw =
+      typeof payload.whyItMatters === "string" && payload.whyItMatters.trim()
+        ? String(payload.whyItMatters)
+        : null;
+
+    const storedKeySites = Array.isArray(payload.keySiteIds)
+      ? payload.keySiteIds.map(String)
+      : [];
+    const mapKey = s.mapHref?.match(/[?&]keySite=([^&]+)/);
+    if (mapKey && !storedKeySites.includes(decodeURIComponent(mapKey[1]!))) {
+      storedKeySites.push(decodeURIComponent(mapKey[1]!));
+    }
+    // Area L / Area M from title when payload lacks keySiteIds
+    const areaFromTitle = (s.title + " " + (s.locationLabel ?? "")).match(/\bArea\s+([A-Z0-9]+)\b/i);
+    if (areaFromTitle && !storedKeySites.includes(`Area ${areaFromTitle[1]!.toUpperCase()}`)) {
+      const label = `Area ${areaFromTitle[1]!.toUpperCase()}`;
+      if (keySiteByExt.has(label) || keySiteByExt.has(`Area ${areaFromTitle[1]}`)) {
+        storedKeySites.push(keySiteByExt.has(label) ? label : `Area ${areaFromTitle[1]}`);
+      }
+    }
+
+    const pcaId =
+      (typeof payload.planningChangeAreaId === "string" ? payload.planningChangeAreaId : null) ||
+      storedKeySites.map((id) => keySiteByExt.get(id)?.planningChangeAreaId).find(Boolean) ||
+      (s.mapHref?.match(/[?&]pca=([^&]+)/) ? decodeURIComponent(s.mapHref.match(/[?&]pca=([^&]+)/)![1]!) : null) ||
+      null;
+
+    const pca = pcaId ? pcaById.get(pcaId) ?? null : null;
+    const keySites = storedKeySites.map((id) => keySiteByExt.get(id)).filter(Boolean) as typeof keySiteRows;
+    const affectedCandidateIds =
+      (Array.isArray(payload.affectedCandidateIds) ? payload.affectedCandidateIds.map(String) : null) ??
+      (await candidatesForKeySites(storedKeySites));
+
+    const location = resolveStoryLocation({
+      locationLabel: s.locationLabel,
+      title: s.title,
+      summary: s.summary,
+      pcaLgas: pca?.lgas,
+    });
+
+    const presented = presentTodayStory(
+      {
         type: s.kind,
-        location: s.locationLabel,
-        title: presented.title,
-        whatChanged: presented.explanation,
-        whyItMatters: presented.explanation,
+        location,
+        title: cleanText(s.title),
+        whatChanged: cleanText(what),
+        whyItMatters: whyRaw ? cleanText(whyRaw) : null,
+        affectedSites: s.affectedSiteCount,
+      },
+      profile.strategy,
+    );
+
+    const evidence = buildPlanningUpdateEvidence({
+      storyTitle: s.title,
+      storySummary: s.summary,
+      locationLabel: location,
+      detectedAt: s.updatedAt.toISOString(),
+      payload,
+      pca: pca
+        ? {
+            id: pca.id,
+            title: pca.title,
+            status: pca.status,
+            lgas: pca.lgas,
+            sourceUrl: pca.sourceUrl,
+            exhibitionEnd: pca.exhibitionEnd,
+            proposedControls: pca.proposedControls,
+          }
+        : null,
+      keySites: keySites.map((k) => ({
+        externalKeySiteId: k.externalKeySiteId,
+        name: k.name,
+        proposedControls: k.proposedControls,
+        currentControls: k.currentControls,
+        sourceUrl: k.sourceUrl,
+      })),
+      sourceName: typeof payload.sourceLabel === "string" ? payload.sourceLabel : null,
+      sourceUrl: s.sourceHref,
+      affectedCandidateIds,
+    });
+
+    const nav = buildStoryNavHrefs({
+      strategy: profile.strategy,
+      planningChangeAreaId: evidence.planningChangeAreaId ?? pcaId,
+      keySiteId: storedKeySites.length === 1 ? storedKeySites[0] : null,
+      keySiteIds: storedKeySites,
+      locationLabel: evidence.locationLabel ?? location,
+      affectedCandidateIds,
+    });
+
+    // Always prefer rebuilt nav when we have pca / key-site / candidates — legacy
+    // findHrefs often duplicated Area+L encodings or used bare strategy / bad LGA.
+    const legacyFind = s.findHref ?? "";
+    const legacyLga = legacyFind.match(/[?&]lga=([^&]+)/);
+    const badLegacyLga = !!legacyLga && !isValidLgaFilter(decodeURIComponent(legacyLga[1]!));
+    const hasStableNav =
+      !!(pcaId || storedKeySites.length || affectedCandidateIds.length || evidence.planningChangeAreaId);
+    const findNeedsRepair =
+      hasStableNav ||
+      !legacyFind ||
+      /^\/find\?strategy=[A-Z_]+$/i.test(legacyFind) ||
+      /lga=Key\+site/i.test(legacyFind) ||
+      /keySites=Area\+L%2CArea/i.test(legacyFind) ||
+      badLegacyLga;
+    const findHref = findNeedsRepair ? nav.findHref : s.findHref;
+    const mapHref = nav.mapHref ?? s.mapHref;
+
+    topIntelligence.push({
+      id: s.id,
+      type: s.kind,
+      location: evidence.locationLabel ?? location,
+      title: presented.title,
+      whatChanged: presented.explanation,
+      whyItMatters: presented.explanation,
+      typeLabel: presented.typeLabel,
+      affectedSites: s.affectedSiteCount,
+      date: s.updatedAt.toISOString(),
+      sourceId: typeof payload.sourceLabel === "string" ? payload.sourceLabel : null,
+      sourceLabel: evidence.sourceName ?? (typeof payload.sourceLabel === "string" ? payload.sourceLabel : null),
+      sourceHref: evidence.webpageUrl ?? s.sourceHref,
+      href: mapHref,
+      mapHref,
+      findHref,
+      eventCount: typeof payload.eventCount === "number" ? payload.eventCount : null,
+      detail: {
+        ...evidence,
+        cardTitle: presented.title,
+        cardExplanation: presented.explanation,
         typeLabel: presented.typeLabel,
         affectedSites: s.affectedSiteCount,
-        date: s.updatedAt.toISOString(),
-        sourceId: typeof payload.sourceLabel === "string" ? payload.sourceLabel : null,
-        sourceLabel: typeof payload.sourceLabel === "string" ? payload.sourceLabel : null,
-        sourceHref: s.sourceHref,
-        href: s.mapHref,
-        mapHref: s.mapHref,
-        findHref: s.findHref,
-        eventCount: typeof payload.eventCount === "number" ? payload.eventCount : null,
-      };
+        mapHref,
+        findHref,
+      },
     });
+  }
 
   const storyTitles = new Set(topIntelligence.map((s) => s.title.toLowerCase()));
 
