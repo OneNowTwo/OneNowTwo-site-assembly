@@ -163,6 +163,11 @@ function dateLabel(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Date unavailable" : date.toLocaleDateString("en-AU", {day:"numeric", month:"short", timeZone:"Australia/Sydney"});
 }
+function formatShortDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" }).toUpperCase();
+}
 function siteHref(site: TodaySite) { return site.analyseHref || site.href || "/map"; }
 
 export function DashboardClient() {
