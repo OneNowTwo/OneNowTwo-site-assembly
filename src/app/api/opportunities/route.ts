@@ -91,7 +91,7 @@ const parcelSchema = z.object({
   areaSqm: z.number().positive(),
   isStrata: z.boolean(),
   planning: z.any().nullable(),
-  planningStatus: z.enum(["ok", "partial", "unavailable"]),
+  planningStatus: z.enum(["ok", "partial", "cached", "unavailable"]),
   retrievedAt: z.string(),
   valuation: valuationSchema,
 });

@@ -10,6 +10,13 @@ import {
 } from "./material-change";
 import { buildMapHref } from "@/lib/map/map-target";
 import { presentTodayStory, strategyAdjective, strategyDisplayName } from "./today-agent-copy";
+import {
+  buildStoryNavHrefs,
+  controlsFromUnknown,
+  isDocumentOnlyChange,
+  isPlaceLikeLocation,
+  resolveStoryLocation,
+} from "./planning-update-detail";
 
 export type RawIntelForStory = MaterialEventInput & {
   id: string;
@@ -39,6 +46,18 @@ export type IntelligenceStoryView = {
   sourceLabel: string | null;
   strategyTags: string[];
   eventIds: string[];
+  /** Evidence fields for detail panel — not card presentation copy. */
+  evidence?: {
+    planningChangeAreaId: string | null;
+    keySiteIds: string[];
+    awaitingVerification: boolean;
+    evidenceSummary: string | null;
+    evidenceWhyItMatters: string | null;
+    previousControls: ReturnType<typeof controlsFromUnknown>;
+    proposedControls: ReturnType<typeof controlsFromUnknown>;
+    status: string | null;
+    officialTitle: string | null;
+  };
 };
 
 const STORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -49,13 +68,24 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 
 function locationFromEvent(e: RawIntelForStory): string | null {
   const payload = asRecord(e.payload) ?? asRecord(e.newValue) ?? {};
-  if (typeof payload.lga === "string") return payload.lga;
-  if (typeof payload.suburb === "string") return payload.suburb;
-  if (Array.isArray(payload.lgas) && payload.lgas[0]) return String(payload.lgas[0]);
-  if (Array.isArray(payload.suburbs) && payload.suburbs[0]) return String(payload.suburbs[0]);
-  // Infer from title e.g. "Inner West …"
+  for (const candidate of [
+    typeof payload.lga === "string" ? payload.lga : null,
+    typeof payload.suburb === "string" ? payload.suburb : null,
+    Array.isArray(payload.lgas) && payload.lgas[0] ? String(payload.lgas[0]) : null,
+    Array.isArray(payload.suburbs) && payload.suburbs[0] ? String(payload.suburbs[0]) : null,
+  ]) {
+    if (isPlaceLikeLocation(candidate)) return candidate;
+  }
+  const name = typeof payload.name === "string" ? payload.name : null;
+  // Prefer leading place tokens from key-site names ("… key site Area L") when place-like.
+  if (name) {
+    const beforeKey = name.match(/^(.+?)\s+key\s+site\b/i)?.[1]?.trim();
+    if (isPlaceLikeLocation(beforeKey)) return beforeKey!;
+  }
+  // Infer from title — never treat "Key site Area L" as a place/LGA.
   const m = (e.title ?? "").match(/^([A-Za-z ]+?)(?:\s[—-]|\sKey\s|\sPlanning|\sHDA|\sSSD)/);
-  return m?.[1]?.trim() || null;
+  const inferred = m?.[1]?.trim() || null;
+  return isPlaceLikeLocation(inferred) ? inferred : null;
 }
 
 function storyKindFor(kind: string): IntelligenceStoryView["kind"] {
@@ -99,7 +129,8 @@ function strategyRelevance(profile: StrategyProfile, kind: string, location: str
 function pcaIdFromEvent(e: RawIntelForStory): string | null {
   const payload = asRecord(e.payload) ?? asRecord(e.newValue) ?? {};
   if (typeof payload.planningChangeAreaId === "string") return payload.planningChangeAreaId;
-  if (typeof payload.id === "string" && !payload.id.includes(":")) return payload.id;
+  // Stable PCA ids look like "council:…" / "nsw:…" — never treat bare "Area L" as a PCA id.
+  if (typeof payload.id === "string" && /^(council|nsw|nsw-ppr):/i.test(payload.id)) return payload.id;
   const href = e.href ?? "";
   const m = href.match(/[?&]pca=([^&]+)/);
   return m ? decodeURIComponent(m[1]!) : null;
@@ -112,6 +143,11 @@ function keySiteIdFromEvent(e: RawIntelForStory): string | null {
   const href = e.href ?? "";
   const m = href.match(/[?&]keySite=([^&]+)/);
   return m ? decodeURIComponent(m[1]!) : null;
+}
+
+function inferPcaFromKeySiteId(_keySiteId: string | null): string | null {
+  // PCA is resolved at persist/read time via KeySite.planningChangeAreaId — do not hardcode places here.
+  return null;
 }
 
 /**
@@ -169,47 +205,68 @@ export function aggregateIntelligenceStories(
       return n;
     }, 0);
 
-    const pca = pcaIdFromEvent(head);
-    const keySite = keySiteIdFromEvent(head);
+    const keySiteIds = [
+      ...new Set(group.map((g) => keySiteIdFromEvent(g)).filter((id): id is string => !!id)),
+    ];
+    const pca =
+      pcaIdFromEvent(head) ||
+      group.map((g) => pcaIdFromEvent(g)).find(Boolean) ||
+      inferPcaFromKeySiteId(keySiteIds[0] ?? null);
+    const keySite = keySiteIds[0] ?? keySiteIdFromEvent(head);
+    const placeLocation = resolveStoryLocation({
+      locationLabel: location,
+      title: head.title,
+      summary: head.summary,
+    });
+
+    const nav = buildStoryNavHrefs({
+      strategy: profile.strategy,
+      planningChangeAreaId: pca,
+      keySiteId: keySiteIds.length === 1 ? keySite : null,
+      keySiteIds,
+      locationLabel: placeLocation,
+    });
     const mapHref =
-      pca || keySite
+      nav.mapHref ||
+      (pca || keySite
         ? buildMapHref({
             planningChangeAreaId: pca,
             keySiteId: keySite,
           })
         : head.href?.startsWith("/map")
           ? head.href
-          : null;
-
-    const findParams = new URLSearchParams();
-    findParams.set("strategy", profile.strategy);
-    if (location) findParams.set("lga", location);
-    if (pca) findParams.set("pca", pca);
+          : null);
 
     const baseImportance = Math.max(...group.map((g) => g.importance ?? 0));
     const importance =
       baseImportance +
-      strategyRelevance(profile, head.kind, location) +
+      strategyRelevance(profile, head.kind, placeLocation) +
       Math.min(3, group.length * 0.15) +
       (keySiteCount > 5 ? 1.5 : keySiteCount > 1 ? 0.75 : 0);
 
     const siteCount = affected || keySiteCount || group.length;
     const nv = asRecord(head.newValue);
-    const fsr = nv && typeof nv.fsr === "number" ? nv.fsr : null;
+    const ov = asRecord(head.oldValue);
+    const proposedFromEvent = controlsFromUnknown(nv) ?? controlsFromUnknown(nv?.proposedControls);
+    const previousFromEvent = controlsFromUnknown(ov) ?? controlsFromUnknown(ov?.proposedControls);
+    const fsr = proposedFromEvent?.fsr ?? (nv && typeof nv.fsr === "number" ? nv.fsr : null);
     const headTitle = (head.title ?? head.kind).replace(/^SOURCE_DOCUMENT_CHANGED\s*—\s*/i, "");
     const headSummary = (head.summary ?? head.title ?? "")
       .replace(/NEEDS_RE_EXTRACTION|content hash|fixture-\S+/gi, "")
       .replace(/\s{2,}/g, " ")
       .trim();
+    const awaitingVerification = group.some((g) =>
+      isDocumentOnlyChange(g.kind, g.title ?? "", g.summary ?? null),
+    );
 
     // Prefer structured plain-English presentation (never expose internal jargon).
     const presented = presentTodayStory(
       {
         type: sk,
-        location,
+        location: placeLocation,
         title: headTitle,
-        whatChanged: fsr != null ? `Proposed FSR now ${fsr}` : headSummary,
-        whyItMatters: fsr != null ? `Proposed FSR now ${fsr}` : null,
+        whatChanged: fsr != null && !awaitingVerification ? `Proposed FSR now ${fsr}` : headSummary,
+        whyItMatters: fsr != null && !awaitingVerification ? `Proposed FSR now ${fsr}` : null,
         affectedSites: siteCount || null,
       },
       profile.strategy,
@@ -218,9 +275,9 @@ export function aggregateIntelligenceStories(
     let summary = presented.explanation;
     let whyItMatters = presented.explanation;
 
-    if (fsr != null && sk === "PLANNING_UPDATE") {
-      title = location
-        ? `${location} planning update — proposed FSR ${fsr}`
+    if (fsr != null && !awaitingVerification && sk === "PLANNING_UPDATE") {
+      title = placeLocation
+        ? `${placeLocation} planning update — proposed FSR ${fsr}`
         : `Planning update — proposed FSR ${fsr}`;
       whyItMatters =
         siteCount > 0
@@ -233,12 +290,20 @@ export function aggregateIntelligenceStories(
     summary = summary.replace(/\s{2,}/g, " ").trim();
     whyItMatters = whyItMatters.replace(/\s{2,}/g, " ").trim();
 
+    const evidenceSummary = awaitingVerification
+      ? "A monitored planning source document changed. Specific control changes are awaiting verification."
+      : proposedFromEvent
+        ? headSummary
+        : headSummary && !/key-site signals|change cluster|indexed assemblies/i.test(headSummary)
+          ? headSummary
+          : null;
+
     stories.push({
       id: `story:${key}`,
       kind: sk,
       title,
       summary,
-      locationLabel: location,
+      locationLabel: placeLocation,
       whatChanged: summary,
       whyItMatters,
       affectedSiteCount: affected || (keySiteCount || null),
@@ -246,11 +311,24 @@ export function aggregateIntelligenceStories(
       date: (typeof head.createdAt === "string" ? head.createdAt : head.createdAt.toISOString()).slice(0, 10),
       importance,
       mapHref,
-      findHref: `/find?${findParams.toString()}`,
+      findHref: nav.findHref,
       sourceHref: head.href && !head.href.startsWith("/map") ? head.href : null,
       sourceLabel: null,
       strategyTags: [profile.strategy],
       eventIds: group.map((g) => g.id),
+      evidence: {
+        planningChangeAreaId: pca,
+        keySiteIds,
+        awaitingVerification,
+        evidenceSummary,
+        evidenceWhyItMatters: awaitingVerification
+          ? "Until controls are re-extracted and verified, treat this as a source refresh only — not a confirmed uplift."
+          : whyItMatters,
+        previousControls: previousFromEvent,
+        proposedControls: awaitingVerification ? null : proposedFromEvent,
+        status: typeof nv?.status === "string" ? nv.status : null,
+        officialTitle: typeof nv?.name === "string" ? nv.name : headTitle,
+      },
     });
   }
 

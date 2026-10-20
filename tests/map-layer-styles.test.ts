@@ -25,6 +25,9 @@ describe("map layer styles", () => {
     expect(fsrBucket(0, "NO_MAPPED")).toBe("not_mapped");
     expect(fsrBucket(0.8, "MAPPED")).toBe("0_5_1");
     expect(fsrColour(null)).toBe(FSR_BUCKET_COLOURS.not_mapped);
+    // Service-down is Not loaded — distinct from Not mapped.
+    expect(fsrBucket(null, "UNAVAILABLE")).toBe("not_loaded");
+    expect(fsrBucket(null, null, "unavailable")).toBe("not_loaded");
   });
 
   it("buckets current LEP height only", () => {

@@ -138,8 +138,18 @@ export function mergeFilters(input: FindFilters): { filters: FindFilters; profil
     minHeadroom: pickValue(input.minHeadroom, nl.minHeadroom, null),
     insidePlanningChangeArea: pickValue(input.insidePlanningChangeArea, nl.insidePlanningChangeArea, null),
     keySiteOnly: pickValue(input.keySiteOnly, nl.keySiteOnly, null),
+    planningChangeAreaId: input.planningChangeAreaId ?? null,
+    keySiteId: input.keySiteId ?? null,
+    keySiteIds: input.keySiteIds?.length ? input.keySiteIds : null,
+    candidateIds: input.candidateIds?.length ? input.candidateIds : null,
     zone: pickValue(input.zone, nl.zone, null),
-    lga: pickValue(input.lga, nl.lga, null),
+    // Never accept area labels (Area L / Key site Area M) as LGA.
+    lga: (() => {
+      const raw = pickValue(input.lga, nl.lga, null);
+      if (!raw) return null;
+      if (/^key\s*site\b/i.test(raw) || /^Area\s+[A-Z0-9]+$/i.test(raw)) return null;
+      return raw;
+    })(),
     minRequiredParcelCount: pickValue(input.minRequiredParcelCount, nl.minRequiredParcelCount, null),
     minScore: pickValue(input.minScore, nl.minScore, null),
     strategy,
@@ -162,6 +172,12 @@ export function describeAppliedFilters(filters: FindFilters): FindAppliedFilter[
   }
   if (filters.insidePlanningChangeArea) out.push({ label: "Inside planning change area", value: "yes" });
   if (filters.keySiteOnly) out.push({ label: "Key site only", value: "yes" });
+  if (filters.planningChangeAreaId) out.push({ label: "Planning area", value: filters.planningChangeAreaId });
+  if (filters.keySiteId) out.push({ label: "Key site", value: filters.keySiteId });
+  if (filters.keySiteIds?.length) out.push({ label: "Key sites", value: filters.keySiteIds.join(", ") });
+  if (filters.candidateIds?.length) {
+    out.push({ label: "Affected sites", value: `${filters.candidateIds.length} from planning update` });
+  }
   if (filters.zone) out.push({ label: "Zone", value: filters.zone });
   if (filters.maxOwners != null) out.push({ label: "Max owners", value: String(filters.maxOwners) });
   return out;
@@ -302,6 +318,14 @@ function passesHardFilters(r: FindResultRow, filters: FindFilters): boolean {
   );
   if (!proposedOk) return false;
   if (filters.keySiteOnly && !r.keySiteId) return false;
+  if (filters.candidateIds?.length && !filters.candidateIds.includes(r.candidateId ?? r.key)) {
+    return false;
+  }
+  if (filters.keySiteId && r.keySiteId !== filters.keySiteId) return false;
+  if (filters.keySiteIds?.length && (!r.keySiteId || !filters.keySiteIds.includes(r.keySiteId))) {
+    // When filtering a multi-site update, allow rows without keySiteId if candidateIds already scoped them.
+    if (!filters.candidateIds?.length) return false;
+  }
   if (filters.minProposedFsr != null && (r.proposedFsr == null || r.proposedFsr < filters.minProposedFsr)) {
     return false;
   }
@@ -401,16 +425,27 @@ async function findFromIndex(
 
   const linkedScores = await loadLinkedOpportunityScoreIndex();
 
-  let rows = await prisma.siteCandidateIndex.findMany({
-    where: place ? { AND: [baseWhere, buildIndexPlaceWhere(place)] } : baseWhere,
-    orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
-    take,
-  });
-  diagnostics.push(
-    place
-      ? `Index fetch (place-scoped): ${rows.length} rows for "${place}" (cap ${take}).`
-      : `Index fetch: ${rows.length} ACTIVE INDEX_DISCOVERY rows (cap ${take}).`,
-  );
+  // Exact affected sites from a Today planning update — prefer id list over place scan.
+  let rows;
+  if (filters.candidateIds?.length) {
+    rows = await prisma.siteCandidateIndex.findMany({
+      where: { ...baseWhere, id: { in: filters.candidateIds.slice(0, 50) } },
+      orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
+      take: 50,
+    });
+    diagnostics.push(`Index fetch (affected candidateIds): ${rows.length} of ${filters.candidateIds.length} requested.`);
+  } else {
+    rows = await prisma.siteCandidateIndex.findMany({
+      where: place ? { AND: [baseWhere, buildIndexPlaceWhere(place)] } : baseWhere,
+      orderBy: [{ quickScore: "desc" }, { updatedAt: "desc" }],
+      take,
+    });
+    diagnostics.push(
+      place
+        ? `Index fetch (place-scoped): ${rows.length} rows for "${place}" (cap ${take}).`
+        : `Index fetch: ${rows.length} ACTIVE INDEX_DISCOVERY rows (cap ${take}).`,
+    );
+  }
 
   // Address fallback only when suburb/LGA scope returned nothing.
   if (place && rows.length === 0) {

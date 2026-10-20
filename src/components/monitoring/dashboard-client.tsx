@@ -15,6 +15,57 @@ import {
   todayTypeLabel,
 } from "@/lib/intelligence/today-agent-copy";
 
+type ControlSnap = {
+  zone?: string | null;
+  fsr?: number | null;
+  heightM?: number | null;
+  affordableHousingContributionPct?: number | null;
+  notes?: string | null;
+};
+
+type ScreeningSample = {
+  lng: number;
+  lat: number;
+  zone?: string | null;
+  fsr?: number | null;
+  heightM?: number | null;
+  mixedAcrossKeySite: boolean;
+  distinctZones?: string[];
+  distinctFsrs?: number[];
+  distinctHeights?: number[];
+  scope: "INTERIOR_POINT_SAMPLE";
+};
+
+type StoryDetail = {
+  officialTitle: string | null;
+  locationLabel: string | null;
+  areaLabel: string | null;
+  status: string | null;
+  awaitingVerification: boolean;
+  plainSummary: string | null;
+  previousControls: ControlSnap | null;
+  proposedControls: ControlSnap | null;
+  screeningSample?: ScreeningSample | null;
+  officialDate: string | null;
+  officialDateLabel: string | null;
+  detectedAt: string | null;
+  whyItMatters: string | null;
+  sourceName: string | null;
+  documentTitle: string | null;
+  documentSection: string | null;
+  sourceUrl: string | null;
+  webpageUrl: string | null;
+  planningChangeAreaId: string | null;
+  keySiteIds: string[];
+  affectedCandidateIds: string[];
+  mapHref: string | null;
+  findHref: string | null;
+  cardTitle?: string;
+  cardExplanation?: string;
+  typeLabel?: string;
+  affectedSites?: number | null;
+};
+
 type Story = {
   id: string;
   type: string;
@@ -32,6 +83,7 @@ type Story = {
   mapHref?: string | null;
   findHref?: string | null;
   eventCount?: number | null;
+  detail?: StoryDetail | null;
 };
 
 type TodaySite = {
@@ -127,6 +179,7 @@ export function DashboardClient() {
   const [showSources, setShowSources] = useState(false);
   const [showAllChanges, setShowAllChanges] = useState(false);
   const [expandedFamily, setExpandedFamily] = useState<string | null>(null);
+  const [selectedUpdate, setSelectedUpdate] = useState<Story | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -443,11 +496,24 @@ export function DashboardClient() {
                         <span className="text-muted/70"> · {formatShortDate(ev.date)}</span>
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-semibold leading-snug">{presented.title}</div>
+                        <button
+                          type="button"
+                          className="text-left text-[13px] font-semibold leading-snug text-ink hover:text-brand hover:underline"
+                          onClick={() => setSelectedUpdate(ev)}
+                        >
+                          {presented.title}
+                        </button>
                         <p className="mt-0.5 text-[12.5px] text-ink/85">{presented.explanation}</p>
                         {sitesLabel && <p className="mt-0.5 text-[11.5px] text-muted">{sitesLabel}</p>}
                       </div>
                       <div className="flex shrink-0 gap-2">
+                        <button
+                          type="button"
+                          className="text-[11px] font-semibold text-brand hover:underline"
+                          onClick={() => setSelectedUpdate(ev)}
+                        >
+                          Details
+                        </button>
                         {(ev.mapHref || ev.href) && (
                           <Link
                             href={ev.mapHref || ev.href || "/map"}
@@ -570,6 +636,243 @@ export function DashboardClient() {
               ))}
             </div>
           )}
+        </div>
+      </div>
+
+      {selectedUpdate && (
+        <PlanningUpdateDetailPanel
+          story={selectedUpdate}
+          strategy={strategy}
+          onClose={() => setSelectedUpdate(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function formatControlSnap(c: ControlSnap | null | undefined): string | null {
+  if (!c) return null;
+  const bits: string[] = [];
+  if (c.zone) bits.push(`Zone ${c.zone}`);
+  if (c.fsr != null) bits.push(`FSR ${c.fsr}`);
+  if (c.heightM != null) bits.push(`Height ${c.heightM} m`);
+  if (c.affordableHousingContributionPct != null) {
+    bits.push(`AH ${c.affordableHousingContributionPct}%`);
+  }
+  return bits.length ? bits.join(" · ") : null;
+}
+
+function PlanningUpdateDetailPanel({
+  story,
+  strategy,
+  onClose,
+}: {
+  story: Story;
+  strategy: string;
+  onClose: () => void;
+}) {
+  const d = story.detail;
+  const title = d?.officialTitle || story.title;
+  const location = d?.locationLabel || story.location;
+  const status = d?.status?.replaceAll("_", " ") ?? null;
+  const mapHref = d?.mapHref || story.mapHref || story.href;
+  const findHref = d?.findHref || story.findHref || `/find?strategy=${strategy}`;
+  const previousLabel = formatControlSnap(d?.previousControls);
+  const proposedLabel = formatControlSnap(d?.proposedControls);
+  const sample = d?.screeningSample ?? null;
+  const sampleLabel = sample
+    ? [
+        sample.zone ? `Zone ${sample.zone}` : null,
+        sample.fsr != null ? `FSR ${sample.fsr}` : null,
+        sample.heightM != null ? `Height ${sample.heightM} m` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null
+    : null;
+  const keySiteIds = d?.keySiteIds ?? [];
+  const candidateIds = d?.affectedCandidateIds ?? [];
+  const awaiting = !!d?.awaitingVerification;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-3 sm:items-center" role="dialog" aria-modal="true">
+      <div className="max-h-[min(90vh,720px)] w-full max-w-lg overflow-y-auto rounded-[3px] border border-line bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+              {story.typeLabel || "Planning update"}
+              {d?.areaLabel ? ` · ${d.areaLabel}` : ""}
+            </div>
+            <h2 className="mt-0.5 text-[15px] font-semibold leading-snug text-ink">{title}</h2>
+            {location && <p className="mt-0.5 text-[12.5px] text-muted">{location}</p>}
+          </div>
+          <button type="button" className="shrink-0 text-[12px] font-semibold text-muted hover:text-ink" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className="space-y-3.5 px-4 py-3.5 text-[13px]">
+          {awaiting && (
+            <div className="rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-950">
+              Source updated — change details awaiting verification. This is not confirmed as a zoning, FSR or height
+              control change.
+            </div>
+          )}
+
+          <section>
+            <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">What changed</h3>
+            <p className="mt-1 leading-snug text-ink/90">
+              {d?.plainSummary ||
+                (awaiting
+                  ? "Source updated — change details awaiting verification."
+                  : story.whatChanged)}
+            </p>
+          </section>
+
+          <section className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-[3px] border border-line bg-canvas px-3 py-2">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Previous controls</div>
+              <div className="mt-1 font-medium leading-snug">
+                {previousLabel ?? "Not recorded in monitored sources"}
+              </div>
+            </div>
+            <div className="rounded-[3px] border border-amber-200 bg-amber-50/60 px-3 py-2">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-amber-950">
+                Proposed controls
+              </div>
+              <div className="mt-1 font-medium leading-snug">
+                {sample?.mixedAcrossKeySite
+                  ? "Mixed across key site — not uniform"
+                  : awaiting
+                    ? "Source updated — change details awaiting verification"
+                    : proposedLabel ?? "Not recorded in monitored sources"}
+              </div>
+              {!awaiting && proposedLabel && !sample?.mixedAcrossKeySite && (
+                <div className="mt-0.5 text-[11px] text-muted">
+                  Proposed — not current LEP law
+                  {sample ? " · interior-point sample (not parcel-level)" : ""}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {sample && sampleLabel && (
+            <section className="rounded-[3px] border border-line bg-canvas px-3 py-2">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+                Screening sample (interior point only)
+              </div>
+              <div className="mt-1 font-medium leading-snug">{sampleLabel}</div>
+              <p className="mt-1 text-[11px] text-muted">
+                {sample.mixedAcrossKeySite
+                  ? `Mixed control polygons detected${sample.distinctFsrs?.length ? ` (FSR ${sample.distinctFsrs.join(", ")})` : ""}${sample.distinctZones?.length ? `; zones ${sample.distinctZones.join(", ")}` : ""}. Sample is for screening only — not parcel-level evidence and not an area-wide control.`
+                  : "Verified uniform across intersecting control polygons for this key site. Sample is for screening only — not parcel-level evidence."}
+              </p>
+            </section>
+          )}
+
+          <section className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Planning status</div>
+              <div className="mt-0.5 font-medium">{status ?? "Not stated in source"}</div>
+            </div>
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+                {d?.officialDateLabel || "Official date"}
+              </div>
+              <div className="mt-0.5 font-medium">
+                {d?.officialDate ? formatShortDate(d.officialDate) : "Not stated in source"}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+                Detected by Site Assembly
+              </div>
+              <div className="mt-0.5 font-medium">{formatShortDate(d?.detectedAt || story.date)}</div>
+            </div>
+            <div>
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+                Affected potential sites
+              </div>
+              <div className="mt-0.5 font-medium">
+                {candidateIds.length
+                  ? `${candidateIds.length} indexed assembl${candidateIds.length === 1 ? "y" : "ies"}`
+                  : story.affectedSites != null
+                    ? String(story.affectedSites)
+                    : keySiteIds.length
+                      ? `Key site ${keySiteIds.join(", ")}`
+                      : "None linked yet"}
+              </div>
+            </div>
+          </section>
+
+          {(keySiteIds.length > 0 || candidateIds.length > 0) && (
+            <section>
+              <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Exact affected sites</h3>
+              <ul className="mt-1 space-y-0.5 text-[12.5px] text-ink/90">
+                {keySiteIds.map((id) => (
+                  <li key={`ks-${id}`}>Key site {id}</li>
+                ))}
+                {candidateIds.slice(0, 12).map((id) => (
+                  <li key={`c-${id}`} className="font-mono text-[11.5px]">
+                    {id}
+                  </li>
+                ))}
+                {candidateIds.length > 12 && (
+                  <li className="text-muted">+{candidateIds.length - 12} more via Inspect affected sites</li>
+                )}
+              </ul>
+            </section>
+          )}
+
+          <section>
+            <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Why it matters</h3>
+            <p className="mt-1 leading-snug text-ink/90">{d?.whyItMatters || story.whyItMatters}</p>
+          </section>
+
+          <section>
+            <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">Official source</h3>
+            <p className="mt-1 font-medium">{d?.sourceName || story.sourceLabel || "Not stated in source"}</p>
+            {d?.documentTitle && (
+              <p className="mt-0.5 text-[12px] text-muted">
+                {d.documentTitle}
+                {d.documentSection ? ` · ${d.documentSection}` : ""}
+              </p>
+            )}
+            <div className="mt-2 flex flex-wrap gap-3">
+              {(d?.webpageUrl || story.sourceHref) && (
+                <a
+                  href={d?.webpageUrl || story.sourceHref || "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[12px] font-semibold text-brand hover:underline"
+                >
+                  Official webpage / source
+                </a>
+              )}
+              {d?.sourceUrl && d.sourceUrl !== (d.webpageUrl || story.sourceHref) && (
+                <a
+                  href={d.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[12px] font-semibold text-brand hover:underline"
+                >
+                  Source document
+                </a>
+              )}
+            </div>
+          </section>
+
+          <section className="flex flex-wrap gap-3 border-t border-line pt-3">
+            {mapHref && (
+              <Link href={mapHref} className="text-[12px] font-semibold text-brand hover:underline" onClick={onClose}>
+                Show affected area on map
+              </Link>
+            )}
+            <Link href={findHref} className="text-[12px] font-semibold text-brand hover:underline" onClick={onClose}>
+              {candidateIds.length === 1 || story.affectedSites === 1
+                ? "Inspect affected site"
+                : "Inspect affected sites"}
+            </Link>
+          </section>
         </div>
       </div>
     </div>
