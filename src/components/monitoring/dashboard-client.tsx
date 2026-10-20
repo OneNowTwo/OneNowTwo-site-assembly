@@ -268,7 +268,7 @@ export function DashboardClient() {
                     <span className="hidden @[560px]/sites:block">Key details</span>
                     <span className="hidden @[560px]/sites:block">Planning</span>
                     <span className="hidden text-right @[560px]/sites:block">Area</span>
-                    <span className="hidden text-center @[560px]/sites:block">Score</span>
+                    <span className="hidden text-right @[560px]/sites:block">Score</span>
                     <span className="@[560px]/sites:hidden">Sites</span>
                   </div>
                   <ul className="w-full min-w-0">
@@ -390,7 +390,7 @@ export function DashboardClient() {
 
 /** Shared column track for header + rows — fr tracks consume full panel content width. */
 const SITE_ROW_GRID =
-  "grid w-full min-w-0 grid-cols-1 items-center gap-x-3 gap-y-1.5 @[560px]/sites:grid-cols-[minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)_72px_64px]";
+  "grid w-full min-w-0 grid-cols-1 items-center gap-x-3 gap-y-1.5 @[560px]/sites:grid-cols-[minmax(0,1.5fr)_minmax(0,0.95fr)_minmax(0,1.05fr)_72px_72px]";
 
 function TodaySiteRow({
   site,
@@ -424,7 +424,9 @@ function TodaySiteRow({
         )}
       >
         <div className="min-w-0">
-          <div className="line-clamp-2 text-[14px] font-semibold leading-snug text-ink">{site.address || site.name}</div>
+          <div className="line-clamp-2 break-words text-[14px] font-semibold leading-snug text-ink">
+            {site.address || site.name}
+          </div>
           <div className="mt-0.5 line-clamp-1 text-[13px] text-muted @[560px]/sites:line-clamp-2">{why}</div>
         </div>
         <div className="min-w-0 text-[13px] leading-snug text-muted">
@@ -446,7 +448,7 @@ function TodaySiteRow({
         <div className="num text-[14px] font-semibold text-ink @[560px]/sites:text-right">
           {site.siteAreaSqm != null ? sqm(site.siteAreaSqm) : "—"}
         </div>
-        <div className="flex @[560px]/sites:justify-center">
+        <div className="flex justify-start @[560px]/sites:justify-end">
           <ScoreRing score={site.score} caption={site.scoreProvenance === "DETAILED" ? "Detailed" : "Screening"} />
         </div>
       </div>
