@@ -103,17 +103,27 @@ async function interiorPoint(
   return { lng: (bbox.west + bbox.east) / 2, lat: (bbox.south + bbox.north) / 2 };
 }
 
+const DISTINCT_QUERY_LIMIT = 80;
+
+type DistinctAttrResult = {
+  ok: boolean;
+  values: string[];
+  /** True when the query hit the record cap or ArcGIS transfer limit — incomplete. */
+  truncated: boolean;
+};
+
 /**
  * Distinct control attribute values that intersect the key-site geometry
  * (or its bbox when geometry is missing). Filters envelope hits by true
  * polygon intersection so neighbouring controls are not counted as "mixed".
+ * Failed / truncated queries return ok:false — callers must not treat that as uniform.
  */
 async function queryDistinctAttrsOverKeySite(
   layerId: number,
   bbox: NonNullable<KeySiteFact["bbox"]>,
   field: string,
   geom: GeoJSON.Polygon | GeoJSON.MultiPolygon | null,
-): Promise<string[]> {
+): Promise<DistinctAttrResult> {
   const usePoly = !!geom;
   const geometry = usePoly
     ? JSON.stringify(
@@ -131,28 +141,30 @@ async function queryDistinctAttrsOverKeySite(
     outFields: field,
     returnGeometry: !usePoly, // need rings to filter when envelope-only
     outSR: 4326,
-    resultRecordCount: 80,
+    resultRecordCount: DISTINCT_QUERY_LIMIT,
     f: "json",
   });
   try {
-    const res = await fetchJson<EsriQueryResponse<Record<string, unknown>>>(url, {
+    const res = await fetchJson<EsriQueryResponse<Record<string, unknown>> & { exceededTransferLimit?: boolean }>(url, {
       service: "iw-key-site-distinct",
       ttlMs: 30 * 60 * 1000,
       timeoutMs: 15000,
     });
+    const features = res.features ?? [];
+    const truncated = features.length >= DISTINCT_QUERY_LIMIT || res.exceededTransferLimit === true;
     const vals = new Set<string>();
     if (usePoly || !geom) {
-      for (const f of res.features ?? []) {
+      for (const f of features) {
         const v = f.attributes?.[field];
         if (v == null || v === "") continue;
         vals.add(String(v));
       }
-      return [...vals];
+      return { ok: true, values: [...vals], truncated };
     }
     // Envelope fallback: keep only features that truly intersect the key-site polygon.
     const booleanIntersects = (await import("@turf/boolean-intersects")).default;
     const siteFeat = { type: "Feature" as const, properties: {}, geometry: geom! };
-    for (const f of res.features ?? []) {
+    for (const f of features) {
       if (!f.geometry) continue;
       const g = esriToGeoJSON(f.geometry);
       if (!g) continue;
@@ -165,9 +177,9 @@ async function queryDistinctAttrsOverKeySite(
       if (v == null || v === "") continue;
       vals.add(String(v));
     }
-    return [...vals];
+    return { ok: true, values: [...vals], truncated };
   } catch {
-    return [];
+    return { ok: false, values: [], truncated: false };
   }
 }
 
@@ -182,7 +194,7 @@ export async function enrichKeySiteProposedControls(site: KeySiteFact): Promise<
   try {
     const { lng, lat } = await interiorPoint(site.geometry ?? null, bbox);
     const siteGeom = site.geometry ?? null;
-    const [live, zones, fsrs, heights] = await Promise.all([
+    const [live, zoneRes, fsrRes, heightRes] = await Promise.all([
       queryInnerWestProposedAtPoint(lng, lat),
       queryDistinctAttrsOverKeySite(IW_LAYER.LZN, bbox, "SYM_CODE", siteGeom),
       queryDistinctAttrsOverKeySite(IW_LAYER.FSR, bbox, "FSR", siteGeom),
@@ -192,10 +204,22 @@ export async function enrichKeySiteProposedControls(site: KeySiteFact): Promise<
       live.zone != null || live.fsr != null || live.heightM != null || live.incentiveFsr != null || live.incentiveHeightM != null;
     if (!hasControls) return site;
 
-    const distinctFsrs = fsrs.map(Number).filter((n) => Number.isFinite(n));
-    const distinctHeights = heights.map(Number).filter((n) => Number.isFinite(n));
+    const zones = zoneRes.values;
+    const distinctFsrs = fsrRes.values.map(Number).filter((n) => Number.isFinite(n));
+    const distinctHeights = heightRes.values.map(Number).filter((n) => Number.isFinite(n));
+    // Failed or truncated polygon queries must never establish "uniform" controls.
+    const distinctIncomplete =
+      !zoneRes.ok ||
+      !fsrRes.ok ||
+      !heightRes.ok ||
+      zoneRes.truncated ||
+      fsrRes.truncated ||
+      heightRes.truncated;
     const mixedAcrossKeySite =
-      zones.length > 1 || new Set(distinctFsrs).size > 1 || new Set(distinctHeights).size > 1;
+      distinctIncomplete ||
+      zones.length > 1 ||
+      new Set(distinctFsrs).size > 1 ||
+      new Set(distinctHeights).size > 1;
 
     const screeningSample: NonNullable<ProposedControls["screeningSample"]> = {
       lng,
@@ -216,13 +240,16 @@ export async function enrichKeySiteProposedControls(site: KeySiteFact): Promise<
         : null;
 
     if (mixedAcrossKeySite) {
+      const incompleteness = distinctIncomplete
+        ? "Polygon distinct-control query failed or was truncated — controls are not verified as uniform. "
+        : "";
       return {
         ...site,
         bbox,
         proposedControls: {
           legalStatus: "PROPOSED",
           machineReadable: true,
-          // Do not assign uniform zone/FSR/height — mixed polygons across the key site.
+          // Do not assign uniform zone/FSR/height — mixed / incomplete evidence across the key site.
           zone: null,
           fsr: null,
           heightM: null,
@@ -230,7 +257,7 @@ export async function enrichKeySiteProposedControls(site: KeySiteFact): Promise<
           incentiveHeightM: null,
           affordableHousingContributionPct: Number.isFinite(ahPct) ? ahPct : null,
           screeningSample,
-          notes: `Mixed proposed controls across this key site (zones: ${zones.join(", ") || "—"}; FSR: ${distinctFsrs.join(", ") || "—"}; height m: ${distinctHeights.join(", ") || "—"}). Interior-point screening sample at ${lng.toFixed(5)},${lat.toFixed(5)}: zone ${live.zone ?? "—"}, FSR ${live.fsr ?? "—"}, height ${live.heightM ?? "—"} m. Sample is for screening only — not parcel-level evidence and not uniform across the area. Source: ${IW_ADOPTED_FS}. NOT CURRENT LAW until gazetted.`,
+          notes: `${incompleteness}Mixed or unverified proposed controls across this key site (zones: ${zones.join(", ") || "—"}; FSR: ${distinctFsrs.join(", ") || "—"}; height m: ${distinctHeights.join(", ") || "—"}). Interior-point screening sample at ${lng.toFixed(5)},${lat.toFixed(5)}: zone ${live.zone ?? "—"}, FSR ${live.fsr ?? "—"}, height ${live.heightM ?? "—"} m. Sample is for screening only — not parcel-level evidence and not uniform across the area. Source: ${IW_ADOPTED_FS}. NOT CURRENT LAW until gazetted.`,
         },
       };
     }
