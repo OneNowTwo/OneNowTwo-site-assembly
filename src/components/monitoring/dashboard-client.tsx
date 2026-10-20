@@ -4,7 +4,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Panel, cx } from "@/components/ui";
-import { ListRow } from "@/components/shell/list-row";
 import { ScoreRing, StatusChip } from "@/components/shell/status-chip";
 import { SelectedSiteMapPreview } from "@/components/monitoring/selected-site-map-preview";
 import { money, sqm, fsr } from "@/lib/format";
@@ -139,7 +138,6 @@ export function DashboardClient() {
   const [error, setError] = useState<string | null>(null);
   const [strategy, setStrategy] = useState<DevelopmentStrategy>("APARTMENTS");
   const [showAllChanges, setShowAllChanges] = useState(false);
-  const [expandedFamily, setExpandedFamily] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQ, setSearchQ] = useState("");
 
@@ -179,9 +177,11 @@ export function DashboardClient() {
   }
 
   const stories = data.topIntelligence?.length ? data.topIntelligence : data.whatChanged;
-  const visibleChanges = showAllChanges ? stories : stories.slice(0, 5);
+  const visibleChanges = showAllChanges ? stories : stories.slice(0, 3);
   const strip = data.summaryStrip;
   const selected = data.sitesToLookAt.find((s) => s.id === selectedId) ?? data.sitesToLookAt[0] ?? null;
+  const topSites = data.sitesToLookAt.slice(0, 3);
+  const totalSites = data.sitesToLookAt.length;
 
   return (
     <div className="h-full overflow-y-auto bg-canvas">
@@ -247,198 +247,210 @@ export function DashboardClient() {
       </div>
 
       {/* 60 / 40 list + detail */}
-      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,3fr)_minmax(280px,2fr)] lg:items-start sm:p-5">
-        <div className="min-w-0 space-y-4">
-          <Panel
-            title="Sites worth investigating"
-            actions={
-              <Link href="/find" className="text-[12px] font-semibold text-brand hover:underline">
+      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,3fr)_minmax(300px,2fr)] lg:items-start sm:p-5">
+        <div className="min-w-0 space-y-5">
+          <section>
+            <div className="mb-2 flex items-end justify-between gap-3">
+              <h2 className="font-display text-[23px] font-semibold leading-tight text-ink">Sites worth investigating</h2>
+              <Link href="/find" className="shrink-0 text-[13px] font-semibold text-brand hover:underline">
                 Find more
               </Link>
-            }
-            bodyClassName="p-0"
-            className="overflow-hidden"
-          >
-            {data.indexPreparingMessage && !data.sitesToLookAt.length ? (
-              <Empty>{data.indexPreparingMessage}</Empty>
-            ) : !data.sitesToLookAt.length ? (
-              <Empty>No sites ranked for this strategy yet.</Empty>
-            ) : (
-              <>
-                <div className="hidden grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.1fr)_72px_64px] gap-3 border-b border-line bg-canvas/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted xl:grid">
-                  <span>Site</span>
-                  <span>Key details</span>
-                  <span>Planning</span>
-                  <span className="text-right">Area</span>
-                  <span className="text-center">Score</span>
-                </div>
-                <ul>
-                  {data.sitesToLookAt.map((s) => {
-                    const alts = s.familyAlternativeCount ?? 0;
-                    const why =
-                      s.whyItMatters?.trim() || (s.reasons[0] ? s.reasons[0] : "Worth checking on the map");
-                    const isSelected = selected?.id === s.id;
-                    return (
-                      <li key={s.id}>
-                        <ListRow
-                          selected={isSelected}
-                          onSelect={() => setSelectedId(s.id)}
-                          className={cx(
-                            "!grid-cols-1 xl:!grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.1fr)_72px_64px] xl:items-center",
-                            isSelected && "border-l-[3px] border-l-accent",
-                          )}
-                        >
-                          <div className="grid gap-2 xl:col-span-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.1fr)_72px_64px] xl:items-center xl:gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-[14px] font-semibold leading-snug text-ink">
-                                {s.address || s.name}
-                              </div>
-                              <div className="mt-0.5 line-clamp-2 text-[12.5px] text-muted">{why}</div>
-                              {alts > 0 && (
-                                <button
-                                  type="button"
-                                  className="mt-1 text-[11.5px] font-semibold text-brand hover:underline"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setExpandedFamily((id) => (id === s.id ? null : s.id));
-                                  }}
-                                >
-                                  + {alts} other lot combination{alts === 1 ? "" : "s"} nearby
-                                </button>
-                              )}
-                              {expandedFamily === s.id && alts > 0 && (
-                                <p className="mt-1 text-[12px] text-muted">
-                                  Other lot combinations exist nearby — open the map to compare.
-                                </p>
-                              )}
-                            </div>
-                            <div className="text-[12.5px] text-muted">
-                              {[
-                                s.suburb ?? s.lga ?? "Sydney",
-                                s.lotCount != null ? `${s.lotCount} lot${s.lotCount === 1 ? "" : "s"}` : null,
-                                s.owners != null ? `${s.owners} owner${s.owners === 1 ? "" : "s"}` : null,
-                              ]
-                                .filter(Boolean)
-                                .join(" · ")}
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              {s.zone && <StatusChip tone="zone">{s.zone}</StatusChip>}
-                              {s.currentFsr != null && <StatusChip tone="fsr">FSR {fsr(s.currentFsr)}</StatusChip>}
-                              {s.proposedFsr != null &&
-                                (s.currentFsr == null || s.proposedFsr > s.currentFsr) && (
-                                  <StatusChip tone="proposed">Proposed {fsr(s.proposedFsr)}</StatusChip>
-                                )}
-                            </div>
-                            <div className="num text-right text-[13px] font-semibold text-ink">
-                              {s.siteAreaSqm != null ? sqm(s.siteAreaSqm) : "—"}
-                            </div>
-                            <div className="flex justify-center">
-                              <ScoreRing
-                                score={s.score}
-                                caption={s.scoreProvenance === "DETAILED" ? "Detailed" : "Screening"}
-                              />
-                            </div>
-                          </div>
-                        </ListRow>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-          </Panel>
+            </div>
+            <Panel bodyClassName="p-0" className="@container/sites overflow-hidden">
+              {data.indexPreparingMessage && !data.sitesToLookAt.length ? (
+                <Empty>{data.indexPreparingMessage}</Empty>
+              ) : !data.sitesToLookAt.length ? (
+                <Empty>No sites ranked for this strategy yet.</Empty>
+              ) : (
+                <>
+                  <div className={`${SITE_ROW_GRID} border-b border-line bg-canvas/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted`}>
+                    <span className="hidden @[560px]/sites:block">Site</span>
+                    <span className="hidden @[560px]/sites:block">Key details</span>
+                    <span className="hidden @[560px]/sites:block">Planning</span>
+                    <span className="hidden text-right @[560px]/sites:block">Area</span>
+                    <span className="hidden text-center @[560px]/sites:block">Score</span>
+                    <span className="@[560px]/sites:hidden">Sites</span>
+                  </div>
+                  <ul>
+                    {topSites.map((s) => (
+                      <TodaySiteRow
+                        key={s.id}
+                        site={s}
+                        selected={selected?.id === s.id}
+                        onSelect={() => setSelectedId(s.id)}
+                      />
+                    ))}
+                  </ul>
+                  {totalSites > 3 && (
+                    <div className="border-t border-line px-4 py-2.5">
+                      <Link href={`/find?strategy=${strategy}`} className="text-[13px] font-semibold text-brand hover:underline">
+                        View all {totalSites} sites →
+                      </Link>
+                    </div>
+                  )}
+                </>
+              )}
+            </Panel>
+          </section>
 
-          <Panel
-            title="Planning updates"
-            actions={
-              <Link href="/feed" className="text-[12px] font-semibold text-brand hover:underline">
+          <section>
+            <div className="mb-2 flex items-end justify-between gap-3">
+              <h2 className="font-display text-[23px] font-semibold leading-tight text-ink">Planning updates</h2>
+              <Link href="/feed" className="shrink-0 text-[13px] font-semibold text-brand hover:underline">
                 View all
               </Link>
-            }
-            bodyClassName="p-0"
-            className="overflow-hidden"
-          >
-            {!stories.length ? (
-              <Empty>No new planning or development updates in Greater Sydney in the last 7 days.</Empty>
-            ) : (
-              <>
-                <div className="hidden grid-cols-[88px_minmax(0,1fr)_100px_auto] gap-3 border-b border-line bg-canvas/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted sm:grid">
-                  <span>Date</span>
-                  <span>Update</span>
-                  <span>Impact</span>
-                  <span className="text-right">Actions</span>
-                </div>
-                <ul>
-                  {visibleChanges.map((ev) => {
-                    const presented =
-                      ev.typeLabel && ev.title && ev.whyItMatters
-                        ? {
-                            typeLabel: ev.typeLabel,
-                            title: ev.title,
-                            explanation: ev.whyItMatters || ev.whatChanged,
-                          }
-                        : presentTodayStory(ev, strategy);
-                    const viewSitesLabel = ev.affectedSites === 1 ? "View site" : "View sites";
-                    return (
-                      <li
-                        key={ev.id}
-                        className="grid gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[88px_minmax(0,1fr)_100px_auto] sm:items-center"
-                      >
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
-                          {formatShortDate(ev.date)}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[13.5px] font-semibold leading-snug">{presented.title}</div>
-                          <p className="mt-0.5 line-clamp-2 text-[12.5px] text-muted">{presented.explanation}</p>
-                        </div>
-                        <div>
-                          <StatusChip tone={/proposed/i.test(presented.typeLabel) ? "proposed" : "neutral"}>
-                            {presented.typeLabel}
-                          </StatusChip>
-                        </div>
-                        <div className="flex flex-wrap justify-end gap-x-3 gap-y-1">
-                          {(ev.mapHref || ev.href) && (
+            </div>
+            <Panel bodyClassName="p-0" className="overflow-hidden">
+              {!stories.length ? (
+                <Empty>No new planning or development updates in Greater Sydney in the last 7 days.</Empty>
+              ) : (
+                <>
+                  <div className="hidden grid-cols-[72px_minmax(0,1fr)_auto_auto] gap-3 border-b border-line bg-canvas/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted sm:grid">
+                    <span>Date</span>
+                    <span>Update</span>
+                    <span>Impact</span>
+                    <span className="text-right">Actions</span>
+                  </div>
+                  <ul>
+                    {visibleChanges.map((ev) => {
+                      const presented =
+                        ev.typeLabel && ev.title && ev.whyItMatters
+                          ? {
+                              typeLabel: ev.typeLabel,
+                              title: ev.title,
+                              explanation: ev.whyItMatters || ev.whatChanged,
+                            }
+                          : presentTodayStory(ev, strategy);
+                      const viewSitesLabel = ev.affectedSites === 1 ? "View site" : "View sites";
+                      return (
+                        <li
+                          key={ev.id}
+                          className="grid grid-cols-1 gap-1.5 border-b border-line px-4 py-2.5 last:border-b-0 sm:grid-cols-[72px_minmax(0,1fr)_auto_auto] sm:items-center sm:gap-3"
+                        >
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
+                            {formatShortDate(ev.date)}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[14px] font-semibold leading-snug">{presented.title}</div>
+                            <p className="mt-0.5 line-clamp-1 text-[13px] text-muted">{presented.explanation}</p>
+                          </div>
+                          <div>
+                            <StatusChip tone={/proposed/i.test(presented.typeLabel) ? "proposed" : "neutral"}>
+                              {presented.typeLabel}
+                            </StatusChip>
+                          </div>
+                          <div className="flex flex-wrap justify-start gap-x-3 gap-y-1 sm:justify-end">
+                            {(ev.mapHref || ev.href) && (
+                              <Link
+                                href={ev.mapHref || ev.href || "/map"}
+                                className="text-[13px] font-semibold text-brand hover:underline"
+                              >
+                                Map
+                              </Link>
+                            )}
                             <Link
-                              href={ev.mapHref || ev.href || "/map"}
-                              className="text-[12px] font-semibold text-brand hover:underline"
+                              href={ev.findHref || `/find?strategy=${strategy}`}
+                              className="text-[13px] font-semibold text-brand hover:underline"
                             >
-                              Map
+                              {viewSitesLabel}
                             </Link>
-                          )}
-                          <Link
-                            href={ev.findHref || `/find?strategy=${strategy}`}
-                            className="text-[12px] font-semibold text-brand hover:underline"
-                          >
-                            {viewSitesLabel}
-                          </Link>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-                {stories.length > 5 && (
-                  <button
-                    type="button"
-                    className="w-full border-t border-line px-4 py-2.5 text-left text-[12px] font-semibold text-muted hover:bg-canvas hover:text-ink"
-                    onClick={() => setShowAllChanges((v) => !v)}
-                  >
-                    {showAllChanges ? "Show fewer" : `View all (${stories.length})`}
-                  </button>
-                )}
-              </>
-            )}
-          </Panel>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {stories.length > 3 && (
+                    <button
+                      type="button"
+                      className="w-full border-t border-line px-4 py-2 text-left text-[13px] font-semibold text-muted hover:bg-canvas hover:text-ink"
+                      onClick={() => setShowAllChanges((v) => !v)}
+                    >
+                      {showAllChanges ? "Show fewer" : `View all (${stories.length})`}
+                    </button>
+                  )}
+                </>
+              )}
+            </Panel>
+          </section>
         </div>
 
-        <aside className="lg:sticky lg:top-4">
-          {selected ? <SelectedSitePanel site={selected} /> : (
+        <aside className="lg:sticky lg:top-3">
+          {selected ? (
+            <SelectedSitePanel site={selected} />
+          ) : (
             <Panel>
-              <p className="text-[13px] text-muted">Select a site to preview it on the map.</p>
+              <p className="text-[14px] text-muted">Select a site to preview it on the map.</p>
             </Panel>
           )}
         </aside>
       </div>
     </div>
+  );
+}
+
+/** Shared column track for header + rows — one grid level, container-width aware. */
+const SITE_ROW_GRID =
+  "grid w-full grid-cols-1 items-center gap-x-3 gap-y-1.5 @[560px]/sites:grid-cols-[minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,1.05fr)_72px_56px]";
+
+function TodaySiteRow({
+  site,
+  selected,
+  onSelect,
+}: {
+  site: TodaySite;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const why = site.whyItMatters?.trim() || (site.reasons[0] ? site.reasons[0] : "Worth checking on the map");
+  return (
+    <li>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onSelect}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect();
+          }
+        }}
+        className={cx(
+          SITE_ROW_GRID,
+          "cursor-pointer border-b border-line px-4 py-3 last:border-b-0",
+          "min-h-[90px] @[560px]/sites:min-h-[96px] @[560px]/sites:max-h-[110px]",
+          selected
+            ? "border-l-[3px] border-l-accent bg-accent-soft/60"
+            : "border-l-[3px] border-l-transparent hover:bg-brand-soft/35",
+        )}
+      >
+        <div className="min-w-0">
+          <div className="line-clamp-2 text-[14px] font-semibold leading-snug text-ink">{site.address || site.name}</div>
+          <div className="mt-0.5 line-clamp-1 text-[13px] text-muted @[560px]/sites:line-clamp-2">{why}</div>
+        </div>
+        <div className="min-w-0 text-[13px] leading-snug text-muted">
+          {[
+            site.suburb ?? site.lga ?? "Sydney",
+            site.lotCount != null ? `${site.lotCount} lot${site.lotCount === 1 ? "" : "s"}` : null,
+            site.owners != null ? `${site.owners} owner${site.owners === 1 ? "" : "s"}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </div>
+        <div className="flex min-w-0 flex-wrap gap-1">
+          {site.zone && <StatusChip tone="zone">{site.zone}</StatusChip>}
+          {site.currentFsr != null && <StatusChip tone="fsr">FSR {fsr(site.currentFsr)}</StatusChip>}
+          {site.proposedFsr != null && (site.currentFsr == null || site.proposedFsr > site.currentFsr) && (
+            <StatusChip tone="proposed">Proposed {fsr(site.proposedFsr)}</StatusChip>
+          )}
+        </div>
+        <div className="num text-[14px] font-semibold text-ink @[560px]/sites:text-right">
+          {site.siteAreaSqm != null ? sqm(site.siteAreaSqm) : "—"}
+        </div>
+        <div className="flex @[560px]/sites:justify-center">
+          <ScoreRing score={site.score} caption={site.scoreProvenance === "DETAILED" ? "Detailed" : "Screening"} />
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -544,16 +556,16 @@ function SelectedSitePanel({ site }: { site: TodaySite }) {
           </div>
         )}
 
-        <div className="flex flex-col gap-2 pt-1">
+        <div className="flex flex-col gap-2 pt-1 sm:flex-row">
           <Link
             href={analyse}
-            className="inline-flex h-10 items-center justify-center rounded-[7px] bg-brand px-3 text-[13px] font-semibold text-white hover:bg-[#0e2325]"
+            className="inline-flex h-10 flex-1 items-center justify-center rounded-[7px] bg-brand px-3 text-[13px] font-semibold text-white hover:bg-[#0e2325]"
           >
             Open analysis →
           </Link>
           <Link
             href={map}
-            className="inline-flex h-10 items-center justify-center rounded-[7px] border border-line bg-panel px-3 text-[13px] font-semibold text-ink hover:bg-canvas"
+            className="inline-flex h-10 flex-1 items-center justify-center rounded-[7px] border border-line bg-panel px-3 text-[13px] font-semibold text-ink hover:bg-canvas"
           >
             Open map
           </Link>

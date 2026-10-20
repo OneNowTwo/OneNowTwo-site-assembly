@@ -95,6 +95,8 @@ export function SelectedSiteMapPreview({ candidateId }: { candidateId: string })
         onParcelClick={() => {}}
         onViewportChange={() => {}}
         fitToParcels
+        fitPadding={[56, 56]}
+        fitMaxZoom={17}
         interactive={false}
       />
     </div>

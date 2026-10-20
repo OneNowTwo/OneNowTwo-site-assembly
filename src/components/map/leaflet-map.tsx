@@ -61,6 +61,10 @@ export interface MapProps {
   onViewportChange: (bbox: BBox, zoom: number) => void;
   /** Polygons outlined without interaction (e.g. a saved opportunity). */
   fitToParcels?: boolean;
+  /** Padding [x, y] when fitting parcel bounds (default [30, 30]). */
+  fitPadding?: [number, number];
+  /** Cap zoom when fitting parcels (default 19). */
+  fitMaxZoom?: number;
   interactive?: boolean;
   /** When the persistent shell shows the map again, invalidate Leaflet size. */
   visible?: boolean;
@@ -194,6 +198,8 @@ function ParcelLayer(
     | "parcelTheme"
     | "onParcelClick"
     | "fitToParcels"
+    | "fitPadding"
+    | "fitMaxZoom"
     | "interactive"
   >,
 ) {
@@ -246,8 +252,13 @@ function ParcelLayer(
       };
       layer.addData(f);
     }
-    if (props.fitToParcels && props.parcels.length) map.fitBounds(layer.getBounds(), { padding: [30, 30], maxZoom: 19 });
-  }, [props.parcels, props.fitToParcels, map]);
+    if (props.fitToParcels && props.parcels.length) {
+      map.fitBounds(layer.getBounds(), {
+        padding: props.fitPadding ?? [30, 30],
+        maxZoom: props.fitMaxZoom ?? 19,
+      });
+    }
+  }, [props.parcels, props.fitToParcels, props.fitPadding, props.fitMaxZoom, map]);
 
   useEffect(() => {
     const assembly = new Set(props.assemblyIds);
@@ -621,6 +632,8 @@ export default function LeafletMap(props: MapProps) {
           parcelTheme={props.parcelTheme}
           onParcelClick={props.onParcelClick}
           fitToParcels={props.fitToParcels}
+          fitPadding={props.fitPadding}
+          fitMaxZoom={props.fitMaxZoom}
           interactive={props.interactive}
         />
       </MapContainer>
