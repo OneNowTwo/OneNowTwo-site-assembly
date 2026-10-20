@@ -25,6 +25,14 @@ export function Button({ variant = "secondary", size = "md", className, ...props
   );
 }
 
+/** Resolve body classes without Tailwind shorthand fights (p-4 vs p-0). */
+function panelBodyClass(bodyClassName?: string) {
+  if (!bodyClassName) return "p-4";
+  // Full padding shorthand (p-0 / p-3 / …) replaces the default; px/py/pt… layer on top.
+  if (/\bp-(\d+|\[)/.test(bodyClassName)) return bodyClassName;
+  return cx("p-4", bodyClassName);
+}
+
 export function Panel({ title, actions, children, className, bodyClassName }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string }) {
   return (
     <section className={cx("rounded-[8px] border border-line bg-panel shadow-[0_1px_2px_rgba(23,40,43,0.04)]", className)}>
@@ -34,7 +42,7 @@ export function Panel({ title, actions, children, className, bodyClassName }: { 
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={cx("p-4", bodyClassName)}>{children}</div>
+      <div className={panelBodyClass(bodyClassName)}>{children}</div>
     </section>
   );
 }

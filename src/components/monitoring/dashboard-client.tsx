@@ -263,7 +263,7 @@ export function DashboardClient() {
                 <Empty>No sites ranked for this strategy yet.</Empty>
               ) : (
                 <>
-                  <div className={`${SITE_ROW_GRID} border-b border-line bg-canvas/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted`}>
+                  <div className={`${SITE_ROW_GRID} box-border border-b border-line bg-canvas/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted`}>
                     <span className="hidden @[560px]/sites:block">Site</span>
                     <span className="hidden @[560px]/sites:block">Key details</span>
                     <span className="hidden @[560px]/sites:block">Planning</span>
@@ -271,7 +271,7 @@ export function DashboardClient() {
                     <span className="hidden text-center @[560px]/sites:block">Score</span>
                     <span className="@[560px]/sites:hidden">Sites</span>
                   </div>
-                  <ul>
+                  <ul className="w-full min-w-0">
                     {topSites.map((s) => (
                       <TodaySiteRow
                         key={s.id}
@@ -388,9 +388,9 @@ export function DashboardClient() {
   );
 }
 
-/** Shared column track for header + rows — one grid level, container-width aware. */
+/** Shared column track for header + rows — fr tracks consume full panel content width. */
 const SITE_ROW_GRID =
-  "grid w-full grid-cols-1 items-center gap-x-3 gap-y-1.5 @[560px]/sites:grid-cols-[minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,1.05fr)_72px_56px]";
+  "grid w-full min-w-0 grid-cols-1 items-center gap-x-3 gap-y-1.5 @[560px]/sites:grid-cols-[minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)_72px_64px]";
 
 function TodaySiteRow({
   site,
@@ -403,7 +403,7 @@ function TodaySiteRow({
 }) {
   const why = site.whyItMatters?.trim() || (site.reasons[0] ? site.reasons[0] : "Worth checking on the map");
   return (
-    <li>
+    <li className="min-w-0">
       <div
         role="button"
         tabIndex={0}
@@ -416,7 +416,7 @@ function TodaySiteRow({
         }}
         className={cx(
           SITE_ROW_GRID,
-          "cursor-pointer border-b border-line px-4 py-3 last:border-b-0",
+          "box-border w-full min-w-0 cursor-pointer border-b border-line px-4 py-3 last:border-b-0",
           "min-h-[90px] @[560px]/sites:min-h-[96px] @[560px]/sites:max-h-[110px]",
           selected
             ? "border-l-[3px] border-l-accent bg-accent-soft/60"
